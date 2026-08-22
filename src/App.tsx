@@ -8,11 +8,10 @@ import {
   IconModels,
   IconSettings,
   IconSend,
-  IconTrash,
-  IconRewind,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
+import ContextMenu from "./components/ContextMenu";
 import Graph from "./components/Graph";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
@@ -123,6 +122,7 @@ export default function App() {
   const [turnAction, setTurnAction] = useState<{ index: number; kind: "delete" | "rewind" } | null>(
     null,
   );
+  const [turnMenu, setTurnMenu] = useState<{ x: number; y: number; index: number } | null>(null);
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -451,27 +451,15 @@ export default function App() {
         )}
 
         {turns.map((t, i) => (
-          <div key={i} className={`turn ${t.role}`}>
-            {!streaming && (
-              <span className="turn-actions">
-                <button
-                  className="icon-btn"
-                  data-tip="Delete this message"
-                  onClick={() => setTurnAction({ index: i, kind: "delete" })}
-                >
-                  <IconTrash />
-                </button>
-                {i < turns.length - 1 && (
-                  <button
-                    className="icon-btn"
-                    data-tip="Go back to before this message"
-                    onClick={() => setTurnAction({ index: i, kind: "rewind" })}
-                  >
-                    <IconRewind />
-                  </button>
-                )}
-              </span>
-            )}
+          <div
+            key={i}
+            className={`turn ${t.role}`}
+            onContextMenu={(e) => {
+              if (streaming) return;
+              e.preventDefault();
+              setTurnMenu({ x: e.clientX, y: e.clientY, index: i });
+            }}
+          >
             {/* The user's own words stay verbatim — they are what quotes get
                 matched against, and markdown would render some of them away. */}
             {t.role === "assistant" && t.content ? (
@@ -490,6 +478,30 @@ export default function App() {
             )}
           </div>
         ))}
+
+        {turnMenu && (
+          <ContextMenu
+            x={turnMenu.x}
+            y={turnMenu.y}
+            onClose={() => setTurnMenu(null)}
+            items={[
+              {
+                label: "Delete this message",
+                danger: true,
+                onSelect: () => setTurnAction({ index: turnMenu.index, kind: "delete" }),
+              },
+              ...(turnMenu.index < turns.length - 1
+                ? [
+                    {
+                      label: "Go back to before this message",
+                      onSelect: () =>
+                        setTurnAction({ index: turnMenu.index, kind: "rewind" as const }),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        )}
 
         {turnAction && (
           <Confirm
