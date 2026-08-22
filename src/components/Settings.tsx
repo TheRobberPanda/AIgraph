@@ -54,19 +54,19 @@ export default function Settings() {
     }
   }
 
-  if (!s) return <div className="panel" />;
+  if (!s) return <div className="pane-inner" />;
 
   return (
-    <div className="panel">
+    <div className="pane-inner">
       {error && <p className="error">{error}</p>}
 
       <section>
-        <h2 className="panel-title">Appearance</h2>
-        <div className="choice-row">
+        <h2 className="section">Appearance</h2>
+        <div className="row">
           {THEMES.map((t) => (
             <button
               key={t.value}
-              className={s.theme === t.value ? "choice on" : "choice"}
+              className={s.theme === t.value ? "btn on" : "btn"}
               onClick={() => void update({ theme: t.value })}
             >
               {t.label}
@@ -76,16 +76,16 @@ export default function Settings() {
       </section>
 
       <section>
-        <h2 className="panel-title">Ending a session</h2>
-        <p className="panel-blurb">
-          How long the app waits before deciding you have finished and filing the
-          conversation away. Pressing <b>Done</b> always ends it immediately.
+        <h2 className="section">Ending a session</h2>
+        <p className="blurb">
+          How long a session can sit quiet before it is treated as finished and
+          filed. Pressing <b>Done</b> ends it immediately.
         </p>
-        <div className="choice-row">
+        <div className="row">
           {[10, 30, 60, 120].map((m) => (
             <button
               key={m}
-              className={s.idle_minutes === m ? "choice on" : "choice"}
+              className={s.idle_minutes === m ? "btn on" : "btn"}
               onClick={() => void update({ idle_minutes: m })}
             >
               {m < 60 ? `${m} min` : `${m / 60} hr`}
@@ -95,32 +95,33 @@ export default function Settings() {
       </section>
 
       <section>
-        <h2 className="panel-title">Your transcripts</h2>
-        <p className="panel-blurb">
+        <h2 className="section">Your transcripts</h2>
+        <p className="blurb">
           Every conversation is written here as plain markdown as well as to the
-          app's database, so your thinking is never only inside this program.
+          database — the full exchange, exactly as it happened, readable without
+          this program.
         </p>
         <p className="path">{dir}</p>
       </section>
 
       <section>
-        <h2 className="panel-title">Dictation</h2>
+        <h2 className="section">Dictation</h2>
         {speech?.installed ? (
-          <p className="panel-blurb">
+          <p className="blurb">
             Speech recognition is installed and runs on the CPU, so it does not
-            compete with your chat model for the graphics card.
+            compete with the chat model for the graphics card.
           </p>
         ) : downloading ? (
-          <p className="panel-blurb">
+          <p className="blurb">
             Downloading… {Math.round((downloading.received / (downloading.total || 1)) * 100)}%
           </p>
         ) : (
           <>
-            <p className="panel-blurb">
-              Talk instead of typing. Downloads about {speech?.mb ?? 488}MB once,
+            <p className="blurb">
+              Talk instead of typing. Downloads about {speech?.mb ?? 488}MB once
               and runs entirely on this machine.
             </p>
-            <button className="done" onClick={() => void downloadSpeechModel()}>
+            <button className="btn" onClick={() => void downloadSpeechModel()}>
               Download the speech model
             </button>
           </>
@@ -128,16 +129,16 @@ export default function Settings() {
       </section>
 
       <section>
-        <h2 className="panel-title">Re-read every conversation</h2>
-        <p className="panel-blurb">
-          Throws away the extracted ideas and works through your conversations
-          again. Useful after the app has been updated. Your conversations
-          themselves are never touched — only what was extracted from them.
+        <h2 className="section">Re-read every conversation</h2>
+        <p className="blurb">
+          Discards the recorded ideas and reads every conversation again. Useful
+          after the app has been updated. The conversations themselves are never
+          touched — only what was taken from them.
         </p>
         {confirming ? (
-          <div className="choice-row">
+          <div className="row">
             <button
-              className="choice danger"
+              className="btn danger"
               onClick={() => {
                 setConfirming(false);
                 reextractAll()
@@ -147,29 +148,29 @@ export default function Settings() {
             >
               Yes, re-read them
             </button>
-            <button className="choice" onClick={() => setConfirming(false)}>
+            <button className="btn" onClick={() => setConfirming(false)}>
               Cancel
             </button>
           </div>
         ) : (
-          <button className="done" onClick={() => setConfirming(true)}>
+          <button className="btn" onClick={() => setConfirming(true)}>
             Re-read everything
           </button>
         )}
-        {note && <p className="panel-blurb">{note}</p>}
+        {note && <p className="blurb">{note}</p>}
       </section>
 
       <section>
-        <h2 className="panel-title">How this app uses AI</h2>
+        <h2 className="section">How this app uses AI</h2>
         {/* Stated in the app, not only in a README. Someone using this to think
             through something that matters deserves to know what is machine-made
             without going looking for it. */}
         <ul className="plain-list">
-          <li>Your ideas are extracted by a model. It can misread you, so every idea links back to your exact words.</li>
-          <li>An idea the model cannot quote you on is discarded rather than shown. The Ideas page reports how often that happens.</li>
-          <li>Strong and weak points are the model's opinion. They are marked <b>AI</b> and never become ideas of yours.</li>
-          <li>Your conversation is never steered. No instructions about this app are added to it.</li>
-          <li>Everything runs on this machine unless you point it at a remote model yourself.</li>
+          <li>Ideas are recorded by a model taking notes. It can misread, so every idea links back to the exact words it came from.</li>
+          <li>An idea the model cannot quote is discarded rather than shown. The Ideas page reports how often that happens.</li>
+          <li>Notes in the margin are the model's, marked <b>AI</b>, and never become recorded ideas.</li>
+          <li>The conversation is never steered. No instructions about this app are added to it.</li>
+          <li>Nothing leaves this machine unless a remote model is chosen in Models.</li>
         </ul>
       </section>
     </div>

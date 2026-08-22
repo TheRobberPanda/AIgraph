@@ -72,6 +72,8 @@ pub fn run() {
             commands::set_anthropic_key,
             commands::clear_anthropic_key,
             commands::idea_deep_dive,
+            commands::preview_import,
+            commands::import_conversation,
         ])
         .setup(|app| {
             use tauri::Manager;

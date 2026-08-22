@@ -106,6 +106,8 @@ export default function Graph({
   const startedRef = useRef(performance.now());
 
   const [hovered, setHovered] = useState<GraphNode | null>(null);
+  /** Where the hovered node sat, so the pointer can travel out to its notes. */
+  const keepAliveRef = useRef<{ x: number; y: number; r: number } | null>(null);
   const [hoverAt, setHoverAt] = useState<
     { x: number; y: number; r: number; color: string; below: boolean } | null
   >(null);
@@ -435,6 +437,7 @@ export default function Graph({
           dragNodeRef.current = null;
         }
         hoverRef.current = null;
+        keepAliveRef.current = null;
         setHovered(null);
         setHoverAt(null);
       }}

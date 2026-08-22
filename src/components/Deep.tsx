@@ -11,22 +11,22 @@ import {
 } from "../lib/views";
 
 /**
- * The model's read on something.
+ * Notes taken alongside an idea.
  *
- * Split under two headings rather than run together: the whole point is to push
- * the thinking on, and "where this is thin" is the half that does that work. Six
- * undifferentiated bullets bury it.
+ * Split under two headings rather than run together, and often absent entirely —
+ * an idea with nothing left open is finished, and recording that is the right
+ * outcome rather than a gap to fill.
  */
 function Nudges({ strong, weak }: { strong: string[]; weak: string[] }) {
   if (!strong.length && !weak.length) return null;
   return (
-    <div className="deep-nudges">
+    <div className="notes">
       {strong.length > 0 && (
         <section>
-          <h3 className="deep-section">Where it holds</h3>
-          <div className="nudges">
+          <h3 className="section">Noted alongside</h3>
+          <div className="notes">
             {strong.map((t, i) => (
-              <p key={i} className="nudge strong">
+              <p key={i} className="note strong">
                 <span className="badge">AI</span>
                 {t}
               </p>
@@ -36,10 +36,10 @@ function Nudges({ strong, weak }: { strong: string[]; weak: string[] }) {
       )}
       {weak.length > 0 && (
         <section>
-          <h3 className="deep-section">Where it’s thin</h3>
-          <div className="nudges">
+          <h3 className="section">Left open</h3>
+          <div className="notes">
             {weak.map((t, i) => (
-              <p key={i} className="nudge weak">
+              <p key={i} className="note weak">
                 <span className="badge">AI</span>
                 {t}
               </p>
@@ -77,9 +77,9 @@ export function ConversationFile({
   }, [sessionId]);
 
   return (
-    <div className="deep">
-      <header className="deep-head">
-        <button className="done" onClick={onClose}>← Back</button>
+    <div className="pane-inner">
+      <header className="head">
+        <button className="btn" onClick={onClose}>← Back</button>
         {view && (
           <span className="muted">
             {dateTime(view.started_at)} · {view.model}
@@ -175,12 +175,12 @@ export function IdeaFile({
   }, [ideaId]);
 
   return (
-    <div className="deep">
-      <header className="deep-head">
-        <button className="done" onClick={onClose}>← Back</button>
+    <div className="pane-inner">
+      <header className="head">
+        <button className="btn" onClick={onClose}>← Back</button>
         {view && view.evidence.length > 1 && (
           <span className="muted">
-            said across {new Set(view.evidence.map((e) => e.session_id)).size} conversations
+            across {new Set(view.evidence.map((e) => e.session_id)).size} conversations
           </span>
         )}
       </header>
@@ -194,7 +194,7 @@ export function IdeaFile({
           <Nudges strong={view.strong} weak={view.weak} />
 
           <section className="dive">
-            <h3 className="deep-section">Thinking it through</h3>
+            <h3 className="section">In the margin</h3>
             {dive ? (
               <>
                 <div className="dive-text">
@@ -203,7 +203,7 @@ export function IdeaFile({
                   ))}
                 </div>
                 <button
-                  className="done"
+                  className="btn"
                   disabled={diving}
                   onClick={() => void think(true)}
                 >
@@ -212,23 +212,23 @@ export function IdeaFile({
               </>
             ) : (
               <>
-                <p className="panel-blurb">
-                  Take the idea seriously and argue it out — what follows if it
-                  holds, and the strongest objection to it.
+                <p className="blurb">
+                  A few lines in the margin: what would need to be understood to
+                  use this idea, and where it would be pushed hardest.
                 </p>
                 <button
-                  className={diving ? "done busy" : "done"}
+                  className={diving ? "btn busy" : "btn"}
                   disabled={diving}
                   onClick={() => void think()}
                 >
-                  {diving && <span className="mic-spinner" aria-hidden="true" />}
-                  {diving ? "Thinking…" : "Think it through"}
+                  {diving && <span className="spinner" aria-hidden="true" />}
+                  {diving ? "Reading…" : "Read it back"}
                 </button>
               </>
             )}
           </section>
 
-          <h3 className="deep-section">Where you said it</h3>
+          <h3 className="section">Said here</h3>
           {view.evidence.map((e) => (
             <div key={e.id} className="evidence">
               <blockquote>
@@ -236,7 +236,7 @@ export function IdeaFile({
                 {e.normalized && <span className="tag">loose match</span>}
               </blockquote>
               {e.reasoning && <p className="why-inline">{e.reasoning}</p>}
-              <button className="evidence-link" onClick={() => onOpenConversation(e.session_id)}>
+              <button className="link" onClick={() => onOpenConversation(e.session_id)}>
                 {plainDate(e.started_at)} — open the conversation →
               </button>
             </div>
@@ -244,7 +244,7 @@ export function IdeaFile({
 
           {view.revisions.length > 0 && (
             <>
-              <h3 className="deep-section">How it changed</h3>
+              <h3 className="section">How it changed</h3>
               {view.revisions.map((r) => (
                 <div key={r.id} className="revision">
                   <p className="was">was: “{r.prev_claim}”</p>
@@ -257,7 +257,7 @@ export function IdeaFile({
                     // Rewriting is the only thing here that can destroy
                     // something you wrote, so undoing it stays one click away.
                     <button
-                      className="done"
+                      className="btn"
                       onClick={() => revertRevision(r.id).then(load).catch((e) => setError(String(e)))}
                     >
                       Restore this wording

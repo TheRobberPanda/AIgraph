@@ -1216,3 +1216,61 @@ pub async fn idea_deep_dive(
     let _ = state.store.lock().await.set_deep_dive(idea_id, &text, &label);
     Ok(text)
 }
+
+// ------------------------------------------------------------ import
+
+/// Read a pasted conversation without committing to it.
+///
+/// Preview first, always: getting the roles the wrong way round would file the
+/// assistant's words as the person's own, which is the one mistake the rest of
+/// the design exists to prevent.
+#[tauri::command]
+pub async fn preview_import(text: String) -> Result<crate::session::import::Import, String> {
+    Ok(crate::session::import::parse(&text))
+}
+
+#[tauri::command]
+pub async fn import_conversation(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+    swap_roles: bool,
+    source: String,
+) -> Result<i64, String> {
+    let mut parsed = crate::session::import::parse(&text);
+    if swap_roles {
+        parsed = crate::session::import::swap(&parsed);
+    }
+    if parsed.turns.is_empty() {
+        return Err("nothing to import".into());
+    }
+
+    let messages = crate::session::import::to_messages(&parsed.turns);
+    let rendered = crate::session::transcript::render(&messages);
+    let label = if source.trim().is_empty() {
+        "imported".to_string()
+    } else {
+        format!("imported/{}", source.trim())
+    };
+
+    let session_id = {
+        let mut store = state.store.lock().await;
+        store
+            .archive_session(&rendered, &label, chrono::Utc::now(), Some(&state.md_dir))
+            .map_err(|e| e.to_string())?
+    };
+
+    let _ = app.emit("session:archived", Archived {
+        session_id,
+        reason: EndReason::Done,
+        turn_count: parsed.turns.len(),
+    });
+
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        drain_pending(&handle, &state).await;
+    });
+
+    Ok(session_id)
+}

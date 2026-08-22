@@ -4,6 +4,7 @@
 //! they've been idle long enough that they've clearly moved on, or when the app
 //! closes. All three archive; none discard.
 
+pub mod import;
 pub mod transcript;
 
 use std::time::Duration;

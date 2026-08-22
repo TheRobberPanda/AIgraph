@@ -221,8 +221,7 @@ mod tests {
             quote: quote.into(),
             reasoning: String::new(),
             category: String::new(),
-            strong_points: vec![],
-            weak_points: vec![],
+            notes: vec![],
         }
     }
 

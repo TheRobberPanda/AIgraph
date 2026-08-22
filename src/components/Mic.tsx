@@ -134,7 +134,7 @@ export default function Mic({
   if (!installed) {
     return (
       <button
-        className="done"
+        className="btn"
         onClick={getModel}
         title={`Downloads the speech model (about ${downloadMb}MB), once`}
       >
@@ -154,7 +154,7 @@ export default function Mic({
     <>
       {error && <span className="mic-status error">{error}</span>}
       <button
-        className={`mic${active ? " on" : ""}${busy ? " busy" : ""}`}
+        className={`btn mic${active ? " on" : ""}${busy ? " busy" : ""}`}
         onClick={toggle}
         disabled={disabled}
         title={active ? "Stop dictation" : "Dictate"}
@@ -162,7 +162,7 @@ export default function Mic({
         aria-busy={busy}
       >
         {busy ? (
-          <span className="mic-spinner" aria-hidden="true" />
+          <span className="spinner" aria-hidden="true" />
         ) : (
           <span className={speaking ? "mic-dot live" : "mic-dot"} aria-hidden="true" />
         )}

@@ -17,13 +17,13 @@ const ROLES: { role: Role; title: string; blurb: string }[] = [
     role: "chat",
     title: "The model you talk to",
     blurb:
-      "Answers you while you think out loud. It is never given instructions about this app — it behaves exactly as it would anywhere else.",
+      "Holds up the other end of the conversation. It is never given instructions about this app — it behaves exactly as it would anywhere else.",
   },
   {
     role: "extraction",
     title: "The model that reads it back",
     blurb:
-      "Pulls out your ideas afterwards and judges whether a new one is the same as an old one. A mechanical, structured job — a small fast model usually does fine, and reasoning models are a poor fit.",
+      "Reads the session back afterwards, records the ideas in it, and judges whether a new one repeats an older one. A mechanical, structured job — a small fast model usually does fine, and reasoning models are a poor fit.",
   },
 ];
 
@@ -95,38 +95,38 @@ export default function Models() {
   }
 
   return (
-    <div className="panel">
+    <div className="pane-inner">
       {error && <p className="error">{error}</p>}
 
       <section className="model-role">
-        <h2 className="panel-title">Anthropic</h2>
-        <p className="panel-blurb">
-          Optional. Everything works without this — the app finds local models on
-          its own. A key sends whatever you extract to Anthropic's servers rather
-          than keeping it on this machine.
+        <h2 className="section">Anthropic</h2>
+        <p className="blurb">
+          Optional. Everything works without this — local models are found
+          automatically. A key sends transcripts to Anthropic's servers rather
+          than keeping them on this machine.
         </p>
         {keys?.anthropic ? (
-          <div className="choice-row">
+          <div className="row">
             <span className="tag ready">key saved</span>
             <button
-              className="choice"
+              className="btn"
               onClick={() => clearAnthropicKey().then(refresh)}
             >
               Remove it
             </button>
           </div>
         ) : (
-          <div className="key-row">
+          <div className="row">
             <input
               type="password"
-              className="key-input"
+              className="field"
               placeholder="sk-ant-…"
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && void saveKey()}
             />
             <button
-              className="done"
+              className="btn"
               disabled={keyBusy || !keyInput.trim()}
               onClick={() => void saveKey()}
             >
@@ -134,16 +134,15 @@ export default function Models() {
             </button>
           </div>
         )}
-        <p className="panel-blurb">
-          Stored in your system keychain, never in the app's settings file. It is
-          checked against the API before being saved.
+        <p className="blurb">
+          Stored in the system keychain, never in the settings file, and checked
+          against the API before it is saved.
         </p>
         {keys?.claude_cli && (
-          <p className="panel-blurb">
-            The <code>claude</code> command is installed, so your Claude
-            subscription is also available without a key. It rides a plan meant
-            for interactive use, so treat it as a convenience rather than
-            something to depend on.
+          <p className="blurb">
+            The <code>claude</code> command is installed, so a Claude
+            subscription can be used without a key. It rides a plan meant for
+            interactive use — a convenience rather than something to depend on.
           </p>
         )}
       </section>
@@ -162,9 +161,9 @@ export default function Models() {
           const chosen = role === "chat" ? active?.chat : active?.extraction;
           return (
             <section key={role} className="model-role">
-              <h2 className="panel-title">{title}</h2>
-              <p className="panel-blurb">{blurb}</p>
-              <p className="model-current">
+              <h2 className="section">{title}</h2>
+              <p className="blurb">{blurb}</p>
+              <p className="current">
                 {chosen ? (
                   <>
                     Using <b>{chosen.model}</b> on {chosen.label}
@@ -176,7 +175,7 @@ export default function Models() {
 
               {usable.map((s) => (
                 <div key={s.kind} className="model-server">
-                  <h3 className="deep-section">
+                  <h3 className="section">
                     {serverName(s.kind)}
                     {isRemote(s.kind) && <span className="tag remote">leaves this machine</span>}
                   </h3>

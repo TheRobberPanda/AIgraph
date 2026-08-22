@@ -49,11 +49,16 @@ pub struct RawIdea {
     /// conversation happened to produce it.
     #[serde(default)]
     pub category: String,
+    /// Marginal notes. Often empty — an idea with nothing to add is finished.
+    ///
+    /// One list rather than a balanced pair on purpose: two arrays invite the
+    /// model to fill both, which produced three-for-three every time and meant
+    /// no idea could ever be left alone.
     #[serde(default)]
-    pub strong_points: Vec<String>,
-    #[serde(default)]
-    pub weak_points: Vec<String>,
+    pub notes: Vec<Note>,
 }
+
+
 
 /// What the model made of the conversation as a whole.
 ///
@@ -61,8 +66,38 @@ pub struct RawIdea {
 /// often the interesting part — so conversation nodes carry their own nudges.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConversationNotes {
+    /// Marginal notes. Often empty — an idea with nothing to add is finished.
+    ///
+    /// One list rather than a balanced pair on purpose: two arrays invite the
+    /// model to fill both, which produced three-for-three every time and meant
+    /// no idea could ever be left alone.
     #[serde(default)]
-    pub strong_points: Vec<String>,
+    pub notes: Vec<Note>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteKind {
+    /// Something that strengthens the idea.
+    Supports,
+    /// Something unclear, assumed, or in tension with the rest.
+    #[default]
+    Questions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub text: String,
     #[serde(default)]
-    pub weak_points: Vec<String>,
+    pub kind: NoteKind,
+}
+
+impl NoteKind {
+    /// Stored as `strong` / `weak`, the column values already in the database.
+    pub fn column(self) -> &'static str {
+        match self {
+            NoteKind::Supports => "strong",
+            NoteKind::Questions => "weak",
+        }
+    }
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { listSessions, type SessionSummary } from "../lib/chat";
+import ImportChat from "./ImportChat";
 import Markdown from "./Markdown";
 import { dateTime, longDate } from "../lib/format";
 import { sessionTurns, type StoredTurn } from "../lib/sessions";
@@ -15,6 +16,7 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
   const [open, setOpen] = useState<number | null>(null);
   const [turns, setTurns] = useState<StoredTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const refresh = useCallback(() => {
     listSessions().then(setSessions).catch((e) => setError(String(e)));
@@ -31,9 +33,9 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
   if (open !== null) {
     const session = sessions.find((s) => s.id === open);
     return (
-      <div className="chats">
-        <header className="chat-head">
-          <button className="done" onClick={() => setOpen(null)}>
+      <div className="pane-inner">
+        <header className="head">
+          <button className="btn" onClick={() => setOpen(null)}>
             ← All chats
           </button>
           {session && (
@@ -43,7 +45,7 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
           )}
         </header>
 
-        <div className="stream reread">
+        <div className="deep-transcript">
           {turns.map((t) => (
             <div key={t.id} className={`turn ${t.role}`}>
               {t.role === "assistant" ? <Markdown>{t.text}</Markdown> : t.text}
@@ -55,21 +57,36 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
   }
 
   return (
-    <div className="chats">
+    <div className="pane-inner">
       {error && <p className="error">{error}</p>}
+
+      <div className="row">
+        <button className="btn" onClick={() => setAdding((a) => !a)}>
+          {adding ? "Cancel" : "Add a conversation"}
+        </button>
+      </div>
+
+      {adding && (
+        <ImportChat
+          onDone={() => {
+            setAdding(false);
+            refresh();
+          }}
+        />
+      )}
 
       {sessions.length === 0 ? (
         <p className="empty">
           No conversations yet. Anything you say is kept here once you press Done.
         </p>
       ) : (
-        <ul className="chat-list">
+        <ul className="list">
           {sessions.map((s) => (
             <li key={s.id}>
               <button onClick={() => (onOpen ? onOpen(s.id) : setOpen(s.id))}>
-                <span className="chat-date">{longDate(s.started_at)}</span>
-                <span className="chat-opening">{s.opening || "(nothing was said)"}</span>
-                <span className="chat-meta">
+                <span className="row-meta">{longDate(s.started_at)}</span>
+                <span className="row-main">{s.opening || "(nothing was said)"}</span>
+                <span className="row-meta">
                   {/* Ideas first: the reason to go back to a conversation is
                       what came out of it, not how long it was. */}
                   {s.idea_count > 0

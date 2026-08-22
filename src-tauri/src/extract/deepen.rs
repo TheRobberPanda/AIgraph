@@ -22,8 +22,7 @@ pub fn build(claim: &str, strong: &[String], weak: &[String], quotes: &[String])
     };
 
     format!(
-        r#"Someone is thinking through an idea of their own. Argue it out with
-them properly.
+        r#"An idea recorded from someone working a problem out loud.
 
 THE IDEA:
   {claim}
@@ -31,21 +30,21 @@ THE IDEA:
 THEIR OWN WORDS:
 {}
 
-WHAT SEEMS TO HOLD:
+NOTES ALREADY TAKEN:
+{}
 {}
 
-WHERE IT SEEMS THIN:
-{}
+Write what a student would write in the margin after the seminar: the two or
+three things that would need to be understood before this idea could be used,
+and the one place it would be pushed hardest by someone who disagreed.
 
-Write a short piece — three or four short paragraphs — that takes this idea
-seriously and develops it. Say what follows from it if it is right, name the
-strongest objection someone who disagreed would actually make, and be specific
-about what would have to be true for the idea to survive that objection.
+Hard limits:
 
-Write to the person, in plain prose. No headings, no bullet lists, no preamble
-about what you are about to do. Do not flatter the idea and do not perform
-even-handedness — if the objection is fatal, say so; if it is weak, say that
-too. This is their thinking, so do not tell them what to conclude.
+- At most 120 words. Shorter is better. If two sentences cover it, write two.
+- Do not restate the idea. It is written above; repeating it wastes the space.
+- Do not summarise, do not conclude, and do not offer encouragement.
+- Ask rather than assert wherever asking is honest. The thinking here is theirs.
+- Plain prose. No headings, no bullets, no preamble.
 
 Return only the prose."#,
         list(quotes),

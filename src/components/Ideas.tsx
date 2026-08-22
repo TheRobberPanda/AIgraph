@@ -84,7 +84,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
   }, [running]);
 
   return (
-    <div className="ideas">
+    <div className="pane-inner">
       {source && (
         <Source
           evidence={source.evidence}
@@ -93,9 +93,9 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
         />
       )}
       {(running || (progress?.pending ?? 0) > 0 || progress?.last) && (
-      <div className="extraction">
+      <div className="diag">
         {running ? (
-          <div className="running">
+          <div className="row">
             <span className="spinner" aria-hidden="true" />
             <span>
               Extracting session {running.session_id} — {PHASE_LABELS[running.phase]}
@@ -103,13 +103,13 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
             <span className="muted">{elapsed(running.started_at)}</span>
           </div>
         ) : (progress?.pending ?? 0) > 0 ? (
-          <div className="running idle">
+          <div className="row">
             <span>
               {progress?.pending} session{progress?.pending === 1 ? "" : "s"} waiting
             </span>
             {(
               <button
-                className={requested ? "done busy" : "done"}
+                className={requested ? "btn busy" : "btn"}
                 disabled={requested}
                 aria-busy={requested}
                 onClick={() => {
@@ -117,7 +117,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                   void extractNow().catch(() => setRequested(false));
                 }}
               >
-                {requested && <span className="mic-spinner" aria-hidden="true" />}
+                {requested && <span className="spinner" aria-hidden="true" />}
                 {requested ? "Starting…" : "Extract now"}
               </button>
             )}
@@ -125,7 +125,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
         ) : null}
 
         {!running && progress?.last && (
-          <p className="last">
+          <p className="blurb">
             {progress.last.error ? (
               <span className="error">
                 Session {progress.last.session_id} failed after{" "}
@@ -146,7 +146,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
       )}
 
       {diag && (
-        <div className="diagnostics">
+        <div className="diag">
           <span>
             <strong>{diag.ideas}</strong> ideas
           </span>
@@ -188,13 +188,13 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
           )}
         </p>
       ) : (
-        <ul className="idea-list">
+        <ul className="list">
           {ideas.map((idea) => {
             const isOpen = open === idea.id;
             return (
               <li key={idea.id} className={isOpen ? "idea open" : "idea"}>
                 <button
-                  className="claim"
+                  className="row-btn"
                   onClick={() => (onOpen ? onOpen(idea.id) : setOpen(isOpen ? null : idea.id))}
                   aria-expanded={isOpen}
                 >
@@ -204,9 +204,9 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                     className={sessionsFor(idea) > 1 ? "dot returned" : "dot"}
                     aria-hidden="true"
                   />
-                  <span className="claim-text">{idea.claim}</span>
+                  <span className="row-main">{idea.claim}</span>
                   {(sessionsFor(idea) > 1 || idea.evidence.length > 1) && (
-                    <span className="claim-meta">
+                    <span className="row-meta">
                       {sessionsFor(idea) > 1
                         ? `${sessionsFor(idea)} conversations`
                         : `${idea.evidence.length} quotes`}
@@ -219,7 +219,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                     {idea.evidence.map((e) => (
                       <blockquote key={e.id}>
                         <button
-                          className="quote-link"
+                          className="link"
                           onClick={() => setSource({ evidence: e, claim: idea.claim })}
                           title="See this in the conversation"
                         >
@@ -231,15 +231,15 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                     ))}
 
                     {(idea.strong.length > 0 || idea.weak.length > 0) && (
-                      <div className="nudges">
+                      <div className="notes">
                         {idea.strong.map((t, i) => (
-                          <p key={`s${i}`} className="nudge strong">
+                          <p key={`s${i}`} className="note strong">
                             <span className="badge">AI</span>
                             {t}
                           </p>
                         ))}
                         {idea.weak.map((t, i) => (
-                          <p key={`w${i}`} className="nudge weak">
+                          <p key={`w${i}`} className="note weak">
                             <span className="badge">AI</span>
                             {t}
                           </p>

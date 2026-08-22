@@ -51,7 +51,7 @@ export default function Source({
               </div>
             )}
           </div>
-          <button className="done" onClick={onClose}>
+          <button className="btn" onClick={onClose}>
             Close
           </button>
         </header>

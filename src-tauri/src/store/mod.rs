@@ -447,13 +447,11 @@ impl Store {
                 ],
             )?;
 
-            for (kind, texts) in [("strong", &v.raw.strong_points), ("weak", &v.raw.weak_points)] {
-                for t in texts {
-                    tx.execute(
-                        "INSERT INTO nudges (idea_id, kind, text) VALUES (?1, ?2, ?3)",
-                        params![idea_id, kind, t],
-                    )?;
-                }
+            for note in &v.raw.notes {
+                tx.execute(
+                    "INSERT INTO nudges (idea_id, kind, text) VALUES (?1, ?2, ?3)",
+                    params![idea_id, note.kind.column(), note.text],
+                )?;
             }
         }
 
@@ -901,16 +899,11 @@ impl Store {
         // Re-extraction of the same session should replace its notes, not
         // accumulate a second set.
         tx.execute("DELETE FROM session_nudges WHERE session_id = ?1", [session_id])?;
-        for (kind, texts) in [
-            ("strong", &extraction.conversation.strong_points),
-            ("weak", &extraction.conversation.weak_points),
-        ] {
-            for t in texts {
-                tx.execute(
-                    "INSERT INTO session_nudges (session_id, kind, text) VALUES (?1, ?2, ?3)",
-                    params![session_id, kind, t],
-                )?;
-            }
+        for note in &extraction.conversation.notes {
+            tx.execute(
+                "INSERT INTO session_nudges (session_id, kind, text) VALUES (?1, ?2, ?3)",
+                params![session_id, note.kind.column(), note.text],
+            )?;
         }
 
         for r in &extraction.rejected {
@@ -1089,16 +1082,11 @@ impl Store {
 
         // Nudges belong to the new phrasing; only add them for a fresh bubble.
         if matches!(decision, Decision::New { .. } | Decision::Conflict { .. }) {
-            for (kind, texts) in [
-                ("strong", &idea.raw.strong_points),
-                ("weak", &idea.raw.weak_points),
-            ] {
-                for t in texts {
-                    tx.execute(
-                        "INSERT INTO nudges (idea_id, kind, text) VALUES (?1, ?2, ?3)",
-                        params![idea_id, kind, t],
-                    )?;
-                }
+            for note in &idea.raw.notes {
+                tx.execute(
+                    "INSERT INTO nudges (idea_id, kind, text) VALUES (?1, ?2, ?3)",
+                    params![idea_id, note.kind.column(), note.text],
+                )?;
             }
         }
 
@@ -1414,8 +1402,7 @@ mod tests {
             quote: "latency is the real problem".into(),
             reasoning: String::new(),
             category: String::new(),
-            strong_points: vec![],
-            weak_points: vec![],
+            notes: vec![],
         };
         let located = verify::verify(&raw, &turns).expect("quote should verify");
 
@@ -1458,8 +1445,7 @@ mod tests {
             quote: "latency".into(),
             reasoning: String::new(),
             category: String::new(),
-            strong_points: vec![],
-            weak_points: vec![],
+            notes: vec![],
         };
         let located = verify::verify(&raw, &turns).unwrap();
         store
@@ -1496,8 +1482,10 @@ mod tests {
             quote: quote.into(),
             reasoning: "because they said so".into(),
             category: "testing".into(),
-            strong_points: vec!["s".into()],
-            weak_points: vec!["w".into()],
+            notes: vec![crate::llm::types::Note {
+                text: "s".into(),
+                kind: crate::llm::types::NoteKind::Supports,
+            }],
         };
         let located = crate::extract::verify::verify(&raw, turns).expect("verify");
         VerifiedIdea { raw, located }
@@ -1603,7 +1591,7 @@ mod tests {
         let ideas = store.ideas().unwrap();
         assert_eq!(ideas.len(), 1);
         assert_eq!(ideas[0].evidence.len(), 2);
-        assert_eq!(ideas[0].strong.len(), 1, "nudges belong to the bubble, not each quote");
+        assert_eq!(ideas[0].strong.len(), 1, "notes belong to the bubble, not each quote");
     }
 
     #[test]

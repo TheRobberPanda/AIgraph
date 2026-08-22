@@ -118,9 +118,7 @@ pub async fn run_with_progress(
             second.retried = true;
             // Keep the first pass's notes if the retry returned none — the
             // retry prompt is focused on quotes, not on the whole conversation.
-            second.conversation = if extracted.conversation.strong_points.is_empty()
-                && extracted.conversation.weak_points.is_empty()
-            {
+            second.conversation = if extracted.conversation.notes.is_empty() {
                 first.conversation.clone()
             } else {
                 extracted.conversation
@@ -196,8 +194,7 @@ mod tests {
             quote: quote.into(),
             reasoning: String::new(),
             category: String::new(),
-            strong_points: vec![],
-            weak_points: vec![],
+            notes: vec![],
         }
     }
 

@@ -26,6 +26,19 @@ import {
 type Tab = "chat" | "map" | "ideas" | "chats" | "models" | "settings";
 const TABS: Tab[] = ["chat", "map", "ideas", "chats", "models", "settings"];
 
+/** What each place is called. One map, so the rail and the URL agree. */
+const TAB_NAMES: Record<Tab, string> = {
+  chat: "Think",
+  map: "Map",
+  ideas: "Ideas",
+  chats: "Conversations",
+  models: "Models",
+  settings: "Settings",
+};
+
+const MAIN: Tab[] = ["chat", "map", "ideas", "chats"];
+const SETUP: Tab[] = ["models", "settings"];
+
 type Deep = { kind: "idea"; id: number } | { kind: "conversation"; id: number } | null;
 
 /**
@@ -280,52 +293,40 @@ export default function App() {
 
   return (
     <main className="app">
-      {digesting?.running && (
-        <div className="digesting" title="Turning your last conversation into ideas">
-          <span className="mic-spinner" aria-hidden="true" />
-          Digesting the conversation
-        </div>
-      )}
+      <aside className="rail">
+        <div className="rail-title">Idea Graph</div>
 
-      <nav className="tabs">
-        <button
-          className={view === "chat" ? "tab active" : "tab"}
-          onClick={() => setView("chat")}
-        >
-          Think
-        </button>
-        <button
-          className={view === "map" ? "tab active" : "tab"}
-          onClick={() => setView("map")}
-        >
-          Map
-        </button>
-        <button
-          className={view === "ideas" ? "tab active" : "tab"}
-          onClick={() => setView("ideas")}
-        >
-          Ideas
-        </button>
-        <button
-          className={view === "chats" ? "tab active" : "tab"}
-          onClick={() => setView("chats")}
-        >
-          Chats
-        </button>
-        <button
-          className={view === "models" ? "tab active" : "tab"}
-          onClick={() => setView("models")}
-        >
-          Models
-        </button>
-        <button
-          className={view === "settings" ? "tab active" : "tab"}
-          onClick={() => setView("settings")}
-        >
-          Settings
-        </button>
-      </nav>
+        {MAIN.map((t) => (
+          <button
+            key={t}
+            className={view === t && !deep ? "nav on" : "nav"}
+            onClick={() => {
+              setDeep(null);
+              setView(t);
+            }}
+          >
+            <span className="nav-dot" />
+            {TAB_NAMES[t]}
+          </button>
+        ))}
 
+        <div className="rail-group">Setup</div>
+        {SETUP.map((t) => (
+          <button
+            key={t}
+            className={view === t && !deep ? "nav on" : "nav"}
+            onClick={() => {
+              setDeep(null);
+              setView(t);
+            }}
+          >
+            <span className="nav-dot" />
+            {TAB_NAMES[t]}
+          </button>
+        ))}
+      </aside>
+
+      <div className="pane">
       {deep ? (
         deep.kind === "idea" ? (
           <IdeaFile
@@ -359,10 +360,10 @@ export default function App() {
         {turns.length === 0 && !justArchived && (
           <p className="empty">
             <strong>Think out loud.</strong>
-            Say whatever’s on your mind. Nothing is organised while you talk —
-            that happens after.
+            Nothing is organised while the conversation runs — that happens
+            after.
             <span className="empty-hint">
-              Press <b>Done</b> when you’re finished and it becomes a map.
+              Press <b>Done</b> to close a session and let it be read back.
             </span>
           </p>
         )}
@@ -370,11 +371,11 @@ export default function App() {
         {turns.length === 0 && justArchived && (
           <p className="empty">
             {justArchived.reason === "idle"
-              ? "That session went quiet, so it’s been filed away."
-              : "Filed away."}{" "}
-            {justArchived.turn_count} turns saved.
+              ? "That session went quiet and has been filed."
+              : "Filed."}{" "}
+            {justArchived.turn_count} turns kept.
             <br />
-            <span className="muted">Start again whenever you like.</span>
+            <span className="muted">Start again whenever.</span>
           </p>
         )}
 
@@ -410,7 +411,7 @@ export default function App() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={provider ? "What’s on your mind?" : "Connecting…"}
+          placeholder={provider ? "Start anywhere" : "Connecting…"}
           disabled={!provider}
           rows={1}
           autoFocus
@@ -425,17 +426,15 @@ export default function App() {
             }
             disabled={streaming}
           />
-          <span className="status">
-            {provider && `${provider.label} · ${provider.model}`}
-          </span>
+          <span className="spacer" />
           {turns.length > 0 && (
             <button
-              className={ending ? "done busy" : "done"}
+              className={ending ? "btn busy" : "btn"}
               onClick={done}
               disabled={streaming || ending}
               aria-busy={ending}
             >
-              {ending && <span className="mic-spinner" aria-hidden="true" />}
+              {ending && <span className="spinner" aria-hidden="true" />}
               {ending ? "Saving…" : "Done"}
             </button>
           )}
@@ -444,6 +443,21 @@ export default function App() {
       </div>
       </div>
       )}
+      </div>
+
+      <div className="statusbar">
+        {provider ? `${provider.label} · ${provider.model}` : "no model"}
+        {digesting?.running && (
+          <span className="busy-item">
+            reading back session {digesting.running.session_id}
+          </span>
+        )}
+        {!digesting?.running && (digesting?.pending ?? 0) > 0 && (
+          <span>{digesting?.pending} waiting to be read</span>
+        )}
+        <span className="spacer" />
+        {error && <span style={{ color: "var(--danger)" }}>{error}</span>}
+      </div>
     </main>
   );
 }

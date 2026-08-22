@@ -13,30 +13,35 @@ pub fn json_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "required": ["ideas"],
+        "$defs": {
+            "notes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["text", "kind"],
+                    "properties": {
+                        "text": { "type": "string" },
+                        "kind": { "type": "string", "enum": ["supports", "questions"] }
+                    }
+                }
+            }
+        },
         "properties": {
             "conversation": {
                 "type": "object",
-                "properties": {
-                    "strong_points": { "type": "array", "items": { "type": "string" }, "maxItems": 3 },
-                    "weak_points": { "type": "array", "items": { "type": "string" }, "maxItems": 3 }
-                }
+                "properties": { "notes": { "$ref": "#/$defs/notes" } }
             },
             "ideas": {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["claim", "quote", "category", "reasoning", "strong_points", "weak_points"],
+                    "required": ["claim", "quote", "category", "reasoning", "notes"],
                     "properties": {
                         "claim": { "type": "string" },
                         "quote": { "type": "string" },
                         "category": { "type": "string" },
                         "reasoning": { "type": "string" },
-                        "strong_points": {
-                            "type": "array", "items": { "type": "string" }, "maxItems": 3
-                        },
-                        "weak_points": {
-                            "type": "array", "items": { "type": "string" }, "maxItems": 3
-                        }
+                        "notes": { "$ref": "#/$defs/notes" }
                     }
                 }
             }
@@ -100,48 +105,59 @@ pub fn build_with_categories(transcript: &str, known: &[String]) -> String {
         )
     };
     format!(
-        r#"Below is a transcript of someone thinking out loud with an assistant.
+        r#"Below is a transcript of someone working through a problem out loud,
+with an assistant.
 
-Extract the ideas THE USER expressed. Ignore the assistant's contributions
-entirely — this is a map of the user's thinking, not the assistant's.
+Take notes on it, the way a student takes notes in a seminar. The person
+speaking is doing the thinking; the job here is to record it faithfully, not to
+improve it, grade it, or add to it.
+
+Record the ideas expressed by the person thinking (the lines marked USER).
+Ignore the assistant's contributions entirely — those are not their thinking.
 
 For each idea return:
 
-- "claim": one self-contained sentence stating the idea in the user's own terms.
-  It must stand alone, out of context, months later. Do not soften or improve it;
-  if the user was blunt, be blunt.
-- "quote": text copied EXACTLY, character for character, from a line marked USER.
-  Do not paraphrase, trim, fix typos, or join separated fragments. If you cannot
-  copy an exact span that supports the claim, omit the idea entirely.
-- "category": two or three words for what this idea is *about* — its subject,
-  not a judgement of it. Lowercase. Prefer a category you have already been given
-  over inventing a new one.
-- "reasoning": one or two sentences on why those particular words carry this
-  idea — what you read them as claiming, and what you had to assume to get from
-  the quote to the claim. This is shown to the user next to their own sentence,
-  so it must explain the leap, not restate the claim.
-- "strong_points": up to 3 specific reasons this idea holds up.
-- "weak_points": up to 3 specific problems, gaps, or unexamined assumptions.
+- "claim": one sentence, in their own terms, short enough to read at a
+  glance and complete enough to stand alone months later. Do not soften it, do
+  not make it sound more considered than it was, and do not add anything that was
+  not said.
+- "quote": text copied EXACTLY, character for character, from a line marked
+  USER. Do not paraphrase, trim, fix typos, or join separated fragments. If no
+  exact span supports the claim, omit the idea entirely.
+- "category": two or three words for the subject. Lowercase. Prefer a category
+  already in use over coining a near-synonym.
+- "reasoning": at most one sentence on what in those words carries this idea.
+  Brief — it sits beside the sentence it describes.
+- "notes": questions or observations, ONLY where there is a real one. See below.
 
-Rules:
+## Notes are optional, and usually absent
 
-- Extract the ideas that carry weight. A ten-minute ramble usually holds three to
-  seven, not thirty. Skip pleasantries, logistics, and thinking-out-loud filler.
+A note is a student's marginal question — the thing worth raising because it is
+genuinely unclear or genuinely load-bearing. It is not a critique quota.
+
+- **Most ideas should have no notes at all.** An idea that is clear and
+  self-contained is finished; recording that is the correct outcome.
+- Never produce a note to fill a slot. There is no expected number. Zero, one, or
+  two is normal; more than three means the transcript was unusually rich.
+- A note must be specific to this idea and say something that could not be said
+  about any other idea. "This could be more specific" is not a note.
+- Mark each note "supports" where it strengthens the idea, or "questions" where
+  something is unclear, assumed, or in tension with something else said.
+- Keep every note to one short sentence.
+
+## Other rules
+
+- Record the ideas that carry weight. A ten-minute stretch of thinking usually
+  holds three to seven, not thirty. Skip pleasantries and logistics.
 - Merge restatements of one idea into a single entry.
-- If the user revised a view mid-conversation, state the idea as they LEFT it,
-  and quote the revision rather than the first version.
-- Nudges must bite on this specific idea. "This could be more specific" is
-  useless — name the actual gap, the actual counter-case, the actual assumption.
-  If you cannot say something specific, return fewer nudges. Zero is fine.
+- Where a view was revised mid-conversation, record the idea as it was LEFT, and
+  quote the revision rather than the first version.
 
-Also return "conversation": up to 3 "strong_points" and 3 "weak_points" about
-this line of thinking as a whole — not about individual claims, but about where
-the thinking is solid and where it is thin or avoids something. The gaps between
-someone's claims are often more revealing than the claims.
+Also return "conversation": notes on the whole stretch of thinking, under the
+same rules — usually none, and never more than two.
 
-Return JSON: {{"ideas": [...], "conversation": {{...}}}}. Return {{"ideas": []}}
-if nothing substantive was said.
-
+Return JSON: {{"ideas": [...], "conversation": {{"notes": [...]}}}}. Return
+{{"ideas": []}} if nothing substantive was said.
 {known_block}
 --- TRANSCRIPT ---
 {transcript}
@@ -207,7 +223,7 @@ mod tests {
         let ideas = &out["properties"]["ideas"]["items"];
         assert_eq!(ideas["additionalProperties"], serde_json::json!(false));
         let required = ideas["required"].as_array().unwrap();
-        for field in ["claim", "quote", "category", "reasoning", "strong_points", "weak_points"] {
+        for field in ["claim", "quote", "category", "reasoning", "notes"] {
             assert!(
                 required.iter().any(|r| r == field),
                 "{field} must be required under a strict schema"
@@ -217,20 +233,22 @@ mod tests {
         let top = out["required"].as_array().unwrap();
         assert!(top.iter().any(|r| r == "conversation"));
         assert!(top.iter().any(|r| r == "ideas"));
-        assert!(ideas["properties"]["strong_points"].get("maxItems").is_none());
+        // No cap and no floor on notes — the model must be free to return none.
+        assert!(out["$defs"]["notes"].get("maxItems").is_none());
+        assert!(out["$defs"]["notes"].get("minItems").is_none());
     }
 
     #[test]
     fn parses_clean_json() {
         let out = parse(
-            r#"{"ideas":[{"claim":"c","quote":"q","reasoning":"why","strong_points":[],"weak_points":[]}],
-                "conversation":{"strong_points":["s"],"weak_points":["w"]}}"#,
+            r#"{"ideas":[{"claim":"c","quote":"q","reasoning":"why","notes":[]}],
+                "conversation":{"notes":[{"text":"s","kind":"supports"}]}}"#,
         )
         .unwrap();
         assert_eq!(out.ideas.len(), 1);
         assert_eq!(out.ideas[0].claim, "c");
         assert_eq!(out.ideas[0].reasoning, "why");
-        assert_eq!(out.conversation.strong_points, vec!["s"]);
+        assert_eq!(out.conversation.notes.len(), 1);
     }
 
     #[test]
@@ -238,7 +256,7 @@ mod tests {
         let raw = "Sure! Here are the ideas:\n```json\n{\"ideas\":[{\"claim\":\"c\",\"quote\":\"q\"}]}\n```\nHope that helps!";
         let out = parse(raw).unwrap();
         assert_eq!(out.ideas.len(), 1);
-        assert!(out.ideas[0].strong_points.is_empty());
+        assert!(out.ideas[0].notes.is_empty(), "an idea with nothing to add is finished");
     }
 
     #[test]

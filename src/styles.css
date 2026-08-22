@@ -1,90 +1,82 @@
-/* Idea Graph — a tool for thinking out loud, alone, usually late.
+/* Idea Graph — a workspace for thinking out loud.
  *
- * Direction: a warm ink ground with cool machine accents. The usual dark UI is
- * a cold ground with a hot accent; this inverts it, because the room this gets
- * used in is a lamp-lit one and the thinking in it is personal.
+ * Built like a tool, not a document: a fixed rail on the left, one dense pane on
+ * the right, a status bar underneath. Everything that matters is on screen at
+ * once rather than behind a tab you have to remember to visit.
  *
- * The palette encodes the product's ethic. Warm is you: ivory text, gold for the
- * ideas you return to. Cool is the machine: dusty blue for what it produced,
- * sage and brick for its opinions. You can tell at a glance whose voice you are
- * looking at.
+ * Neutral greys rather than a warm ground — colour is reserved for meaning.
+ * Conversations take the accent, an idea takes its category's colour, and gold
+ * means a thought that came back. If something is coloured, it is saying
+ * something.
  *
- * Type carries the same split. Your own words are set in a reading serif,
- * because they are the document and are preserved verbatim. Everything the app
- * and the model say is set in a compact sans, because it is apparatus. Numbers
- * and diagnostics are mono, because they are instrument readings.
+ * One sans throughout at a small size. An earlier pass set the human's words in
+ * a serif to distinguish them from the machine's; it read as a magazine rather
+ * than an instrument, and speaker labels carry that distinction anyway.
  */
 
-@import "@fontsource-variable/newsreader/index.css";
 @import "@fontsource-variable/inter/index.css";
 @import "@fontsource/ibm-plex-mono/400.css";
 
 :root {
-  /* Warm ink — the ground */
-  --bg: #14120f;
-  --surface: #1b1815;
-  --surface-lift: #221e1a;
-  --user: #241f1a;
-  --line: #2c2722;
+  --bg: #1c1c1f;
+  --surface: #232326;
+  --surface-lift: #2a2a2e;
+  --user: #26262a;
+  --line: #34343a;
 
-  /* Warm ivory — your words */
-  --fg: #ece5d9;
-  --muted: #9a9186;
+  --fg: #dcdcdf;
+  --muted: #8b8b93;
+  --faint: #5f5f68;
 
-  /* Cool — the machine */
-  --accent: #7fa8c9;
-  /* Warm gold — a thought you came back to */
-  --gold: #d9a34a;
-  /* Its opinions: sage where the thinking holds, brick where it is thin */
-  --verdant: #85a37e;
-  --danger: #c96b5f;
+  --accent: #8f7fd4;
+  --gold: #d5a04a;
+  --verdant: #6fa473;
+  --danger: #d4675e;
 
-  --serif: "Newsreader Variable", Newsreader, Georgia, serif;
   --sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
 
+  --rail: 13.5rem;
+  --status: 1.75rem;
+
   color-scheme: dark;
   font-family: var(--sans);
-  font-size: 18px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Light is applied two ways: by the system preference when the setting is
-   "auto" (no data-theme attribute), and by an explicit choice. The media query
-   is guarded so choosing dark is not overridden by a light system. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    /* Warm paper rather than white — same room, daylight. */
-    --bg: #f6f1e7;
-    --surface: #fffdf8;
+    --bg: #fbfbfa;
+    --surface: #f2f2f0;
     --surface-lift: #ffffff;
-    --user: #ece5d7;
-    --line: #ddd4c4;
-
-    --fg: #1e1a16;
-    --muted: #6f665b;
-
-    --accent: #3d6b93;
+    --user: #eeeeec;
+    --line: #dedede;
+    --fg: #26262a;
+    --muted: #6d6d75;
+    --faint: #9a9aa2;
+    --accent: #6a58b8;
     --gold: #9a6a15;
-    --verdant: #4d6b47;
-    --danger: #9c4437;
+    --verdant: #47733f;
+    --danger: #a8443a;
     color-scheme: light;
   }
 }
 
 :root[data-theme="light"] {
-  --bg: #f6f1e7;
-  --surface: #fffdf8;
+  --bg: #fbfbfa;
+  --surface: #f2f2f0;
   --surface-lift: #ffffff;
-  --user: #ece5d7;
-  --line: #ddd4c4;
-  --fg: #1e1a16;
-  --muted: #6f665b;
-  --accent: #3d6b93;
+  --user: #eeeeec;
+  --line: #dedede;
+  --fg: #26262a;
+  --muted: #6d6d75;
+  --faint: #9a9aa2;
+  --accent: #6a58b8;
   --gold: #9a6a15;
-  --verdant: #4d6b47;
-  --danger: #9c4437;
+  --verdant: #47733f;
+  --danger: #a8443a;
   color-scheme: light;
 }
 
@@ -95,1181 +87,539 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--sans);
+  overflow: hidden;
 }
 
-/* Your own words. Set in the reading serif because they are the document —
-   the thing quotes are matched against and traced back to. */
-.turn.user,
-.composer textarea,
-.transcript,
-.deep-claim,
-.idea .claim,
-.chat-opening,
-blockquote {
-  font-family: var(--serif);
-}
-
-/* Instrument readings. */
-.diagnostics,
-.graph-key,
-.chat-meta,
-.thought-size,
-.status {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: -0.01em;
-}
+/* ---- Shell: rail, pane, status bar ---- */
 
 .app {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--rail) 1fr;
+  grid-template-rows: 1fr var(--status);
   height: 100vh;
-  max-width: 76rem;
-  margin: 0 auto;
-  padding: 0 1.5rem;
 }
 
-/* Prose stays at a comfortable reading measure even though the shell is wide —
-   the map needs space, a paragraph does not. */
-.stream,
-.composer,
-.ideas,
-.chats {
-  width: 100%;
-  max-width: 48rem;
-  margin: 0 auto;
-}
-
-.banner {
-  margin: 1rem 0 0;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-
-.banner code {
-  color: var(--fg);
-  font-size: 0.85em;
-}
-
-.stream {
-  flex: 1;
-  overflow-y: auto;
-  padding: 2rem 0 1rem;
+.rail {
+  grid-row: 1 / 3;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
+  gap: 0.1rem;
+  padding: 0.6rem 0.5rem;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+.rail-title {
+  padding: 0.3rem 0.6rem 0.6rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
+
+.rail-group {
+  margin-top: 0.75rem;
+  padding: 0 0.6rem 0.3rem;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.28rem 0.6rem;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.86rem;
+  text-align: left;
+  cursor: pointer;
+}
+.nav:hover { background: var(--surface-lift); color: var(--fg); }
+.nav.on { background: var(--surface-lift); color: var(--fg); }
+.nav-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--faint);
+}
+.nav-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+  flex: none;
+}
+.nav.on .nav-dot { opacity: 1; color: var(--accent); }
+
+.pane {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Reading surfaces get a measure; the map gets the whole pane. */
+.pane-inner {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.1rem 1.5rem 2rem;
+}
+/* Wide enough to use the pane, capped so a line of prose stays readable. Lists
+   and settings take the full width; only running text is held back. */
+.pane-inner > * { max-width: 62rem; }
+.blurb, .plain-list, .dive-text, .deep-transcript { max-width: 44rem; }
+
+.statusbar {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0 1rem;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  color: var(--faint);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.statusbar .spacer { margin-left: auto; }
+.statusbar .busy-item { color: var(--accent); }
+
+/* ---- Panel headings, shared ---- */
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.85rem;
+}
+.head h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.head .sub {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  color: var(--faint);
+}
+
+.section {
+  margin: 0 0 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+}
+.section:not(:first-child) { margin-top: 1.6rem; }
+
+.blurb {
+  margin: 0 0 0.7rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .empty {
-  margin: auto 0;
+  margin: auto;
+  padding: 3rem 0;
   text-align: center;
   color: var(--muted);
-  line-height: 1.7;
+  font-size: 0.88rem;
 }
 .empty strong {
   display: block;
-  font-family: var(--serif);
   color: var(--fg);
-  font-size: 1.6rem;
-  font-weight: 400;
-  letter-spacing: -0.01em;
-  margin-bottom: 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
 }
-.empty-hint {
-  display: block;
-  margin-top: 0.9rem;
-  font-size: 0.82rem;
-  opacity: 0.75;
-}
+.empty-hint { display: block; margin-top: 0.6rem; font-size: 0.78rem; color: var(--faint); }
 
-.turn {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-/* Rendered markdown brings its own spacing. */
-.turn .md { white-space: normal; }
-
-/* The user's own words are the thing being mapped, so they get the emphasis;
-   the assistant's replies sit back. */
-/* Not a chat bubble. What you said is the text of the document, so it is set
-   large and ranged left, with a rule marking it as yours. */
-.turn.user {
-  align-self: stretch;
-  max-width: 100%;
-  padding: 0.1rem 0 0.1rem 1.1rem;
-  border-left: 2px solid var(--gold);
-  font-size: 1.12rem;
-  line-height: 1.55;
-  color: var(--fg);
-}
-
-/* The model's replies are apparatus: same room, quieter voice, set smaller in
-   the sans so the two are never mistaken for each other. */
-.turn.assistant {
-  color: var(--muted);
-  padding-left: 1.1rem;
-  font-size: 0.92rem;
-}
-
-.cursor {
-  display: inline-block;
-  width: 0.5rem;
-  height: 1rem;
-  background: var(--accent);
-  vertical-align: text-bottom;
-  animation: blink 1.1s steps(2, start) infinite;
-}
-
-@keyframes blink {
-  to { visibility: hidden; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .cursor { animation: none; }
-  .stream { scroll-behavior: auto; }
-}
-
-.error {
-  color: var(--danger);
-  font-size: 0.875rem;
-}
-
-.composer {
-  padding: 0 0 1.75rem;
-}
-
-/* A visible field. The old version was a placeholder over a hairline, which read
-   as decoration rather than as somewhere to type. */
-.composer-box {
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  padding: 0.2rem 0.95rem 0.35rem;
-  transition: border-color 140ms ease, background 140ms ease;
-}
-.composer-box:focus-within {
-  border-color: var(--accent);
-  background: var(--surface-lift);
-}
-
-.composer textarea {
-  width: 100%;
-  min-height: 2.6rem;
-  font-size: 1.05rem;
-  max-height: 40vh;
-  padding: 0.55rem 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  resize: none;
-  outline: none;
-  field-sizing: content; /* progressive: auto-grows where supported */
-}
-
-.composer textarea::placeholder { color: var(--muted); }
-
-.centered { justify-content: center; }
-
-.setup h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 1rem; }
-.setup h2 { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin: 1.25rem 0 0.5rem; text-transform: uppercase; letter-spacing: 0.06em; }
-.setup ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.375rem; }
-.setup button {
-  width: 100%;
-  text-align: left;
-  padding: 0.6rem 0.85rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
-}
-.setup button:hover { border-color: var(--accent); background: var(--user); }
+.error { color: var(--danger); font-size: 0.82rem; }
 .muted { color: var(--muted); }
-.muted code { color: var(--fg); font-size: 0.85em; }
 
-.status {
-  color: var(--muted);
-  opacity: 0.7;
-  text-align: right;
-  padding-top: 0.25rem;
-}
+/* ---- Controls ---- */
 
-.setup button { display: flex; align-items: center; gap: 0.6rem; justify-content: space-between; }
-.tag {
-  font-size: 0.7rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
+button { font-family: inherit; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.28rem 0.7rem;
   border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-lift);
   color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: color 100ms ease, border-color 100ms ease;
+}
+.btn:hover:not(:disabled) { color: var(--fg); border-color: var(--accent); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn.on { color: var(--fg); border-color: var(--accent); }
+.btn.danger { color: var(--danger); border-color: currentColor; }
+.btn.busy { color: var(--fg); border-color: var(--accent); cursor: progress; }
+
+.row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+
+.tag {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  padding: 0.08rem 0.32rem;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  color: var(--faint);
   white-space: nowrap;
 }
 .tag.ready { color: var(--accent); border-color: currentColor; }
+.tag.remote { color: var(--gold); border-color: currentColor; }
 
-/* A slow model must never be indistinguishable from a hung one. */
-.thinking {
-  color: var(--muted);
-  font-size: 0.875rem;
-  font-style: italic;
-}
-.thought-size { opacity: 0.6; font-style: normal; }
-.dots::after {
-  content: "";
-  animation: dots 1.4s steps(4, end) infinite;
-}
-@keyframes dots {
-  0%   { content: ""; }
-  25%  { content: "."; }
-  50%  { content: ".."; }
-  75%  { content: "..."; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .dots::after { content: "..."; animation: none; }
-}
-
-.bar {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.15rem 0.15rem 0.2rem;
-}
-/* Pushes whatever follows to the right edge, keeping the left cluster together
-   instead of scattering controls across the full width. */
-.bar .status { margin-left: auto; }
-.bar .status { padding: 0; }
-
-/* Ending a session is routine, not destructive — nothing is lost by pressing it.
-   Styled as quiet and available rather than as a warning. */
-.done {
-  padding: 0.3rem 0.85rem;
+input.field, textarea.field {
+  width: 100%;
+  padding: 0.35rem 0.6rem;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease;
-}
-.done:hover:not(:disabled) { color: var(--accent); border-color: currentColor; }
-.done:disabled { opacity: 0.4; cursor: default; }
-
-/* Tabs are quiet. The chat is scaffolding; ideas are the point. Once the graph
-   lands (milestone 6) this becomes the primary surface. */
-.tabs {
-  display: flex;
-  justify-content: center;
-  gap: 0.15rem;
-  margin: 1.25rem auto 0.5rem;
-  padding: 0.25rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  width: fit-content;
-}
-.tab {
-  padding: 0.4rem 1.15rem;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: color 120ms ease, background 120ms ease;
-}
-.tab:hover { color: var(--fg); }
-.tab.active {
-  color: var(--fg);
+  border-radius: 5px;
   background: var(--surface-lift);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-}
-
-.ideas { flex: 1; overflow-y: auto; padding-bottom: 2rem; }
-
-.diagnostics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 1rem;
-  padding: 0.75rem 0;
-  margin-bottom: 0.5rem;
-  border-bottom: 1px solid var(--line);
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-.diagnostics strong { color: var(--fg); font-weight: 600; }
-.diagnostics .pending { color: var(--accent); }
-.diagnostics .reason { opacity: 0.75; }
-
-.idea-list { list-style: none; margin: 0; padding: 0; }
-
-.idea { border-bottom: 1px solid var(--line); }
-.idea .claim {
-  display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  width: 100%;
-  padding: 0.95rem 0;
-  border: none;
-  background: transparent;
   color: inherit;
   font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.idea .claim {
-  font-size: 1.02rem;
-  line-height: 1.45;
-}
-.idea .claim:hover { color: var(--gold); }
-.claim-text { flex: 1; }
-/* Reference information, so it takes the instrument face and stays out of the
-   way of the sentence. */
-.claim-meta {
-  flex: none;
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  color: var(--muted);
-  opacity: 0.6;
-  white-space: nowrap;
-}
-
-/* The dot the graph will eventually be made of. */
-.dot {
-  flex: none;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #a8a094;
-  transform: translateY(2px);
-}
-/* A thought you came back to — the same signal the map uses. */
-.dot.returned {
-  background: var(--gold);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 16%, transparent);
-}
-
-.detail { padding: 0 0 1rem 1.5rem; }
-
-.detail blockquote {
-  margin: 0 0 0.75rem;
-  padding-left: 0.85rem;
-  border-left: 2px solid var(--line);
-  color: var(--muted);
-  font-style: italic;
-}
-.detail blockquote .tag { margin-left: 0.5rem; font-style: normal; }
-
-.nudges { display: flex; flex-direction: column; gap: 0.4rem; }
-.nudge {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  margin: 0;
-  font-size: 0.875rem;
-  color: var(--muted);
-}
-
-/* Nudges are the only AI-authored content in the app, so they are labelled as
-   such rather than blending in with the user's own ideas. */
-.badge {
-  flex: none;
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  padding: 0.05rem 0.3rem;
-  border-radius: 3px;
-  border: 1px solid currentColor;
-}
-.nudge.strong .badge { color: var(--verdant); }
-.nudge.weak .badge { color: var(--danger); }
-
-/* Extraction can take minutes on a local model. Silence reads as a hang, so the
-   phase and a live elapsed counter are always visible. */
-.extraction {
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--line);
-  font-size: 0.8rem;
-}
-.running { display: flex; align-items: center; gap: 0.6rem; }
-.running.idle { color: var(--muted); justify-content: space-between; }
-.running .muted { margin-left: auto; font-variant-numeric: tabular-nums; }
-.last { margin: 0.4rem 0 0; font-size: 0.75rem; }
-
-.spinner {
-  flex: none;
-  width: 11px;
-  height: 11px;
-  border: 2px solid var(--line);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) {
-  .spinner { animation-duration: 2.4s; }
-}
-
-.quote-link {
-  border: none;
-  background: transparent;
-  padding: 0;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  border-bottom: 1px dashed transparent;
-}
-.quote-link:hover { color: var(--fg); border-bottom-color: var(--accent); }
-
-.source-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  z-index: 10;
-}
-
-.source {
-  display: flex;
-  flex-direction: column;
-  width: min(52rem, 100%);
-  max-height: 100%;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 1.25rem;
-}
-.source header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  padding-bottom: 0.85rem;
-  margin-bottom: 0.85rem;
-  border-bottom: 1px solid var(--line);
-}
-.source-claim { font-weight: 600; margin-bottom: 0.15rem; }
-.source .muted { font-size: 0.78rem; }
-
-.transcript {
-  flex: 1;
-  overflow-y: auto;
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: inherit;
-  font-size: 0.9rem;
-  color: var(--muted);
-}
-
-/* The words the idea actually came from. Everything else is context. */
-.transcript mark {
-  background: color-mix(in srgb, var(--gold) 26%, transparent);
-  color: var(--fg);
-  border-radius: 3px;
-  padding: 0.05em 0.15em;
-}
-
-.mic {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.8rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease;
-}
-.mic:hover:not(:disabled) { color: var(--fg); }
-.mic:disabled { opacity: 0.4; cursor: default; }
-.mic.on { color: var(--fg); border-color: var(--accent); }
-
-.mic-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--line);
-  transition: background 120ms ease, transform 120ms ease;
-}
-/* Pulses only while you're actually speaking, so silence is visibly silence
-   rather than something that might be broken. */
-.mic-dot.live {
-  background: var(--danger);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-@keyframes pulse {
-  50% { transform: scale(1.5); opacity: 0.6; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .mic-dot.live { animation: none; }
-}
-
-.mic-status { font-size: 0.78rem; color: var(--muted); }
-
-/* Instant feedback on press.
-   This fires in the same frame as the click, with no round trip to the backend,
-   which is what actually answers "did I click it?". The loading state answers a
-   different question — "is it working?" — and arrives later by necessity. */
-.mic:active:not(:disabled),
-.done:active:not(:disabled),
-.tab:active,
-.setup button:active {
-  transform: scale(0.96);
-  transition: transform 40ms ease;
-}
-
-.mic { transition: color 120ms ease, border-color 120ms ease, transform 40ms ease; }
-.mic.busy { color: var(--fg); border-color: var(--accent); cursor: progress; }
-
-/* Same geometry as the status dot it replaces, so the button doesn't jump width
-   when the state changes. */
-.mic-spinner {
-  width: 7px;
-  height: 7px;
-  border: 2px solid transparent;
-  border-top-color: var(--accent);
-  border-right-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .mic-spinner { animation-duration: 2s; }
-  .mic:active:not(:disabled) { transform: none; }
-}
-
-.done {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  transition: color 120ms ease, border-color 120ms ease, transform 40ms ease;
-}
-.done.busy { color: var(--fg); border-color: var(--accent); cursor: progress; }
-
-/* The map. Conversations are the big nodes; the ideas that came out of them
-   orbit around, and an idea shared by two conversations joins them together. */
-.graph-wrap {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  /* Full shell width — the map is the one view that wants every pixel. */
-  width: 100%;
-}
-.graph {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-  cursor: grab;
-}
-.graph:active { cursor: grabbing; }
-
-.graph-empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-}
-
-.graph-tip {
-  position: absolute;
-  max-width: 34rem;
-  padding: 0.6rem 0.85rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  font-size: 0.85rem;
-  pointer-events: none;
-}
-.graph-tip.bottom { bottom: 0.75rem; }
-.graph-tip.top { top: 0.75rem; }
-.graph-tip.left { left: 0.75rem; }
-.graph-tip.right { right: 0.75rem; }
-.graph-tip .muted { font-size: 0.72rem; }
-
-.graph-key {
-  position: absolute;
-  right: 0.75rem;
-  bottom: 0.75rem;
-  display: flex;
-  gap: 0.85rem;
-  padding: 0.5rem 0;
-  font-size: 0.7rem;
-  color: var(--muted);
-  pointer-events: none;
-}
-.graph-key span { display: inline-flex; align-items: center; gap: 0.3rem; }
-.graph-key i { width: 8px; height: 8px; border-radius: 50%; }
-
-/* ---- Chats: every conversation, kept and re-readable ---- */
-
-.chats { flex: 1; overflow-y: auto; padding-bottom: 2rem; }
-
-.chat-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--line);
-}
-.chat-head .muted { font-size: 0.78rem; }
-
-.chat-list { list-style: none; margin: 0; padding: 0; }
-.chat-list li { border-bottom: 1px solid var(--line); }
-.chat-list button {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  width: 100%;
-  padding: 1.15rem 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.chat-list button:hover .chat-opening { color: var(--accent); }
-.chat-opening {
-  font-size: 1.08rem;
-  line-height: 1.4;
-  /* Two lines of what you actually said, rather than a clipped single line. */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  transition: color 120ms ease;
-}
-.chat-date {
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-  opacity: 0.65;
-}
-.chat-meta {
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  color: var(--muted);
-  opacity: 0.75;
-}
-
-/* Re-reading is not composing: no input, and the whole exchange is visible. */
-.stream.reread { padding-top: 1.25rem; }
-
-/* ---- Rendered model replies ---- */
-
-.md > :first-child { margin-top: 0; }
-.md > :last-child { margin-bottom: 0; }
-.md p { margin: 0 0 0.75rem; }
-.md h1, .md h2, .md h3, .md h4 {
-  margin: 1.1rem 0 0.5rem;
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--fg);
-}
-.md ul, .md ol { margin: 0 0 0.75rem; padding-left: 1.3rem; }
-.md li { margin: 0.15rem 0; }
-.md strong { color: var(--fg); font-weight: 600; }
-.md code {
-  padding: 0.1em 0.35em;
-  border-radius: 4px;
-  background: var(--user);
-  font-size: 0.9em;
-}
-.md pre {
-  margin: 0 0 0.75rem;
-  padding: 0.75rem;
-  border-radius: 8px;
-  background: var(--user);
-  overflow-x: auto;
-}
-.md pre code { padding: 0; background: none; }
-.md blockquote {
-  margin: 0 0 0.75rem;
-  padding-left: 0.85rem;
-  border-left: 2px solid var(--line);
-}
-.md hr { border: none; border-top: 1px solid var(--line); margin: 1rem 0; }
-/* Wide tables scroll rather than pushing the page sideways. */
-.md table { width: 100%; border-collapse: collapse; margin: 0 0 0.75rem; display: block; overflow-x: auto; }
-.md th, .md td { border: 1px solid var(--line); padding: 0.35rem 0.6rem; text-align: left; }
-.md a { color: var(--accent); }
-
-.graph-tip-label { margin: 0.15rem 0; }
-.graph-tip-hint { font-size: 0.7rem; }
-
-/* Extraction happens in the background after Done, and can take minutes on a
-   local model. Shown app-wide so the work is never invisible from wherever you
-   happen to be. */
-.digesting {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-  padding: 0.4rem 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  align-self: center;
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-
-/* Reset framing after panning around. */
-/* Inset from the corner so it does not collide with the tab bar above. */
-.graph-reset {
-  position: absolute;
-  left: 0.75rem;
-  top: 0.75rem;
-  padding: 0.3rem 0.8rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-.graph-reset:hover { color: var(--fg); border-color: var(--accent); }
-
-/* ---- Deep dives: a conversation's file, and an idea's file ---- */
-
-.deep {
-  flex: 1;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 52rem;
-  margin: 0 auto;
-  padding-bottom: 3rem;
-}
-
-.deep-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 1rem;
-}
-.deep-head .muted { font-size: 0.78rem; }
-
-.deep-claim {
-  font-size: 1.5rem;
-  font-weight: 400;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
-  margin: 0 0 0.85rem;
-}
-.deep-section {
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  margin: 1.75rem 0 0.75rem;
-}
-.deep-nudges { margin-bottom: 1.25rem; }
-
-.deep-transcript { font-size: 0.95rem; line-height: 1.75; }
-
-/* The words that produced an idea. Only ever the human's own. */
-.extracted {
-  position: relative;
-  background: color-mix(in srgb, var(--gold) 20%, transparent);
-  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--gold) 55%, transparent);
-  color: var(--fg);
-  border-radius: 3px;
-  padding: 0.05em 0.15em;
-  cursor: pointer;
-  transition: background 120ms ease;
-}
-.extracted:hover { background: color-mix(in srgb, var(--gold) 38%, transparent); }
-
-/* Why the model read those words that way — the thing that makes extraction
-   inspectable rather than magic. */
-.why {
-  display: none;
-  position: absolute;
-  left: 0;
-  top: calc(100% + 0.4rem);
-  z-index: 5;
-  width: min(30rem, 70vw);
-  padding: 0.7rem 0.85rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-  white-space: normal;
-  font-size: 0.85rem;
-  line-height: 1.5;
-  cursor: default;
-}
-.extracted:hover .why { display: block; }
-.why strong { display: block; color: var(--fg); margin-bottom: 0.3rem; }
-.why em { color: var(--muted); font-style: normal; }
-
-.evidence { margin-bottom: 1.25rem; }
-.evidence blockquote {
-  margin: 0 0 0.35rem;
-  padding-left: 0.85rem;
-  border-left: 2px solid var(--line);
-  color: var(--fg);
-  font-style: italic;
-}
-.why-inline {
-  margin: 0 0 0.35rem 0.85rem;
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
-.revision {
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--line);
-}
-.revision .was { margin: 0 0 0.2rem; font-style: italic; color: var(--muted); }
-.revision .muted { font-size: 0.78rem; }
-.revision .done { margin-top: 0.5rem; }
-
-/* ---- Hover: the map dims and the AI's points come out from behind the node ---- */
-
-.nudge-layer {
-  position: absolute;
-  inset: 0;
-  /* The layer itself must not eat mouse events — the canvas underneath is still
-     tracking hover, and blocking it would make the overlay flicker on and off. */
-  pointer-events: none;
-}
-
-.wash {
-  position: absolute;
-  inset: 0;
-  background: rgba(14, 12, 9, 0.78);
-  animation: wash-in 160ms ease forwards;
-}
-@keyframes wash-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* The hovered node, redrawn above the wash so it stays lit. */
-.hover-node {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  box-shadow:
-    0 0 0 5px color-mix(in srgb, var(--halo, var(--accent)) 18%, transparent),
-    0 0 34px color-mix(in srgb, var(--halo, var(--accent)) 45%, transparent);
-}
-
-/* Each point the AI has about this node. Starts at the node and travels out,
-   reading as though it came from behind it. */
-.ai-nudge {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  margin: -15px 0 0 -15px;
-  border-radius: 50%;
-  border: 1px solid currentColor;
-  background: var(--bg);
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  /* Only the circles take the mouse, so their text can be read. */
-  pointer-events: auto;
-  cursor: default;
-  opacity: 0;
-  transform: translate(0, 0) scale(0.2);
-  animation: nudge-out 320ms cubic-bezier(0.2, 0.9, 0.3, 1.2) forwards;
-}
-.ai-nudge.strong { color: var(--verdant); }
-.ai-nudge.weak { color: var(--danger); }
-
-@keyframes nudge-out {
-  to {
-    opacity: 1;
-    transform: translate(var(--dx), var(--dy)) scale(1);
-  }
-}
-
-/* The point itself, on hovering the circle. */
-/* Opens downward by default, upward for nudges in the lower half so the text
-   never runs off the bottom of the window. */
-.ai-text {
-  display: none;
-  position: absolute;
-  left: 50%;
-  top: calc(100% + 0.5rem);
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: 22rem;
-  padding: 0.55rem 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
-  color: var(--fg);
-  font-size: 0.8rem;
-  font-weight: 400;
-  letter-spacing: 0;
-  line-height: 1.45;
-  text-align: left;
-  white-space: normal;
-  z-index: 3;
-}
-.ai-nudge.up .ai-text {
-  top: auto;
-  bottom: calc(100% + 0.5rem);
-}
-.ai-nudge:hover { z-index: 4; }
-.ai-nudge:hover .ai-text { display: block; }
-
-/* The tooltip has to clear the wash. */
-.graph-tip { z-index: 6; }
-
-@media (prefers-reduced-motion: reduce) {
-  .wash { animation: none; }
-  .ai-nudge {
-    animation: none;
-    opacity: 1;
-    transform: translate(var(--dx), var(--dy)) scale(1);
-  }
-}
-
-/* ---- The Think view ---- */
-
-.think {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-}
-
-/* Before anything is said, the invitation and the input belong together in the
-   middle of the room. An empty log with an input pinned to the bottom reads as
-   somewhere you have already been; this reads as somewhere to begin. */
-.think.opening {
-  justify-content: center;
-  padding-bottom: 8vh;
-}
-.think.opening .stream {
-  flex: 0 0 auto;
-  overflow: visible;
-  padding: 0 0 1.5rem;
-}
-.think.opening .empty { margin: 0; }
-.think.opening .composer { padding-bottom: 0; }
-
-/* Once you are talking, the transcript takes the room and the input settles. */
-.think:not(.opening) .stream { flex: 1; }
-
-/* The conversation's file reads as a document: your words carry it, the model's
-   replies sit behind them. */
-.deep-transcript { padding-bottom: 1rem; }
-.deep-transcript .turn.user {
-  margin: 1.6rem 0 0.9rem;
-  font-size: 1.16rem;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-.deep-transcript .turn.user:first-child { margin-top: 0.5rem; }
-.deep-transcript .turn.assistant {
-  margin: 0 0 1.4rem;
-  padding-left: 1.1rem;
-  border-left: 1px solid var(--line);
-  font-size: 0.88rem;
-  color: var(--muted);
-  /* Markdown supplies its own block spacing. Leaving pre-wrap on would add the
-     transcript's newlines on top of it and double every gap. */
-  white-space: normal;
-}
-
-.deep-nudges { margin-bottom: 0.5rem; }
-.deep-nudges section + section { margin-top: 1.1rem; }
-.deep-nudges .deep-section { margin-top: 0; }
-
-.evidence-link {
-  border: none;
-  background: transparent;
-  padding: 0;
-  margin-left: 0.85rem;
-  color: var(--accent);
-  font-family: var(--sans);
   font-size: 0.82rem;
-  cursor: pointer;
+  outline: none;
 }
-.evidence-link:hover { text-decoration: underline; }
+input.field:focus, textarea.field:focus { border-color: var(--accent); }
+textarea.field { font-family: var(--mono); font-size: 0.76rem; resize: vertical; }
 
-/* ---- Settings and Models panels ---- */
+/* Keyboard focus stays visible even though hover states are subtle. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.panel {
-  flex: 1;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 46rem;
-  margin: 0 auto;
-  padding: 1.25rem 0 4rem;
-}
-.panel section + section {
-  margin-top: 2.25rem;
-  padding-top: 2.25rem;
-  border-top: 1px solid var(--line);
-}
-
-.panel-title {
-  font-family: var(--serif);
-  font-size: 1.25rem;
-  font-weight: 400;
-  margin: 0 0 0.35rem;
-}
-.panel-blurb {
-  margin: 0 0 0.9rem;
-  font-size: 0.88rem;
-  color: var(--muted);
-  max-width: 40rem;
-  line-height: 1.55;
-}
-
-.choice-row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.choice {
-  padding: 0.4rem 0.9rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
-}
-.choice:hover { color: var(--fg); }
-.choice.on {
-  color: var(--fg);
-  border-color: var(--accent);
-  background: var(--surface);
-}
-.choice.danger { color: var(--danger); border-color: currentColor; }
-
-.path {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--muted);
-  word-break: break-all;
-  margin: 0;
-}
-
-.plain-list {
-  margin: 0;
-  padding-left: 1.1rem;
-  font-size: 0.88rem;
-  color: var(--muted);
-  line-height: 1.6;
-}
-.plain-list li { margin-bottom: 0.4rem; }
-
-.model-role + .model-role { margin-top: 2.25rem; }
-.model-current {
-  margin: 0 0 0.75rem;
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-.model-current b { color: var(--fg); }
-.model-server { margin-top: 0.75rem; }
-.model-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
-.model {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  width: 100%;
-  padding: 0.5rem 0.85rem;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 0.88rem;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
-}
-.model:hover:not(:disabled) { border-color: var(--accent); background: var(--surface); }
-.model:disabled { opacity: 0.5; cursor: default; }
-.model.chosen { border-color: var(--accent); background: var(--surface); }
-.model-name { flex: 1; font-family: var(--mono); font-size: 0.78rem; }
-
-/* Scrollbars in the app's own colours rather than the platform's dark default,
-   which showed as a black strip on the light ground. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
-}
-::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--line);
   border-radius: 999px;
-  border: 3px solid transparent;
+  border: 2px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--faint); background-clip: content-box; }
+* { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 
-.key-row { display: flex; gap: 0.5rem; align-items: center; }
-.key-input {
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  .btn:active { transform: none; }
+}
+
+/* ---- Think: the live conversation ---- */
+
+.think { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.stream {
   flex: 1;
-  max-width: 24rem;
-  padding: 0.45rem 0.75rem;
+  overflow-y: auto;
+  padding: 1.1rem 1.5rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.stream > * { width: 100%; max-width: 52rem; margin: 0 auto; }
+.think.opening { justify-content: center; }
+.think.opening .stream { flex: 0 0 auto; }
+
+.turn { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.9rem; }
+.turn .md { white-space: normal; }
+
+/* Speaker is marked by a rule and a label rather than a different typeface. */
+.turn.user {
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--accent);
+  color: var(--fg);
+}
+.turn.assistant {
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.composer { padding: 0.5rem 1.5rem 0.9rem; }
+.composer > * { width: 100%; max-width: 52rem; margin: 0 auto; }
+.composer-box {
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--surface);
+  padding: 0.15rem 0.7rem 0.3rem;
+}
+.composer-box:focus-within { border-color: var(--accent); }
+.composer textarea {
+  width: 100%;
+  min-height: 2.2rem;
+  max-height: 40vh;
+  padding: 0.4rem 0;
+  border: none;
+  background: transparent;
   color: inherit;
-  font-family: var(--mono);
-  font-size: 0.8rem;
+  font: inherit;
+  font-size: 0.9rem;
+  resize: none;
   outline: none;
+  field-sizing: content;
 }
-.key-input:focus { border-color: var(--accent); }
+.bar { display: flex; align-items: center; gap: 0.4rem; padding-top: 0.1rem; }
+.bar .spacer { margin-left: auto; }
 
-/* Says what it means rather than looking like a warning: using a remote model
-   is a legitimate choice, it just has a consequence worth seeing. */
-.tag.remote {
-  margin-left: 0.5rem;
-  color: var(--gold);
-  border-color: currentColor;
-  text-transform: none;
-  letter-spacing: 0;
+.thinking { color: var(--muted); font-size: 0.82rem; font-style: italic; }
+.thought-size { opacity: 0.6; font-style: normal; }
+.dots::after { content: ""; animation: dots 1.4s steps(4, end) infinite; }
+@keyframes dots {
+  0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; }
 }
-.deep-section .tag { font-weight: 400; }
+.cursor {
+  display: inline-block; width: 0.45rem; height: 0.9rem;
+  background: var(--accent); vertical-align: text-bottom;
+  animation: blink 1.1s steps(2, start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
 
-.dive { margin: 1.75rem 0; }
-.dive-text {
-  font-family: var(--serif);
-  font-size: 1.02rem;
-  line-height: 1.65;
-  margin-bottom: 0.85rem;
+.spinner {
+  width: 9px; height: 9px;
+  border: 2px solid transparent;
+  border-top-color: currentColor; border-right-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex: none;
 }
-.dive-text p { margin: 0 0 0.85rem; }
-.dive-text p:last-child { margin-bottom: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.mic { display: inline-flex; align-items: center; gap: 0.35rem; }
+.mic-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line); flex: none; }
+.mic-dot.live { background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { transform: scale(1.5); opacity: 0.6; } }
+
+/* ---- Lists: ideas, chats, models ---- */
+
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { border-bottom: 1px solid var(--line); }
+.list li:first-child { border-top: 1px solid var(--line); }
+
+.row-btn {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.35rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
+  line-height: 1.45;
+}
+.row-btn:hover { background: var(--surface); }
+.row-main { flex: 1; min-width: 0; }
+.row-meta {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transform: translateY(-1px); }
+.dot.returned { background: var(--gold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 20%, transparent); }
+
+.diag {
+  display: flex; flex-wrap: wrap; gap: 0.15rem 0.9rem;
+  padding: 0 0 0.6rem;
+  font-family: var(--mono); font-size: 0.64rem; color: var(--faint);
+}
+.diag strong { color: var(--fg); font-weight: 500; }
+.diag .pending { color: var(--accent); }
+
+/* ---- Deep dives ---- */
+
+.deep-claim { font-size: 1.05rem; font-weight: 600; line-height: 1.4; margin: 0 0 0.7rem; }
+.notes { display: flex; flex-direction: column; gap: 0.25rem; }
+.note {
+  display: flex; align-items: baseline; gap: 0.45rem;
+  margin: 0; font-size: 0.84rem; color: var(--muted);
+}
+.badge {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.55rem; font-weight: 600; letter-spacing: 0.06em;
+  padding: 0.03rem 0.26rem; border-radius: 3px; border: 1px solid currentColor;
+}
+.note.strong .badge { color: var(--verdant); }
+.note.weak .badge { color: var(--danger); }
+
+blockquote {
+  margin: 0 0 0.3rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--line);
+  color: var(--fg);
+  font-size: 0.86rem;
+}
+.evidence { margin-bottom: 0.9rem; }
+.why-inline { margin: 0 0 0.25rem 0.7rem; font-size: 0.78rem; color: var(--faint); }
+.link {
+  border: none; background: transparent; padding: 0;
+  color: var(--accent); font: inherit; font-size: 0.78rem; cursor: pointer;
+}
+.link:hover { text-decoration: underline; }
+.revision { padding: 0.55rem 0; border-bottom: 1px solid var(--line); }
+.revision .was { margin: 0 0 0.15rem; color: var(--muted); font-size: 0.84rem; }
+
+.transcript { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font: inherit; font-size: 0.88rem; }
+.deep-transcript .turn { margin: 0 0 0.85rem; }
+.deep-transcript .turn.assistant { white-space: normal; }
+
+.extracted {
+  position: relative;
+  background: color-mix(in srgb, var(--gold) 22%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--gold) 55%, transparent);
+  border-radius: 2px; padding: 0.03em 0.12em; cursor: pointer;
+}
+.extracted:hover { background: color-mix(in srgb, var(--gold) 38%, transparent); }
+.why {
+  display: none; position: absolute; left: 0; top: calc(100% + 0.35rem); z-index: 5;
+  width: min(28rem, 70vw); padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--surface-lift);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.4);
+  white-space: normal; font-size: 0.8rem; line-height: 1.45; cursor: default;
+}
+.extracted:hover .why { display: block; }
+.why strong { display: block; color: var(--fg); margin-bottom: 0.2rem; }
+.why em { color: var(--muted); font-style: normal; }
+.dive-text { font-size: 0.88rem; line-height: 1.6; margin-bottom: 0.6rem; }
+.dive-text p { margin: 0 0 0.6rem; }
+
+/* ---- Rendered markdown ---- */
+
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 0.55rem; }
+.md h1, .md h2, .md h3, .md h4 { margin: 0.85rem 0 0.35rem; font-size: 0.9rem; font-weight: 600; color: var(--fg); }
+.md ul, .md ol { margin: 0 0 0.55rem; padding-left: 1.15rem; }
+.md li { margin: 0.1rem 0; }
+.md strong { color: var(--fg); font-weight: 600; }
+.md code { padding: 0.08em 0.3em; border-radius: 3px; background: var(--user); font-family: var(--mono); font-size: 0.85em; }
+.md pre { margin: 0 0 0.55rem; padding: 0.6rem; border-radius: 6px; background: var(--user); overflow-x: auto; }
+.md pre code { padding: 0; background: none; }
+.md blockquote { margin: 0 0 0.55rem; }
+.md table { width: 100%; border-collapse: collapse; margin: 0 0 0.55rem; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 0.25rem 0.45rem; text-align: left; }
+.md a { color: var(--accent); }
+.md hr { border: none; border-top: 1px solid var(--line); margin: 0.8rem 0; }
+
+/* ---- Map ---- */
+
+.graph-wrap { position: relative; flex: 1; min-height: 0; width: 100%; }
+.graph { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+.graph:active { cursor: grabbing; }
+.graph-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+
+.graph-reset { position: absolute; left: 0.6rem; top: 0.6rem; }
+.graph-tip {
+  position: absolute; z-index: 6;
+  max-width: 30rem; padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface-lift); font-size: 0.82rem; pointer-events: none;
+}
+.graph-tip.bottom { bottom: 0.6rem; } .graph-tip.top { top: 0.6rem; }
+.graph-tip.left { left: 0.6rem; } .graph-tip.right { right: 0.6rem; }
+.graph-tip .muted { font-family: var(--mono); font-size: 0.62rem; }
+.graph-tip-label { margin: 0.15rem 0; }
+.graph-tip-hint { font-size: 0.62rem; color: var(--faint); }
+
+.graph-key {
+  position: absolute; right: 0.6rem; bottom: 0.6rem;
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.15rem 0.7rem;
+  max-width: 60%;
+  font-family: var(--mono); font-size: 0.6rem; color: var(--faint); pointer-events: none;
+}
+.graph-key span { display: inline-flex; align-items: center; gap: 0.25rem; }
+.graph-key i { width: 7px; height: 7px; border-radius: 50%; }
+
+.nudge-layer { position: absolute; inset: 0; pointer-events: none; }
+.wash { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg) 82%, transparent); animation: wash-in 140ms ease forwards; }
+@keyframes wash-in { from { opacity: 0; } to { opacity: 1; } }
+.hover-node {
+  position: absolute; transform: translate(-50%, -50%); border-radius: 50%;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--halo, var(--accent)) 20%, transparent),
+              0 0 28px color-mix(in srgb, var(--halo, var(--accent)) 45%, transparent);
+}
+.ai-nudge {
+  position: absolute; display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; margin: -13px 0 0 -13px;
+  border-radius: 50%; border: 1px solid currentColor; background: var(--surface-lift);
+  font-family: var(--mono); font-size: 0.55rem; font-weight: 600;
+  pointer-events: auto; cursor: default; opacity: 0;
+  transform: translate(0, 0) scale(0.2);
+  animation: nudge-out 300ms cubic-bezier(0.2, 0.9, 0.3, 1.2) forwards;
+}
+.ai-nudge.strong { color: var(--verdant); }
+.ai-nudge.weak { color: var(--danger); }
+@keyframes nudge-out { to { opacity: 1; transform: translate(var(--dx), var(--dy)) scale(1); } }
+.ai-text {
+  display: none; position: absolute; left: 50%; top: calc(100% + 0.4rem);
+  transform: translateX(-50%); width: max-content; max-width: 20rem;
+  padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface-lift); box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+  color: var(--fg); font-family: var(--sans); font-size: 0.78rem; font-weight: 400;
+  line-height: 1.4; text-align: left; white-space: normal; z-index: 3;
+}
+.ai-nudge.up .ai-text { top: auto; bottom: calc(100% + 0.4rem); }
+.ai-nudge:hover { z-index: 4; }
+.ai-nudge:hover .ai-text { display: block; }
+
+/* ---- Import ---- */
+
+.import { padding: 0 0 1rem; }
+.import-preview {
+  display: flex; flex-direction: column; gap: 0.55rem;
+  padding: 0.6rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); max-height: 20rem; overflow-y: auto; margin-top: 0.6rem;
+}
+.import-role {
+  display: block; font-family: var(--mono); font-size: 0.58rem;
+  text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint); margin-bottom: 0.15rem;
+}
+
+/* ---- Models ---- */
+
+.model-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.model {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 5px;
+  background: transparent; color: inherit; font: inherit; font-size: 0.82rem;
+  text-align: left; cursor: pointer;
+}
+.model:hover:not(:disabled) { border-color: var(--accent); background: var(--surface); }
+.model.chosen { border-color: var(--accent); background: var(--surface); }
+.model:disabled { opacity: 0.5; cursor: default; }
+.model-name { flex: 1; font-family: var(--mono); font-size: 0.74rem; }
+.current { margin: 0 0 0.5rem; font-family: var(--mono); font-size: 0.68rem; color: var(--faint); }
+.current b { color: var(--fg); font-weight: 500; }
+.path { margin: 0; font-family: var(--mono); font-size: 0.68rem; color: var(--faint); word-break: break-all; }
+.plain-list { margin: 0; padding-left: 1rem; font-size: 0.82rem; color: var(--muted); line-height: 1.55; }
+.plain-list li { margin-bottom: 0.3rem; }

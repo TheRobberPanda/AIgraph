@@ -106,8 +106,13 @@ async fn extraction_traces_ideas_back_to_real_words() {
         eprintln!("\n• {}", i.raw.claim);
         eprintln!("  quote: {:?}{}", i.located.matched_text,
             if i.located.normalized_match { " [normalized]" } else { "" });
-        for s in &i.raw.strong_points { eprintln!("  + {s}"); }
-        for w in &i.raw.weak_points { eprintln!("  - {w}"); }
+        for n in &i.raw.notes {
+            let mark = match n.kind {
+                idea_graph_lib::llm::types::NoteKind::Supports => "+",
+                idea_graph_lib::llm::types::NoteKind::Questions => "?",
+            };
+            eprintln!("  {mark} {}", n.text);
+        }
     }
     for r in &out.rejected {
         eprintln!("\n✗ DROPPED ({:?}): {:?}", r.reason, r.raw.quote);
