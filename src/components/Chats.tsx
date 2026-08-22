@@ -152,7 +152,6 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
                     setMenu({ x: e.clientX, y: e.clientY, session: s });
                   }}
                   className="row-btn chat-row"
-                  data-tip={s.opening || undefined}
                 >
                   <span className="row-main">
                     <span className="chat-open">

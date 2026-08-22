@@ -194,8 +194,8 @@ export default function Graph() {
   const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
   const [panelSide, setPanelSide] = useState<"left" | "right">("right");
   const [panelWidth, setPanelWidth] = useState(420);
-  const [relationPopup, setRelationPopup] = useState<
-    { kind: "related" | "contradicts"; a: GraphNode; b: GraphNode } | null
+  const [edgeHover, setEdgeHover] = useState<
+    { kind: "related" | "contradicts"; a: GraphNode; b: GraphNode; x: number; y: number } | null
   >(null);
   const openIdea = useRef((id: number) =>
     setPanel((p) => (p?.kind === "idea" && p.id === id ? null : { kind: "idea", id })),
@@ -660,14 +660,34 @@ export default function Graph() {
             }
           }
 
-          if (hit === hoverRef.current) return;
+          if (hit !== hoverRef.current) {
+            hoverRef.current = hit;
+            setHovered(hit?.data ?? null);
+            const at = hit ? screenPos(hit) : null;
+            setHoverAt(at);
+            // The ring, plus the radius of a note circle, plus room to travel.
+            keepAliveRef.current = at ? { x: at.x, y: at.y, r: at.r + 62 + 52 } : null;
+          }
 
-          hoverRef.current = hit;
-          setHovered(hit?.data ?? null);
-          const at = hit ? screenPos(hit) : null;
-          setHoverAt(at);
-          // The ring, plus the radius of a note circle, plus room to travel.
-          keepAliveRef.current = at ? { x: at.x, y: at.y, r: at.r + 62 + 52 } : null;
+          // A correlation or contradiction line names how two ideas connect —
+          // worth reading on the way past, not worth a click to find out.
+          if (hit) {
+            if (edgeHover) setEdgeHover(null);
+            return;
+          }
+          const edge = edgeAt(e.clientX, e.clientY);
+          if (edge) {
+            const rect = canvasRef.current?.getBoundingClientRect();
+            setEdgeHover({
+              kind: edge.kind as "related" | "contradicts",
+              a: (edge.source as Node).data,
+              b: (edge.target as Node).data,
+              x: rect ? e.clientX - rect.left : 0,
+              y: rect ? e.clientY - rect.top : 0,
+            });
+          } else if (edgeHover) {
+            setEdgeHover(null);
+          }
         }}
         onMouseUp={(e) => {
           const wasDrag = panRef.current?.moved ?? false;
@@ -683,25 +703,11 @@ export default function Graph() {
           if (wasDrag) return;
 
           const hit = nodeAt(e.clientX, e.clientY);
-          if (hit) {
-            setRelationPopup(null);
-            if (hit.data.kind === "idea" && hit.data.idea_id !== null)
-              openIdea.current(hit.data.idea_id);
-            if (hit.data.kind === "conversation" && hit.data.session_id !== null)
-              openConversation.current(hit.data.session_id);
-            return;
-          }
-
-          const edge = edgeAt(e.clientX, e.clientY);
-          if (edge) {
-            setRelationPopup({
-              kind: edge.kind as "related" | "contradicts",
-              a: (edge.source as Node).data,
-              b: (edge.target as Node).data,
-            });
-          } else {
-            setRelationPopup(null);
-          }
+          if (!hit) return;
+          if (hit.data.kind === "idea" && hit.data.idea_id !== null)
+            openIdea.current(hit.data.idea_id);
+          if (hit.data.kind === "conversation" && hit.data.session_id !== null)
+            openConversation.current(hit.data.session_id);
         }}
         onWheel={(e) => {
           const canvas = canvasRef.current;
@@ -778,32 +784,19 @@ export default function Graph() {
         ))}
       </div>
 
-      {relationPopup && (
-        <div className="relation-popup" onClick={(e) => e.stopPropagation()}>
-          <div className={`relation-kind ${relationPopup.kind}`}>
-            {relationPopup.kind === "contradicts" ? "Contradiction" : "Correlation"}
+      {edgeHover && (
+        <div
+          className="relation-popup"
+          style={{
+            left: edgeHover.x,
+            top: edgeHover.y,
+          }}
+        >
+          <div className={`relation-kind ${edgeHover.kind}`}>
+            {edgeHover.kind === "contradicts" ? "Contradiction" : "Correlation"}
           </div>
-          <button
-            className="link"
-            onClick={() => {
-              setRelationPopup(null);
-              if (relationPopup.a.idea_id !== null) openIdea.current(relationPopup.a.idea_id);
-            }}
-          >
-            {relationPopup.a.label}
-          </button>
-          <button
-            className="link"
-            onClick={() => {
-              setRelationPopup(null);
-              if (relationPopup.b.idea_id !== null) openIdea.current(relationPopup.b.idea_id);
-            }}
-          >
-            {relationPopup.b.label}
-          </button>
-          <button className="btn" onClick={() => setRelationPopup(null)}>
-            Close
-          </button>
+          <div className="relation-side">{edgeHover.a.label}</div>
+          <div className="relation-side">{edgeHover.b.label}</div>
         </div>
       )}
 

@@ -93,6 +93,15 @@ body {
   color: var(--fg);
   font-family: var(--sans);
   overflow: hidden;
+  /* This is an app, not a document — dragging across the map to pan it, a
+     resize handle, or just a fast click shouldn't leave a strip of text
+     highlighted. Selection is only for the fields you actually type into. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* ---- Shell: rail, pane, status bar ---- */
@@ -660,28 +669,41 @@ blockquote {
   position: absolute;
   top: 0.6rem;
   bottom: 0.6rem;
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 9px;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
-  overflow-y: auto;
+  /* Scrolling happens on .pane-inner inside, not here — a second scrollbar on
+     this outer box used to render right on top of the resize handle and the
+     flip button, since both sit at this box's own edge. */
+  overflow: hidden;
   z-index: 40;
 }
 .file-panel.right { right: 0.6rem; }
 .file-panel.left { left: 0.6rem; }
 .file-panel .pane-inner { padding: 0.9rem 1rem 1.5rem; }
+/* A left-docked panel's inner (content-facing) edge is its right edge — the
+   same place a scrollbar would normally land, and also where the resize
+   handle and flip button live. Flipping direction moves the scrollbar to the
+   panel's left (outer) edge instead, out of their way; the inner content
+   flips back to normal reading order immediately. */
+.file-panel.left .pane-inner { direction: rtl; }
+.file-panel.left .pane-inner > * { direction: ltr; }
 .file-panel .pane-inner > * { max-width: none; }
 
 .file-panel-resize {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 8px;
+  width: 10px;
   cursor: ew-resize;
-  z-index: 1;
+  z-index: 3;
 }
-.file-panel.right .file-panel-resize { left: -4px; }
-.file-panel.left .file-panel-resize { right: -4px; }
+.file-panel-resize:hover { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+.file-panel.right .file-panel-resize { left: -5px; }
+.file-panel.left .file-panel-resize { right: -5px; }
 
 /* Sits on the panel's own edge, outside its content, so it can never collide
    with the file's own header (its own "Back" button lives inside). */
@@ -696,7 +718,7 @@ blockquote {
   background: var(--surface-lift);
   color: var(--muted);
   cursor: pointer;
-  z-index: 2;
+  z-index: 4;
   font-size: 0.8rem;
   line-height: 1;
 }
@@ -719,22 +741,23 @@ blockquote {
 .graph-tip .muted { font-family: var(--mono); font-size: 0.62rem; }
 .graph-tip-label { margin: 0.15rem 0; }
 
+/* Follows the cursor along a correlation/contradiction line — read in
+   passing, not clicked into, so it never intercepts the pointer. */
 .relation-popup {
   position: absolute;
-  top: 1rem;
-  left: 50%;
-  transform: translateX(-50%);
+  transform: translate(14px, -50%);
   z-index: 45;
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  min-width: 16rem;
-  max-width: 22rem;
-  padding: 0.7rem 0.8rem;
+  gap: 0.25rem;
+  min-width: 14rem;
+  max-width: 20rem;
+  padding: 0.55rem 0.7rem;
   background: var(--surface-lift);
   border: 1px solid var(--line);
   border-radius: 9px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
 }
 .relation-kind {
   font-family: var(--mono);
@@ -745,7 +768,8 @@ blockquote {
 }
 .relation-kind.related { color: var(--verdant); }
 .relation-kind.contradicts { color: var(--danger); }
-.relation-popup .link { text-align: left; }
+.relation-side { font-size: 0.8rem; color: var(--fg); }
+.relation-side + .relation-side { padding-top: 0.15rem; border-top: 1px solid var(--line); }
 
 .graph-key {
   position: absolute; right: 0.6rem; bottom: 0.6rem;

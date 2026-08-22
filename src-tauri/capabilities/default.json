@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimum the UI needs: invoke our own commands, and listen for the streaming-token events they emit.",
+  "description": "Minimum the UI needs: invoke our own commands, listen for the streaming-token events they emit, and run the window's own titlebar (there is no OS one).",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default"]
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging"
+  ]
 }
