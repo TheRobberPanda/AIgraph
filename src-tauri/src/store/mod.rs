@@ -105,6 +105,8 @@ pub struct ViewTurn {
     pub id: i64,
     pub role: String,
     pub segments: Vec<Segment>,
+    /// A short version of an answer. The answer itself is always in `segments`.
+    pub digest: Option<String>,
 }
 
 /// A run of transcript. Highlighted runs carry the idea they produced.
@@ -709,7 +711,15 @@ impl Store {
                 });
             }
 
-            turns.push(ViewTurn { id: turn.id, role: turn.role, segments });
+            let digest = self
+                .conn
+                .query_row(
+                    "SELECT content FROM reply_digests WHERE turn_id = ?1",
+                    [turn.id],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?;
+            turns.push(ViewTurn { id: turn.id, role: turn.role, segments, digest });
         }
 
         let (strong, weak) = self.nudges_for("session_nudges", "session_id", session_id)?;
@@ -952,6 +962,28 @@ impl Store {
             [session_id],
         )?;
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Answers in a session that have not been condensed yet.
+    pub fn replies_needing_digest(&self, session_id: i64) -> Result<Vec<(i64, i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.ord, t.text FROM turns t
+             WHERE t.session_id = ?1 AND t.role = 'assistant'
+               AND NOT EXISTS (SELECT 1 FROM reply_digests d WHERE d.turn_id = t.id)
+             ORDER BY t.ord",
+        )?;
+        let rows = stmt.query_map([session_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    pub fn set_reply_digest(&self, turn_id: i64, content: &str, model: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO reply_digests (turn_id, content, model, created_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(turn_id) DO UPDATE SET content = ?2, model = ?3, created_at = ?4",
+            params![turn_id, content, model, Utc::now().to_rfc3339()],
+        )?;
         Ok(())
     }
 

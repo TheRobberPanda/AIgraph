@@ -91,6 +91,7 @@ pub fn build(transcript: &str) -> String {
 /// same subject every session — "ethics", "moral philosophy", "morality" — and
 /// the map ends up with a colour per conversation instead of per subject.
 pub fn build_with_categories(transcript: &str, known: &[String]) -> String {
+    let style = crate::extract::style::RULES;
     let known_block = if known.is_empty() {
         String::new()
     } else {
@@ -105,29 +106,28 @@ pub fn build_with_categories(transcript: &str, known: &[String]) -> String {
         )
     };
     format!(
-        r#"Below is a transcript of someone working through a problem out loud,
-with an assistant.
+        r#"A transcript of a conversation. The lines marked USER are the thinking; the
+lines marked ASSISTANT are answers given during it.
 
-Take notes on it, the way a student takes notes in a seminar. The person
-speaking is doing the thinking; the job here is to record it faithfully, not to
-improve it, grade it, or add to it.
+Take notes the way a student takes notes in a seminar. The thinking belongs to
+the USER lines. The job is to record it faithfully, not to improve it, grade it,
+or add to it.
 
-Record the ideas expressed by the person thinking (the lines marked USER).
-Ignore the assistant's contributions entirely — those are not their thinking.
+Record the ideas in the USER lines. Ignore the ASSISTANT lines entirely.
 
 For each idea return:
 
-- "claim": one sentence, in their own words.
+- "claim": one sentence, in the words as spoken.
 
-  **Where the sentence they said already stands on its own, use it exactly as
-  they said it.** That is the best possible claim. Only rewrite when the original
-  cannot be understood out of context — and then change as little as possible.
+  **Where a sentence already stands on its own, use it exactly as spoken.** That
+  is the best possible claim. Rewrite only when the original cannot be understood
+  out of context, and then change as little as possible.
 
-  Never correct them. Keep their word choices, their grammar, their emphasis and
-  their bluntness, including anything that reads as a mistake: "systematic" stays
+  Never correct anything. Keep the word choices, the grammar, the emphasis and
+  the bluntness, including whatever reads as a mistake: "systematic" stays
   "systematic". Do not tidy, do not soften, do not make it sound more considered
-  than it was, and do not add anything that was not said. This is a record of
-  what someone thinks, not an improvement on it.
+  than it was, and do not add what was not said. This records thinking as it
+  happened rather than improving on it.
 - "quote": text copied EXACTLY, character for character, from a line marked
   USER. Do not paraphrase, trim, fix typos, or join separated fragments. If no
   exact span supports the claim, omit the idea entirely.
@@ -139,8 +139,8 @@ For each idea return:
 
 ## Notes are optional, and usually absent
 
-A note is a student's marginal question — the thing worth raising because it is
-genuinely unclear or genuinely load-bearing. It is not a critique quota.
+A note is a marginal question, raised because something is genuinely unclear or
+genuinely load-bearing. It is not a critique quota.
 
 - **Most ideas should have no notes at all.** An idea that is clear and
   self-contained is finished; recording that is the correct outcome.
@@ -159,6 +159,8 @@ genuinely unclear or genuinely load-bearing. It is not a critique quota.
 - Merge restatements of one idea into a single entry.
 - Where a view was revised mid-conversation, record the idea as it was LEFT, and
   quote the revision rather than the first version.
+
+{style}
 
 Also return "conversation": notes on the whole stretch of thinking, under the
 same rules — usually none, and never more than two.

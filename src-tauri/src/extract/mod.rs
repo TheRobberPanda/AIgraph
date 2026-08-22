@@ -2,6 +2,8 @@
 
 pub mod deepen;
 pub mod prompt;
+pub mod replies;
+pub mod style;
 pub mod verify;
 
 use crate::llm::types::RawIdea;

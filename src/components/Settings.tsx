@@ -95,7 +95,7 @@ export default function Settings() {
       </section>
 
       <section>
-        <h2 className="section">Your transcripts</h2>
+        <h2 className="section">Transcripts</h2>
         <p className="blurb">
           Every conversation is written here as plain markdown as well as to the
           database — the full exchange, exactly as it happened, readable without

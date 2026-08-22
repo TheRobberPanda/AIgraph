@@ -133,7 +133,11 @@ export function ConversationFile({
                   )}
                 </p>
               ) : (
-                <Reply key={turn.id} text={turn.segments.map((s) => s.text).join("")} />
+                <Reply
+                  key={turn.id}
+                  text={turn.segments.map((s) => s.text).join("")}
+                  digest={turn.digest}
+                />
               ),
             )}
           </div>
@@ -172,23 +176,37 @@ export function ConversationFile({
 }
 
 /**
- * One reply from the assistant.
+ * One answer, shown short.
  *
- * Collapsed past a few lines. A model answers at length while a person thinks in
- * fragments, so left alone the assistant's words dominate the page — and the
- * page is supposed to be a record of the person's thinking. Nothing is removed;
- * it is one click away.
+ * Nothing is injected into the conversation to make the assistant terser — it
+ * answers at whatever length it likes. The condensing happens afterwards, on the
+ * record, and the answer itself is always one click below. Left in full, two or
+ * three thousand characters of reply against a sentence of thinking turns the
+ * page into somewhere the machine does all the talking.
  */
-function Reply({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+function Reply({ text, digest }: { text: string; digest: string | null }) {
+  const [full, setFull] = useState(false);
   const long = text.length > 420;
+
+  if (digest && !full) {
+    return (
+      <div className="turn assistant">
+        <span className="who">answered</span>
+        <div className="digest">{digest}</div>
+        <button className="link" onClick={() => setFull(true)}>
+          read the answer in full
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className={`turn assistant${long && !open ? " clipped" : ""}`}>
-      <span className="who">replied</span>
-      <Markdown>{long && !open ? `${text.slice(0, 420)}…` : text}</Markdown>
-      {long && (
-        <button className="link" onClick={() => setOpen((o) => !o)}>
-          {open ? "show less" : `show all ${text.length} characters`}
+    <div className={`turn assistant${!digest && long && !full ? " clipped" : ""}`}>
+      <span className="who">answered</span>
+      <Markdown>{!digest && long && !full ? `${text.slice(0, 420)}…` : text}</Markdown>
+      {(digest || long) && (
+        <button className="link" onClick={() => setFull(!full && !digest ? true : false)}>
+          {digest ? "show the short version" : full ? "show less" : `show all ${text.length} characters`}
         </button>
       )}
     </div>

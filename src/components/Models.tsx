@@ -15,7 +15,7 @@ type Role = "chat" | "extraction";
 const ROLES: { role: Role; title: string; blurb: string }[] = [
   {
     role: "chat",
-    title: "The model you talk to",
+    title: "The model in the conversation",
     blurb:
       "Holds up the other end of the conversation. It is never given instructions about this app — it behaves exactly as it would anywhere else.",
   },
@@ -75,7 +75,7 @@ export default function Models() {
       lmstudio: "LM Studio",
       ollama: "Ollama",
       anthropic: "Anthropic",
-      claudecli: "Claude CLI (your subscription)",
+      claudecli: "Claude CLI (subscription)",
     })[kind] ?? kind;
 
   const isRemote = (kind: string) => kind === "anthropic" || kind === "claudecli";

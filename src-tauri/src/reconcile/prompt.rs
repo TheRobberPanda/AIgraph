@@ -49,9 +49,8 @@ pub fn build(new_claim: &str, candidates: &[Candidate]) -> String {
         .join("\n");
 
     format!(
-        r#"Someone is mapping their own thinking. A new idea has just been
-extracted from a conversation. Decide how it relates to ideas they have
-expressed before.
+        r#"These are ideas recorded from conversations. A new one has just been
+extracted. Decide how it relates to the ideas already recorded.
 
 NEW IDEA:
   {new_claim}
@@ -64,19 +63,18 @@ For each existing idea, return one verdict:
 - "distinct": a different thought. Two ideas about the same topic are still
   distinct — sharing a subject is not the same as being the same claim.
 - "duplicate": the same claim, said again in different words. Nothing is added.
-- "refines": the new idea is a narrower, more nuanced, or corrected version of
-  the old one — the same underlying thought, better stated. Include
-  "merged_claim": the claim rewritten to reflect the more developed view, in the
-  person's own terms. Use this when they changed their mind towards precision
-  rather than reversing themselves.
+- "refines": the new idea is a narrower or more precise version of the old one,
+  the same underlying thought better stated. Include "merged_claim": the claim
+  rewritten to reflect the more developed view, in the words already used. Use
+  this for a move towards precision, not a reversal.
 - "contradicts": both cannot be true at once.
 
 Also return "confidence" from 0 to 1.
 
 Judge conservatively. Marking two different thoughts as the same silently
-misrepresents what this person believes, and they may never spot it; leaving a
-near-duplicate separate is merely untidy and obvious. When genuinely unsure,
-answer "distinct" with low confidence.
+misrepresents the record, and the mistake may never be spotted. Leaving a
+near-duplicate separate is untidy and obvious. When unsure, answer "distinct"
+with low confidence.
 
 Return JSON: {{"judgements": [...]}} with one entry per existing idea."#
     )

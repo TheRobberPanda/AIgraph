@@ -12,6 +12,8 @@ export interface ViewTurn {
   id: number;
   role: "user" | "assistant";
   segments: Segment[];
+  /** A short version of an answer. The answer itself is always in `segments`. */
+  digest: string | null;
 }
 
 export interface ConversationView {

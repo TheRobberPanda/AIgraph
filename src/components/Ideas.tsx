@@ -16,7 +16,7 @@ import {
 
 const PHASE_LABELS: Record<Phase, string> = {
   asking: "reading the conversation",
-  verifying: "checking quotes against your words",
+  verifying: "checking quotes against what was said",
   retrying: "some quotes didn’t match — asking again",
   saving: "saving",
 };
@@ -152,7 +152,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
           </span>
           {/* The honesty metric. Shown rather than logged, because a drop rate
               nobody looks at is a drop rate nobody fixes. */}
-          <span title="Share of proposed ideas that could not be traced to your actual words">
+          <span title="Proposed ideas that could not be traced back to the words as spoken">
             <strong>{(diag.drop_rate * 100).toFixed(0)}%</strong> dropped
           </span>
           {diag.normalized > 0 && (

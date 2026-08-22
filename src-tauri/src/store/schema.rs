@@ -107,6 +107,15 @@ CREATE TABLE IF NOT EXISTS nudges (
 
 -- `model` matters: vectors from different embedding models are not comparable,
 -- so they are filtered on read rather than silently mixed.
+-- A short version of one answer, made after the fact. The answer itself is
+-- never altered — this sits beside it in `turns`.
+CREATE TABLE IF NOT EXISTS reply_digests (
+    turn_id    INTEGER PRIMARY KEY REFERENCES turns(id) ON DELETE CASCADE,
+    content    TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 -- A fuller argument about one idea, generated on first open and kept.
 -- Doing this for every idea at extraction time would multiply the cost of every
 -- session for material most ideas are never asked about.

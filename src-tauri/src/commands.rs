@@ -930,7 +930,43 @@ async fn reconcile_and_save(
         .lock()
         .await
         .save_rejections(session_id, extraction)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    condense_replies(state, session_id, adjudicator.as_ref(), model).await;
+    Ok(())
+}
+
+/// Shorten the answers in a session, after the fact.
+///
+/// Best-effort: a failure here leaves the full answers readable, which is the
+/// state everything already handles. It must not fail the extraction that
+/// produced the ideas.
+async fn condense_replies(
+    state: &AppState,
+    session_id: i64,
+    model: &dyn IdeaExtractor,
+    model_name: &str,
+) {
+    let pending = match state.store.lock().await.replies_needing_digest(session_id) {
+        Ok(p) if !p.is_empty() => p,
+        _ => return,
+    };
+
+    let input: Vec<(i64, String)> = pending.iter().map(|(_, ord, t)| (*ord, t.clone())).collect();
+    let digests = match crate::extract::replies::run(model, &input).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not condense replies; leaving them in full");
+            return;
+        }
+    };
+
+    let store = state.store.lock().await;
+    for d in digests {
+        if let Some((turn_id, _, _)) = pending.iter().find(|(_, ord, _)| *ord == d.turn) {
+            let _ = store.set_reply_digest(*turn_id, d.digest.trim(), model_name);
+        }
+    }
 }
 
 #[tauri::command]

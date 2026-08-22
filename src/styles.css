@@ -671,3 +671,6 @@ blockquote {
   color: var(--faint);
 }
 .turn.user .who { color: color-mix(in srgb, var(--accent) 75%, var(--faint)); }
+
+/* The short version of an answer. Set as a note rather than as speech. */
+.digest { font-size: 0.85rem; line-height: 1.55; color: var(--muted); }

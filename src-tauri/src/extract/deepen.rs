@@ -9,6 +9,7 @@
 use crate::llm::{IdeaExtractor, LlmError};
 
 pub fn build(claim: &str, strong: &[String], weak: &[String], quotes: &[String]) -> String {
+    let style = crate::extract::style::RULES;
     let list = |items: &[String]| {
         if items.is_empty() {
             "  (none noted)".to_string()
@@ -22,29 +23,31 @@ pub fn build(claim: &str, strong: &[String], weak: &[String], quotes: &[String])
     };
 
     format!(
-        r#"An idea recorded from someone working a problem out loud.
+        r#"An idea recorded from a conversation.
 
 THE IDEA:
   {claim}
 
-THEIR OWN WORDS:
+AS SPOKEN:
 {}
 
 NOTES ALREADY TAKEN:
 {}
 {}
 
-Write what a student would write in the margin after the seminar: the two or
-three things that would need to be understood before this idea could be used,
-and the one place it would be pushed hardest by someone who disagreed.
+Write what a student writes in the margin after a seminar: what would need to be
+understood before this idea could be used, and the place it would be pushed
+hardest by a disagreement.
 
 Hard limits:
 
 - At most 120 words. Shorter is better. If two sentences cover it, write two.
 - Do not restate the idea. It is written above; repeating it wastes the space.
 - Do not summarise, do not conclude, and do not offer encouragement.
-- Ask rather than assert wherever asking is honest. The thinking here is theirs.
-- Plain prose. No headings, no bullets, no preamble.
+- Ask rather than assert wherever asking is honest. The thinking is not yours to
+  conclude.
+
+{style}
 
 Return only the prose."#,
         list(quotes),
