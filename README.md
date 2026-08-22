@@ -13,7 +13,7 @@ Free, open source, local-first.
 
 ## Status
 
-Early. Milestone 9 of 11, plus Settings and Models.
+All eleven milestones built.
 
 Working: chat with a local model; sessions that archive to SQLite plus plain
 markdown on Done, idle, or app close; automatic idea extraction with quote
@@ -39,7 +39,42 @@ reads your sessions back afterwards, and a **Settings** tab for appearance,
 session timeout, where transcripts are written, dictation, and re-reading every
 conversation after a change to the prompts.
 
-Not built yet: cloud providers (Anthropic API, `claude` CLI), and packaging.
+## Models
+
+Local by default — the app finds LM Studio or Ollama on its own and needs no
+account, no key, and no network.
+
+Two roles, chosen separately in the **Models** tab:
+
+- **The model you talk to.** Never given instructions about this app.
+- **The model that reads it back.** A mechanical, structured job; a small fast
+  model usually does fine, and reasoning models are a poor fit (see below).
+
+Remote options, both optional:
+
+- **Anthropic API** — paste a key in the Models tab. Stored in your system
+  keychain, never in the settings file, and checked against the API before it is
+  saved. Models are listed live from the key.
+- **`claude` CLI** — if the command is installed, your Claude Pro or Max
+  subscription can be used without an API key. Worth being straight about: this
+  rides a plan intended for interactive use, and Anthropic could reasonably
+  tighten that at any time. It is never the default. (MCP cannot do this — it
+  carries tools, not inference.)
+
+Anything remote is labelled **leaves this machine** where you choose it.
+
+## Building packages
+
+```bash
+npm run tauri build
+```
+
+Produces a `.deb` and an `.AppImage` under `src-tauri/target/release/bundle/`.
+
+Both carry the sherpa-onnx and onnxruntime shared libraries, and the binary is
+linked with an `$ORIGIN` rpath so it finds them once installed. Without that the
+packages build cleanly and then fail at startup with *error while loading shared
+libraries* — worth knowing if you change how speech recognition is linked.
 
 ## Design
 

@@ -62,3 +62,13 @@ export function ideaView(ideaId: number): Promise<IdeaView> {
 export function revertRevision(revisionId: number): Promise<void> {
   return invoke("revert_revision", { revisionId });
 }
+
+/**
+ * The long-form argument about an idea.
+ *
+ * Generated on first open and cached — it costs a model call, so it is not
+ * produced for every idea at extraction time.
+ */
+export function ideaDeepDive(ideaId: number, regenerate = false): Promise<string> {
+  return invoke<string>("idea_deep_dive", { ideaId, regenerate });
+}

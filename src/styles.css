@@ -1263,3 +1263,13 @@ blockquote {
   letter-spacing: 0;
 }
 .deep-section .tag { font-weight: 400; }
+
+.dive { margin: 1.75rem 0; }
+.dive-text {
+  font-family: var(--serif);
+  font-size: 1.02rem;
+  line-height: 1.65;
+  margin-bottom: 0.85rem;
+}
+.dive-text p { margin: 0 0 0.85rem; }
+.dive-text p:last-child { margin-bottom: 0; }

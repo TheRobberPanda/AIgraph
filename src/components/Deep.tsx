@@ -3,6 +3,7 @@ import Markdown from "./Markdown";
 import { dateTime, plainDate } from "../lib/format";
 import {
   conversationView,
+  ideaDeepDive,
   ideaView,
   revertRevision,
   type ConversationView,
@@ -145,8 +146,29 @@ export function IdeaFile({
 }) {
   const [view, setView] = useState<IdeaView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dive, setDive] = useState<string | null>(null);
+  const [diving, setDiving] = useState(false);
 
   const load = () => ideaView(ideaId).then(setView).catch((e) => setError(String(e)));
+
+  // Only the cached copy on open; generating costs a model call, so that waits
+  // for you to ask.
+  useEffect(() => {
+    setDive(null);
+    ideaDeepDive(ideaId).then(setDive).catch(() => {});
+  }, [ideaId]);
+
+  async function think(regenerate = false) {
+    setDiving(true);
+    setError(null);
+    try {
+      setDive(await ideaDeepDive(ideaId, regenerate));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDiving(false);
+    }
+  }
   useEffect(() => {
     setView(null);
     void load();
@@ -170,6 +192,41 @@ export function IdeaFile({
         <>
           <h2 className="deep-claim">{view.claim}</h2>
           <Nudges strong={view.strong} weak={view.weak} />
+
+          <section className="dive">
+            <h3 className="deep-section">Thinking it through</h3>
+            {dive ? (
+              <>
+                <div className="dive-text">
+                  {dive.split(/\n\s*\n/).map((para, i) => (
+                    <p key={i}>{para}</p>
+                  ))}
+                </div>
+                <button
+                  className="done"
+                  disabled={diving}
+                  onClick={() => void think(true)}
+                >
+                  {diving ? "Thinking…" : "Again"}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="panel-blurb">
+                  Take the idea seriously and argue it out — what follows if it
+                  holds, and the strongest objection to it.
+                </p>
+                <button
+                  className={diving ? "done busy" : "done"}
+                  disabled={diving}
+                  onClick={() => void think()}
+                >
+                  {diving && <span className="mic-spinner" aria-hidden="true" />}
+                  {diving ? "Thinking…" : "Think it through"}
+                </button>
+              </>
+            )}
+          </section>
 
           <h3 className="deep-section">Where you said it</h3>
           {view.evidence.map((e) => (

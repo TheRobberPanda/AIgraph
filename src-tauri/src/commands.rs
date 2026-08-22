@@ -1182,3 +1182,37 @@ pub async fn set_anthropic_key(key: String) -> Result<Vec<String>, String> {
 pub async fn clear_anthropic_key() -> Result<(), String> {
     crate::secrets::delete(crate::secrets::ANTHROPIC).map_err(|e| e.to_string())
 }
+
+/// The long-form argument about an idea, generated on first open and kept.
+#[tauri::command]
+pub async fn idea_deep_dive(
+    state: State<'_, AppState>,
+    idea_id: i64,
+    regenerate: bool,
+) -> Result<String, String> {
+    if !regenerate {
+        if let Ok(Some(cached)) = state.store.lock().await.deep_dive(idea_id) {
+            return Ok(cached);
+        }
+    }
+
+    let (model, label) = {
+        let guard = state.extractor.lock().await;
+        let e = guard.as_ref().ok_or("no extraction model selected")?;
+        (e.provider.clone(), e.model.clone())
+    };
+
+    let (claim, strong, weak, quotes) = state
+        .store
+        .lock()
+        .await
+        .idea_context(idea_id)
+        .map_err(|e| e.to_string())?;
+
+    let text = crate::extract::deepen::run(model.as_ref(), &claim, &strong, &weak, &quotes)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = state.store.lock().await.set_deep_dive(idea_id, &text, &label);
+    Ok(text)
+}

@@ -103,6 +103,7 @@ export default function Graph({
   const dragNodeRef = useRef<Node | null>(null);
   const panRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const frameRef = useRef(0);
+  const startedRef = useRef(performance.now());
 
   const [hovered, setHovered] = useState<GraphNode | null>(null);
   const [hoverAt, setHoverAt] = useState<
@@ -187,6 +188,19 @@ export default function Graph({
         ctx.arc(s.x, s.y, r + 7, 0, Math.PI * 2);
         ctx.fillStyle = C.halo;
         ctx.fill();
+      }
+
+      // A claim that was rewritten while you were away gets a slow ring, so the
+      // change is noticed rather than found later by accident.
+      if (n.data.just_revised) {
+        const t = ((performance.now() - startedRef.current) / 1600) % 1;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r + 6 + t * 16, 0, Math.PI * 2);
+        ctx.strokeStyle = C.labelConversation;
+        ctx.globalAlpha = (1 - t) * (inFocus(n) ? 0.55 : 0.15);
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.globalAlpha = inFocus(n) ? 1 : 0.22;
       }
 
       ctx.beginPath();

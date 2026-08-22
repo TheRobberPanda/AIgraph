@@ -11,6 +11,8 @@ export interface GraphNode {
   category: string;
   /** Supported by more than one conversation — these connect the map. */
   shared: boolean;
+  /** Rewritten in the last few minutes. */
+  just_revised: boolean;
   /** Carried on the node so hover can animate immediately, with no round trip. */
   strong: string[];
   weak: string[];

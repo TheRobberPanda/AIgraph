@@ -107,6 +107,16 @@ CREATE TABLE IF NOT EXISTS nudges (
 
 -- `model` matters: vectors from different embedding models are not comparable,
 -- so they are filtered on read rather than silently mixed.
+-- A fuller argument about one idea, generated on first open and kept.
+-- Doing this for every idea at extraction time would multiply the cost of every
+-- session for material most ideas are never asked about.
+CREATE TABLE IF NOT EXISTS idea_deep_dives (
+    idea_id    INTEGER PRIMARY KEY REFERENCES ideas(id) ON DELETE CASCADE,
+    content    TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS embeddings (
     idea_id INTEGER PRIMARY KEY REFERENCES ideas(id) ON DELETE CASCADE,
     dims    INTEGER NOT NULL,

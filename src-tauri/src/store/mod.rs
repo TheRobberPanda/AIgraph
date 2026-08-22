@@ -165,6 +165,9 @@ pub struct GraphNode {
     /// Ideas only: true when more than one conversation supports it. These are
     /// the nodes that actually connect the map together.
     pub shared: bool,
+    /// Rewritten in the last few minutes. The map marks these so a claim that
+    /// changed while you were away does not change silently.
+    pub just_revised: bool,
     /// Carried on the node rather than fetched on hover: the hover animation has
     /// to start in the same frame as the mouse arriving, and a round trip would
     /// make it stutter. At one person's scale this is a few KB of extra JSON.
@@ -810,6 +813,7 @@ impl Store {
                 session_id: Some(id),
                 idea_id: None,
                 category: String::new(),
+                just_revised: false,
                 shared: false,
                 strong,
                 weak,
@@ -821,7 +825,8 @@ impl Store {
         let mut ideas = self.conn.prepare(
             "SELECT i.id, i.claim,
                     (SELECT COUNT(DISTINCT e.session_id) FROM evidence e WHERE e.idea_id = i.id),
-                    i.category
+                    i.category,
+                    (i.revision > 0 AND i.updated_at > datetime('now', '-10 minutes'))
              FROM ideas i",
         )?;
         for row in ideas.query_map([], |r| {
@@ -836,6 +841,7 @@ impl Store {
                 session_id: None,
                 idea_id: Some(id),
                 category: r.get(3)?,
+                just_revised: r.get::<_, i64>(4)? != 0,
                 shared: sessions > 1,
                 strong,
                 weak,
@@ -925,6 +931,44 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// The cached long-form argument about an idea, if one has been generated.
+    pub fn deep_dive(&self, idea_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT content FROM idea_deep_dives WHERE idea_id = ?1",
+                [idea_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn set_deep_dive(&self, idea_id: i64, content: &str, model: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO idea_deep_dives (idea_id, content, model, created_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(idea_id) DO UPDATE SET content = ?2, model = ?3, created_at = ?4",
+            params![idea_id, content, model, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// Everything needed to argue about one idea: the claim, its nudges, and the
+    /// user's own words behind it.
+    pub fn idea_context(&self, idea_id: i64) -> Result<(String, Vec<String>, Vec<String>, Vec<String>)> {
+        let claim: String =
+            self.conn
+                .query_row("SELECT claim FROM ideas WHERE id = ?1", [idea_id], |r| r.get(0))?;
+        let (strong, weak) = self.nudges_for("nudges", "idea_id", idea_id)?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT quote FROM evidence WHERE idea_id = ?1 ORDER BY created_at")?;
+        let quotes: Vec<String> = stmt
+            .query_map([idea_id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok((claim, strong, weak, quotes))
     }
 
     /// Categories already in use, most-used first.
