@@ -29,7 +29,7 @@ import { categoryColors, UNCATEGORISED } from "../lib/categories";
 
 const CONVERSATION_RADIUS = 15;
 const IDEA_RADIUS = 7;
-const LABEL_CHARS = 34;
+const LABEL_CHARS = 44;
 /** Fitts's law: a 7px dot is not a target. */
 const MIN_HIT_RADIUS = 16;
 
@@ -484,10 +484,32 @@ export default function Graph({
             pan.y = e.clientY;
             return;
           }
-          const hit = nodeAt(e.clientX, e.clientY);
+          let hit = nodeAt(e.clientX, e.clientY);
+
+          // Reaching for a note means leaving the node — the notes sit in a ring
+          // around it, so the pointer crosses bare canvas on the way. Without
+          // this the hover clears mid-reach and the notes vanish before they can
+          // be read. Hover holds anywhere inside the ring.
+          if (!hit && hoverRef.current) {
+            const keep = keepAliveRef.current;
+            const rect = canvasRef.current?.getBoundingClientRect();
+            if (keep && rect) {
+              const d = Math.hypot(
+                e.clientX - rect.left - keep.x,
+                e.clientY - rect.top - keep.y,
+              );
+              if (d < keep.r) hit = hoverRef.current;
+            }
+          }
+
+          if (hit === hoverRef.current) return;
+
           hoverRef.current = hit;
           setHovered(hit?.data ?? null);
-          setHoverAt(hit ? screenPos(hit) : null);
+          const at = hit ? screenPos(hit) : null;
+          setHoverAt(at);
+          // The ring, plus the radius of a note circle, plus room to travel.
+          keepAliveRef.current = at ? { x: at.x, y: at.y, r: at.r + 62 + 52 } : null;
         }}
         onMouseUp={(e) => {
           const wasDrag = panRef.current?.moved ?? false;

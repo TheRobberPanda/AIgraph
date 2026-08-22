@@ -56,6 +56,12 @@ pub struct AppState {
     /// two sessions decoding at once on one local model is slower than doing
     /// them in turn, and would make the progress display meaningless.
     drain_lock: tokio::sync::Mutex<()>,
+    /// Sessions that failed and when to try them again.
+    ///
+    /// A failure puts a session back to `pending`, and the queue is drained on a
+    /// timer — so with no model reachable, the same session was re-read every
+    /// minute forever. Each failure now doubles the wait.
+    retry_after: Mutex<std::collections::HashMap<i64, (chrono::DateTime<chrono::Utc>, u32)>>,
     /// Where the plain-markdown copies go. The user owns these.
     md_dir: PathBuf,
 }
@@ -86,6 +92,7 @@ impl AppState {
                 .unwrap_or(std::path::Path::new("."))
                 .join("embeddings"),
             drain_lock: tokio::sync::Mutex::new(()),
+            retry_after: Mutex::new(Default::default()),
             md_dir,
         })
     }
@@ -618,6 +625,8 @@ pub async fn extract_now(app: tauri::AppHandle, state: State<'_, AppState>) -> R
     if state.progress.lock().await.running.is_some() {
         return Ok(false);
     }
+    // Asking for it explicitly clears any waiting period.
+    state.retry_after.lock().await.clear();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         use tauri::Manager;
@@ -651,13 +660,39 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
     if pending.is_empty() {
         return;
     }
+    let now = chrono::Utc::now();
     for id in pending {
+        // Skip anything still serving a backoff.
+        if let Some((when, _)) = state.retry_after.lock().await.get(&id) {
+            if now < *when {
+                continue;
+            }
+        }
+
         match extract_session_inner(app, state, id).await {
-            Ok(n) => tracing::info!(session = id, ideas = n, "extraction complete"),
+            Ok(n) => {
+                state.retry_after.lock().await.remove(&id);
+                tracing::info!(session = id, ideas = n, "extraction complete");
+            }
             Err(e) => {
-                tracing::warn!(session = id, error = %e, "extraction deferred");
-                // Usually means no model is available. Stop rather than
-                // hammering a dead server for every queued session.
+                let mut backoff = state.retry_after.lock().await;
+                let attempts = backoff.get(&id).map(|(_, n)| *n).unwrap_or(0) + 1;
+                // 2, 4, 8 … capped at an hour. A model that is simply switched
+                // off should not keep the machine busy.
+                let wait = 2u32.saturating_pow(attempts.min(6)).min(60);
+                backoff.insert(
+                    id,
+                    (now + chrono::TimeDelta::minutes(wait as i64), attempts),
+                );
+                tracing::warn!(
+                    session = id,
+                    attempts,
+                    retry_in_minutes = wait,
+                    error = %e,
+                    "extraction deferred"
+                );
+                // Usually means no model is reachable, so the rest of the queue
+                // would fail the same way.
                 break;
             }
         }

@@ -49,6 +49,11 @@ pub struct SessionSummary {
     pub turn_count: i64,
     /// How many ideas came out of it — the reason to go back to a conversation.
     pub idea_count: i64,
+    /// The subjects it turned out to be about, taken from the ideas it produced.
+    ///
+    /// Derived rather than typed in: tags nobody maintains go stale, and the
+    /// categories are already being assigned.
+    pub tags: Vec<String>,
     /// First thing the user said, for identifying a session at a glance.
     pub opening: String,
 }
@@ -162,6 +167,8 @@ pub struct GraphNode {
     pub idea_id: Option<i64>,
     /// What the idea is about. Empty for conversations.
     pub category: String,
+    /// When a conversation happened. Empty for ideas.
+    pub date: String,
     /// Ideas only: true when more than one conversation supports it. These are
     /// the nodes that actually connect the map together.
     pub shared: bool,
@@ -343,10 +350,30 @@ impl Store {
                 extract_state: r.get(5)?,
                 turn_count: r.get(6)?,
                 idea_count: r.get(7)?,
+                tags: Vec::new(),
                 opening: r.get(8)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+
+        let mut summaries: Vec<SessionSummary> = rows.collect::<rusqlite::Result<_>>()?;
+
+        // One query for every session's subjects rather than one per session.
+        let mut tag_stmt = self.conn.prepare(
+            "SELECT DISTINCT e.session_id, i.category
+             FROM evidence e JOIN ideas i ON i.id = e.idea_id
+             WHERE i.category <> ''
+             ORDER BY i.category",
+        )?;
+        let mut by_session: std::collections::HashMap<i64, Vec<String>> = Default::default();
+        for row in tag_stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+            let (id, tag) = row?;
+            by_session.entry(id).or_default().push(tag);
+        }
+        for s in &mut summaries {
+            s.tags = by_session.remove(&s.id).unwrap_or_default();
+        }
+
+        Ok(summaries)
     }
 
     pub fn transcript(&self, session_id: i64) -> Result<Option<String>> {
@@ -811,6 +838,7 @@ impl Store {
                 session_id: Some(id),
                 idea_id: None,
                 category: String::new(),
+                date: started.get(..10).unwrap_or(&started).to_string(),
                 just_revised: false,
                 shared: false,
                 strong,
@@ -839,6 +867,7 @@ impl Store {
                 session_id: None,
                 idea_id: Some(id),
                 category: r.get(3)?,
+                date: String::new(),
                 just_revised: r.get::<_, i64>(4)? != 0,
                 shared: sessions > 1,
                 strong,
@@ -1237,23 +1266,22 @@ fn normalize_category(raw: &str) -> String {
     cleaned.chars().take(40).collect()
 }
 
-/// A conversation's name: its date, then its opening words.
+/// A conversation's name: what was said first.
 ///
-/// People recognise their own first sentence far faster than a timestamp, so the
-/// words carry it — but the date leads, because the first idea extracted from a
-/// conversation very often quotes that same opening sentence, and two nodes
-/// showing identical text next to each other is unreadable.
+/// The date used to lead, to keep this apart from an idea quoting the same
+/// opening sentence — but it took over the label and pushed the words that
+/// actually identify the conversation off the end. The date now lives in the
+/// tooltip and in the weight of the node instead.
 fn conversation_label(opening: &str, started_at: &str) -> String {
-    let date = started_at.get(..10).unwrap_or(started_at);
     let trimmed = opening.trim();
     if trimmed.is_empty() {
-        return date.to_string();
+        return started_at.get(..10).unwrap_or(started_at).to_string();
     }
-    let mut words: String = trimmed.chars().take(46).collect();
-    if trimmed.chars().count() > 46 {
+    let mut words: String = trimmed.chars().take(64).collect();
+    if trimmed.chars().count() > 64 {
         words.push('…');
     }
-    format!("{date} · {words}")
+    words
 }
 
 fn relate(
@@ -1690,7 +1718,8 @@ mod tests {
     fn conversations_are_labelled_by_their_opening_words() {
         assert_eq!(
             conversation_label("Trump is a bad man", "2026-08-22T10:00:00Z"),
-            "2026-08-22 · Trump is a bad man"
+            "Trump is a bad man",
+            "the words identify the conversation; the date is shown elsewhere"
         );
         assert_eq!(conversation_label("   ", "2026-08-22T10:00:00Z"), "2026-08-22");
         let long = "x".repeat(100);

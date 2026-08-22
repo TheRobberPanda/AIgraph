@@ -70,6 +70,18 @@ export function ConversationFile({
 }) {
   const [view, setView] = useState<ConversationView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Which recorded idea is being pointed at, so its source can be shown. */
+  const [trace, setTrace] = useState<number | null>(null);
+
+  // One entry per idea, with the words it came from.
+  const taken = (view?.turns ?? [])
+    .flatMap((t) => t.segments)
+    .filter((s) => s.idea_id !== null)
+    .reduce<{ ideaId: number; claim: string; quote: string }[]>((acc, s) => {
+      if (acc.some((a) => a.ideaId === s.idea_id)) return acc;
+      acc.push({ ideaId: s.idea_id!, claim: s.claim ?? "", quote: s.text });
+      return acc;
+    }, []);
 
   useEffect(() => {
     setView(null);
@@ -92,14 +104,15 @@ export function ConversationFile({
         <p className="muted">Loading…</p>
       ) : (
         <>
-          <Nudges strong={view.strong} weak={view.weak} />
-
+          {/* The conversation first, as it happened. What was taken from it sits
+              underneath — the record is the thing, and the notes are notes on
+              it, not a replacement for it. */}
+          <h3 className="section">The conversation</h3>
           <div className="deep-transcript">
             {view.turns.map((turn) =>
               turn.role === "user" ? (
-                // Your words, verbatim, with what the model took from them
-                // marked in place.
                 <p key={turn.id} className="turn user">
+                  <span className="who">said</span>
                   {turn.segments.map((seg, i) =>
                     seg.idea_id === null ? (
                       <span key={i}>{seg.text}</span>
@@ -120,15 +133,63 @@ export function ConversationFile({
                   )}
                 </p>
               ) : (
-                // The model's reply. Rendered as markdown and set quieter — it
-                // is context for your thinking, not the subject of the page.
-                <div key={turn.id} className="turn assistant">
-                  <Markdown>{turn.segments.map((s) => s.text).join("")}</Markdown>
-                </div>
+                <Reply key={turn.id} text={turn.segments.map((s) => s.text).join("")} />
               ),
             )}
           </div>
+
+          <h3 className="section">Taken from it</h3>
+          {taken.length === 0 ? (
+            <p className="blurb">Nothing was recorded from this one.</p>
+          ) : (
+            <ul className="list">
+              {taken.map((t) => (
+                <li key={t.ideaId}>
+                  <button
+                    className="row-btn"
+                    onClick={() => onOpenIdea(t.ideaId)}
+                    onMouseEnter={() => setTrace(t.ideaId)}
+                    onMouseLeave={() => setTrace(null)}
+                  >
+                    <span className="dot" />
+                    <span className="row-main">
+                      {t.claim}
+                      {trace === t.ideaId && (
+                        <span className="trace">“{t.quote}”</span>
+                      )}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <Nudges strong={view.strong} weak={view.weak} />
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One reply from the assistant.
+ *
+ * Collapsed past a few lines. A model answers at length while a person thinks in
+ * fragments, so left alone the assistant's words dominate the page — and the
+ * page is supposed to be a record of the person's thinking. Nothing is removed;
+ * it is one click away.
+ */
+function Reply({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 420;
+  return (
+    <div className={`turn assistant${long && !open ? " clipped" : ""}`}>
+      <span className="who">replied</span>
+      <Markdown>{long && !open ? `${text.slice(0, 420)}…` : text}</Markdown>
+      {long && (
+        <button className="link" onClick={() => setOpen((o) => !o)}>
+          {open ? "show less" : `show all ${text.length} characters`}
+        </button>
       )}
     </div>
   );

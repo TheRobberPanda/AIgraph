@@ -623,3 +623,51 @@ blockquote {
 .path { margin: 0; font-family: var(--mono); font-size: 0.68rem; color: var(--faint); word-break: break-all; }
 .plain-list { margin: 0; padding-left: 1rem; font-size: 0.82rem; color: var(--muted); line-height: 1.55; }
 .plain-list li { margin-bottom: 0.3rem; }
+
+.filters { margin-bottom: 0.5rem; }
+.filter-input { flex: 1; max-width: 22rem; }
+.tag-row { margin-bottom: 0.85rem; }
+.tag-row .btn { font-size: 0.74rem; padding: 0.18rem 0.55rem; }
+.tag-row .row-meta { margin-left: 0.3rem; }
+
+.chat-row { align-items: flex-start; padding: 0.6rem 0.35rem; }
+.chat-open {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+.chat-sub {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--faint);
+}
+
+/* An assistant reply, folded down so it cannot swamp the record. */
+.turn.assistant.clipped { position: relative; }
+.turn.assistant .link { margin-top: 0.2rem; font-size: 0.72rem; }
+
+/* Where a recorded idea came from, shown while pointing at it. */
+.trace {
+  display: block;
+  margin-top: 0.2rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--gold);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* Who is speaking, marked once per turn rather than by changing typeface. */
+.who {
+  display: block;
+  margin-bottom: 0.15rem;
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+.turn.user .who { color: color-mix(in srgb, var(--accent) 75%, var(--faint)); }

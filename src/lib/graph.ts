@@ -9,6 +9,8 @@ export interface GraphNode {
   idea_id: number | null;
   /** What the idea is about. Empty for conversations. */
   category: string;
+  /** When a conversation happened. Empty for ideas. */
+  date: string;
   /** Supported by more than one conversation — these connect the map. */
   shared: boolean;
   /** Rewritten in the last few minutes. */

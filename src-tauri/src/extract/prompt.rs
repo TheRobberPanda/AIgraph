@@ -117,10 +117,17 @@ Ignore the assistant's contributions entirely — those are not their thinking.
 
 For each idea return:
 
-- "claim": one sentence, in their own terms, short enough to read at a
-  glance and complete enough to stand alone months later. Do not soften it, do
-  not make it sound more considered than it was, and do not add anything that was
-  not said.
+- "claim": one sentence, in their own words.
+
+  **Where the sentence they said already stands on its own, use it exactly as
+  they said it.** That is the best possible claim. Only rewrite when the original
+  cannot be understood out of context — and then change as little as possible.
+
+  Never correct them. Keep their word choices, their grammar, their emphasis and
+  their bluntness, including anything that reads as a mistake: "systematic" stays
+  "systematic". Do not tidy, do not soften, do not make it sound more considered
+  than it was, and do not add anything that was not said. This is a record of
+  what someone thinks, not an improvement on it.
 - "quote": text copied EXACTLY, character for character, from a line marked
   USER. Do not paraphrase, trim, fix typos, or join separated fragments. If no
   exact span supports the claim, omit the idea entirely.

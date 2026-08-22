@@ -87,6 +87,7 @@ export interface SessionSummary {
   extract_state: string;
   turn_count: number;
   idea_count: number;
+  tags: string[];
   opening: string;
 }
 

@@ -1,22 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { listSessions, type SessionSummary } from "../lib/chat";
 import ImportChat from "./ImportChat";
-import Markdown from "./Markdown";
-import { dateTime, longDate } from "../lib/format";
-import { sessionTurns, type StoredTurn } from "../lib/sessions";
+import { longDate } from "../lib/format";
 
 /**
- * Every conversation you've had, kept and re-readable.
+ * Every conversation, kept and re-readable.
  *
- * The chat itself clears when a session ends — the map is the product — but
- * nothing is thrown away. This is where you go back in.
+ * Filterable by subject and by text, because a list you can only scroll stops
+ * being useful at about thirty entries and the whole point is to come back.
  */
 export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [open, setOpen] = useState<number | null>(null);
-  const [turns, setTurns] = useState<StoredTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [query, setQuery] = useState("");
+  const [tag, setTag] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     listSessions().then(setSessions).catch((e) => setError(String(e)));
@@ -24,47 +22,63 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
 
   useEffect(refresh, [refresh]);
 
-  useEffect(() => {
-    if (open === null) return;
-    setTurns([]);
-    sessionTurns(open).then(setTurns).catch((e) => setError(String(e)));
-  }, [open]);
+  const tags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of sessions) {
+      for (const t of s.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [sessions]);
 
-  if (open !== null) {
-    const session = sessions.find((s) => s.id === open);
-    return (
-      <div className="pane-inner">
-        <header className="head">
-          <button className="btn" onClick={() => setOpen(null)}>
-            ← All chats
-          </button>
-          {session && (
-            <span className="muted">
-              {dateTime(session.started_at)} · {session.model}
-            </span>
-          )}
-        </header>
-
-        <div className="deep-transcript">
-          {turns.map((t) => (
-            <div key={t.id} className={`turn ${t.role}`}>
-              {t.role === "assistant" ? <Markdown>{t.text}</Markdown> : t.text}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return sessions.filter((s) => {
+      if (tag && !s.tags.includes(tag)) return false;
+      if (!q) return true;
+      return (
+        s.opening.toLowerCase().includes(q) ||
+        s.tags.some((t) => t.includes(q)) ||
+        longDate(s.started_at).toLowerCase().includes(q)
+      );
+    });
+  }, [sessions, query, tag]);
 
   return (
     <div className="pane-inner">
       {error && <p className="error">{error}</p>}
 
-      <div className="row">
+      <div className="row filters">
+        <input
+          className="field filter-input"
+          placeholder="Filter conversations"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
         <button className="btn" onClick={() => setAdding((a) => !a)}>
           {adding ? "Cancel" : "Add a conversation"}
         </button>
       </div>
+
+      {tags.length > 0 && (
+        <div className="row tag-row">
+          <button
+            className={tag === null ? "btn on" : "btn"}
+            onClick={() => setTag(null)}
+          >
+            All
+          </button>
+          {tags.map(([name, count]) => (
+            <button
+              key={name}
+              className={tag === name ? "btn on" : "btn"}
+              onClick={() => setTag(tag === name ? null : name)}
+            >
+              {name}
+              <span className="row-meta">{count}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {adding && (
         <ImportChat
@@ -75,27 +89,33 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
         />
       )}
 
-      {sessions.length === 0 ? (
+      {shown.length === 0 ? (
         <p className="empty">
-          No conversations yet. Anything you say is kept here once you press Done.
+          {sessions.length === 0 ? (
+            <>
+              <strong>Nothing kept yet.</strong>
+              Conversations appear here once a session ends.
+            </>
+          ) : (
+            <>No conversation matches that.</>
+          )}
         </p>
       ) : (
         <ul className="list">
-          {sessions.map((s) => (
+          {shown.map((s) => (
             <li key={s.id}>
-              <button onClick={() => (onOpen ? onOpen(s.id) : setOpen(s.id))}>
-                <span className="row-meta">{longDate(s.started_at)}</span>
-                <span className="row-main">{s.opening || "(nothing was said)"}</span>
-                <span className="row-meta">
-                  {/* Ideas first: the reason to go back to a conversation is
-                      what came out of it, not how long it was. */}
-                  {s.idea_count > 0
-                    ? `${s.idea_count} idea${s.idea_count === 1 ? "" : "s"}`
-                    : s.extract_state === "done"
-                      ? "no ideas found"
-                      : s.extract_state}
-                  {" · "}
-                  {s.turn_count} turns
+              <button onClick={() => onOpen?.(s.id)} className="row-btn chat-row">
+                <span className="row-main">
+                  <span className="chat-open">{s.opening || "(nothing was said)"}</span>
+                  <span className="chat-sub">
+                    {longDate(s.started_at)} · {s.turn_count} turns ·{" "}
+                    {s.idea_count > 0
+                      ? `${s.idea_count} idea${s.idea_count === 1 ? "" : "s"}`
+                      : s.extract_state === "done"
+                        ? "no ideas"
+                        : s.extract_state}
+                    {s.tags.length > 0 && ` · ${s.tags.join(", ")}`}
+                  </span>
                 </span>
               </button>
             </li>
