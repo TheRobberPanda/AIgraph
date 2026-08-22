@@ -5,6 +5,7 @@ export interface Segment {
   text: string;
   idea_id: number | null;
   claim: string | null;
+  title: string | null;
   reasoning: string | null;
 }
 

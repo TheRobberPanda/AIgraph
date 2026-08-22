@@ -136,7 +136,7 @@ export default function Mic({
       <button
         className="btn"
         onClick={getModel}
-        title={`Downloads the speech model (about ${downloadMb}MB), once`}
+        data-tip={`Downloads the speech model (about ${downloadMb}MB), once`}
       >
         Enable dictation
       </button>
@@ -157,7 +157,7 @@ export default function Mic({
         className={`btn mic${active ? " on" : ""}${busy ? " busy" : ""}`}
         onClick={toggle}
         disabled={disabled}
-        title={active ? "Stop dictation" : "Dictate"}
+        data-tip={active ? "Stop dictation" : "Dictate"}
         aria-pressed={active}
         aria-busy={busy}
       >

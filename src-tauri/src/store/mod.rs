@@ -122,6 +122,10 @@ pub struct Segment {
     pub text: String,
     pub idea_id: Option<i64>,
     pub claim: Option<String>,
+    /// The idea's short, simplified name — shown instead of the claim, which
+    /// is often the quote's own words and so reads as a pointless repeat of
+    /// the highlighted text right above it.
+    pub title: Option<String>,
     /// Why the model read these words as carrying that claim.
     pub reasoning: Option<String>,
 }
@@ -661,20 +665,21 @@ impl Store {
         // Offsets on `evidence` are relative to the turn, which is exactly the
         // frame needed here.
         let mut stmt = self.conn.prepare(
-            "SELECT e.turn_id, e.idea_id, i.claim, e.reasoning, e.start_byte, e.end_byte
+            "SELECT e.turn_id, e.idea_id, i.claim, i.title, e.reasoning, e.start_byte, e.end_byte
              FROM evidence e JOIN ideas i ON i.id = e.idea_id
              WHERE e.session_id = ?1
              ORDER BY e.turn_id, e.start_byte",
         )?;
-        let spans: Vec<(i64, i64, String, String, usize, usize)> = stmt
+        let spans: Vec<(i64, i64, String, String, String, usize, usize)> = stmt
             .query_map([session_id], |r| {
                 Ok((
                     r.get(0)?,
                     r.get(1)?,
                     r.get(2)?,
                     r.get(3)?,
-                    r.get::<_, i64>(4)? as usize,
+                    r.get(4)?,
                     r.get::<_, i64>(5)? as usize,
+                    r.get::<_, i64>(6)? as usize,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
@@ -685,7 +690,7 @@ impl Store {
             let mut segments = Vec::new();
             let mut cursor = 0usize;
 
-            for (_, idea_id, claim, reasoning, start, end) in
+            for (_, idea_id, claim, title, reasoning, start, end) in
                 spans.iter().filter(|s| s.0 == turn.id)
             {
                 // Skip overlaps and anything that no longer lands on a character
@@ -703,6 +708,7 @@ impl Store {
                         text: text[cursor..*start].to_string(),
                         idea_id: None,
                         claim: None,
+                        title: None,
                         reasoning: None,
                     });
                 }
@@ -710,6 +716,7 @@ impl Store {
                     text: text[*start..*end].to_string(),
                     idea_id: Some(*idea_id),
                     claim: Some(claim.clone()),
+                    title: Some(if title.is_empty() { claim.clone() } else { title.clone() }),
                     reasoning: Some(reasoning.clone()),
                 });
                 cursor = *end;
@@ -719,6 +726,7 @@ impl Store {
                     text: text[cursor..].to_string(),
                     idea_id: None,
                     claim: None,
+                    title: None,
                     reasoning: None,
                 });
             }
@@ -940,6 +948,35 @@ impl Store {
             })
         })? {
             g.edges.push(row?);
+        }
+
+        // Ideas sharing a category are chained together — idea 1 to idea 2,
+        // idea 2 to idea 3, and so on — rather than fully connected pairwise.
+        // Reconciliation's "related" edges require the model to judge two
+        // claims as substantively connected, which is conservative by design
+        // and often leaves a map with plenty of ideas but no lines between
+        // most of them. A shared topic is a much weaker claim than "these two
+        // thoughts are related", so it earns a fainter, cheaper line rather
+        // than the one reconciliation draws.
+        let mut cat_stmt = self.conn.prepare(
+            "SELECT id, category FROM ideas WHERE category <> '' ORDER BY category, id",
+        )?;
+        let by_category: Vec<(i64, String)> = cat_stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut prev: Option<(i64, String)> = None;
+        for (id, category) in by_category {
+            if let Some((prev_id, prev_cat)) = &prev {
+                if *prev_cat == category {
+                    g.edges.push(GraphEdge {
+                        source: format!("i{prev_id}"),
+                        target: format!("i{id}"),
+                        kind: "category".into(),
+                        weight: 0.3,
+                    });
+                }
+            }
+            prev = Some((id, category));
         }
 
         Ok(g)

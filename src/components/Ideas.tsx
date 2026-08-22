@@ -200,11 +200,11 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
           </span>
           {/* The honesty metric. Shown rather than logged, because a drop rate
               nobody looks at is a drop rate nobody fixes. */}
-          <span title="Proposed ideas that could not be traced back to the words as spoken">
+          <span data-tip="Proposed ideas that could not be traced back to the words as spoken">
             <strong>{(diag.drop_rate * 100).toFixed(0)}%</strong> dropped
           </span>
           {diag.normalized > 0 && (
-            <span title="Matched after normalizing whitespace, quotes, or casing">
+            <span data-tip="Matched after normalizing whitespace, quotes, or casing">
               {diag.normalized} loose {diag.normalized === 1 ? "match" : "matches"}
             </span>
           )}
@@ -254,7 +254,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                       setMenu({ x: e.clientX, y: e.clientY, session });
                     }}
                     aria-expanded={!isCollapsed}
-                    title={session.opening && session.opening !== label ? session.opening : undefined}
+                    data-tip={session.opening && session.opening !== label ? session.opening : undefined}
                   >
                     <span className={`tree-caret${isCollapsed ? " closed" : ""}`} aria-hidden="true" />
                     <span className="tree-title">{label}</span>
@@ -283,7 +283,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                             {/* Gold means the same thing here as on the map: a
                                 thought returned to elsewhere. */}
                             <span className={returned ? "dot returned" : "dot"} aria-hidden="true" />
-                            <span className="row-main" title={idea.claim}>{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
+                            <span className="row-main" data-tip={idea.claim}>{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
                             {(returned || idea.evidence.length > 1) && (
                               <span className="row-meta">
                                 {returned
@@ -300,7 +300,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                                   <button
                                     className="link"
                                     onClick={() => setSource({ evidence: e, claim: idea.claim })}
-                                    title="See this in the conversation"
+                                    data-tip="See this in the conversation"
                                   >
                                     “{e.quote}”
                                   </button>
@@ -346,7 +346,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                   <li key={idea.id} className="idea">
                     <span className="row-btn">
                       <span className="dot" aria-hidden="true" />
-                      <span className="row-main" title={idea.claim}>{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
+                      <span className="row-main" data-tip={idea.claim}>{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
                     </span>
                   </li>
                 ))}

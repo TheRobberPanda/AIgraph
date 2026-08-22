@@ -57,6 +57,9 @@ Condense each one to what is worth keeping.
   them. Do not reproduce the explanation of each.
 - Plain sentences. No headings, no bullets, no bold.
 - Write it as a note to be read later, not as a reply to anyone.
+- Never write "the user's view" or "the user asked" or similar. State the
+  content directly: not "The user's view moves from X to Y" but "Moves from
+  X to Y."
 
 {style}
 

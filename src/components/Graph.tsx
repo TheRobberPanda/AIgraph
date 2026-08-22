@@ -29,10 +29,6 @@ import { categoryColors, UNCATEGORISED } from "../lib/categories";
 
 const CONVERSATION_RADIUS = 15;
 const IDEA_RADIUS = 7;
-// Titles are now short AI-written names rather than sliced-out sentences, so
-// there is little left to truncate — this cap only guards against an
-// unusually long one, not the common case.
-const LABEL_CHARS = 64;
 /** Fitts's law: a 7px dot is not a target. */
 const MIN_HIT_RADIUS = 16;
 
@@ -51,6 +47,7 @@ interface Palette {
   edge: string;
   related: string;
   contradicts: string;
+  category: string;
   labelConversation: string;
   labelIdea: string;
   labelHover: string;
@@ -76,17 +73,13 @@ function readPalette(): Palette {
     edge: `color-mix(in srgb, ${muted} 55%, ${line})`,
     related: `color-mix(in srgb, ${accent} 55%, transparent)`,
     contradicts: `color-mix(in srgb, ${danger} 70%, transparent)`,
+    category: `color-mix(in srgb, ${muted} 30%, transparent)`,
     labelConversation: accent,
     labelIdea: `color-mix(in srgb, ${muted} 85%, transparent)`,
     labelHover: fg,
     halo: `color-mix(in srgb, ${gold} 18%, transparent)`,
     hoverRing: `color-mix(in srgb, ${fg} 16%, transparent)`,
   };
-}
-
-function short(text: string): string {
-  const clean = text.replace(/\s+/g, " ").trim();
-  return clean.length > LABEL_CHARS ? `${clean.slice(0, LABEL_CHARS)}…` : clean;
 }
 
 /**
@@ -108,6 +101,45 @@ function fitWidth(ctx: CanvasRenderingContext2D, text: string, maxPx: number): s
     else hi = mid - 1;
   }
   return text.slice(0, lo).trimEnd() + "…";
+}
+
+/**
+ * Break a label across lines instead of cutting it off.
+ *
+ * Titles are short AI-written names now, not sliced-out sentences, so the
+ * right behaviour is to show the whole thing on two or three lines rather
+ * than lose words to an ellipsis. A single absurdly long word still falls
+ * back to `fitWidth` so it cannot blow out the layout.
+ */
+function wrapLines(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxPx: number,
+  maxLines: number,
+): string[] {
+  const words = text.replace(/\s+/g, " ").trim().split(" ");
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    // Once the last allowed line is being built, stop wrapping and just
+    // accumulate everything left — it gets pixel-truncated with an ellipsis
+    // below, rather than silently dropping words off the end.
+    if (lines.length === maxLines - 1) {
+      line = line ? `${line} ${word}` : word;
+      continue;
+    }
+    const candidate = line ? `${line} ${word}` : word;
+    if (ctx.measureText(candidate).width <= maxPx || !line) {
+      line = candidate;
+    } else {
+      lines.push(line);
+      line = word;
+    }
+  }
+  if (line) lines.push(line);
+  const last = lines.length - 1;
+  if (last >= 0) lines[last] = fitWidth(ctx, lines[last], maxPx);
+  return lines;
 }
 
 export default function Graph({
@@ -187,9 +219,12 @@ export default function Graph({
           ? C.contradicts
           : link.kind === "related"
             ? C.related
-            : C.edge;
-      ctx.lineWidth = link.kind === "from" ? 1 : 1.4;
+            : link.kind === "category"
+              ? C.category
+              : C.edge;
+      ctx.lineWidth = link.kind === "from" ? 1 : link.kind === "category" ? 1 : 1.4;
       if (link.kind === "related") ctx.setLineDash([4, 4]);
+      if (link.kind === "category") ctx.setLineDash([1, 3]);
       ctx.beginPath();
       ctx.moveTo(sa.x, sa.y);
       ctx.lineTo(sb.x, sb.y);
@@ -252,7 +287,7 @@ export default function Graph({
       return rank(a) - rank(b);
     });
 
-    const maxLabelWidth = 120 * Math.max(0.6, Math.min(viewRef.current.scale, 2));
+    const baseLabelWidth = 120 * Math.max(0.6, Math.min(viewRef.current.scale, 2));
 
     for (const n of candidates) {
       const isConversation = n.data.kind === "conversation";
@@ -269,13 +304,18 @@ export default function Graph({
         ? `600 ${labelPx * 1.04}px ui-sans-serif, system-ui, sans-serif`
         : `${labelPx}px ui-sans-serif, system-ui, sans-serif`;
 
-      const text = fitWidth(ctx, short(n.data.label), maxLabelWidth);
-      const width = ctx.measureText(text).width;
+      // Conversation titles get a wider column and an extra line — they're
+      // always shown regardless of crowding, so there's no reason to make
+      // them fight the same narrow width as an idea that might get skipped.
+      const maxLabelWidth = isConversation ? baseLabelWidth * 1.4 : baseLabelWidth;
+      const lineHeight = labelPx * 1.3;
+      const lines = wrapLines(ctx, n.data.label, maxLabelWidth, isConversation ? 5 : 4);
+      const width = Math.max(...lines.map((l) => ctx.measureText(l).width));
       const box = {
         x0: s.x - width / 2 - 3,
         x1: s.x + width / 2 + 3,
         y0: s.y + r + 5,
-        y1: s.y + r + 21,
+        y1: s.y + r + 9 + lines.length * lineHeight,
       };
 
       // A conversation, a shared idea, or whatever is hovered always renders —
@@ -288,7 +328,7 @@ export default function Graph({
       ctx.globalAlpha = inFocus(n) ? 1 : 0.2;
       ctx.fillStyle =
         hover === n ? C.labelHover : isConversation ? C.labelConversation : C.labelIdea;
-      ctx.fillText(text, s.x, s.y + r + 7);
+      lines.forEach((l, i) => ctx.fillText(l, s.x, s.y + r + 7 + i * lineHeight));
     }
     ctx.globalAlpha = 1;
   }, [toScreen]);

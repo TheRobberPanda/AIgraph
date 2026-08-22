@@ -328,6 +328,38 @@ button { font-family: inherit; }
 .modal.confirm p { margin: 0 0 1rem; color: var(--fg); font-size: 0.9rem; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
 
+/* An in-app tooltip, replacing the browser's own — which renders as an
+   unstyled OS popup (famously a jarring yellow box on Linux) instead of
+   something that looks like part of this app. */
+[data-tip] { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 22rem;
+  white-space: normal;
+  background: var(--surface-lift);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  padding: 0.35rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  font-family: var(--sans);
+  font-weight: 400;
+  text-align: left;
+  z-index: 80;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after { opacity: 1; }
+
 .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 
 .tag {
@@ -538,7 +570,14 @@ blockquote {
 
 .transcript { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font: inherit; font-size: 0.88rem; }
 .deep-transcript .turn { margin: 0 0 0.85rem; }
-.deep-transcript .turn.assistant { white-space: normal; }
+.deep-transcript .turn.assistant {
+  white-space: normal;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface);
+  border-left: 2px solid var(--line);
+  border-radius: 0 8px 8px 0;
+}
+.deep-transcript .turn.user { padding-top: 0.1rem; padding-bottom: 0.1rem; }
 
 .extracted {
   position: relative;

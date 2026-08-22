@@ -373,7 +373,7 @@ export default function App() {
                   setDeep(null);
                   setView(t);
                 }}
-                title={TAB_NAMES[t]}
+                data-tip={TAB_NAMES[t]}
               >
                 <Icon className="nav-icon" />
               </button>
@@ -482,7 +482,7 @@ export default function App() {
             className="btn btn-send"
             onClick={() => void send()}
             disabled={!draft.trim() || streaming || !provider}
-            title="Send (Enter)"
+            data-tip="Send (Enter)"
           >
             <IconSend />
             Send

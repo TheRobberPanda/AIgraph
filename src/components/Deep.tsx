@@ -77,9 +77,9 @@ export function ConversationFile({
   const taken = (view?.turns ?? [])
     .flatMap((t) => t.segments)
     .filter((s) => s.idea_id !== null)
-    .reduce<{ ideaId: number; claim: string; quote: string }[]>((acc, s) => {
+    .reduce<{ ideaId: number; title: string; quote: string }[]>((acc, s) => {
       if (acc.some((a) => a.ideaId === s.idea_id)) return acc;
-      acc.push({ ideaId: s.idea_id!, claim: s.claim ?? "", quote: s.text });
+      acc.push({ ideaId: s.idea_id!, title: s.title || s.claim || "", quote: s.text });
       return acc;
     }, []);
 
@@ -121,13 +121,13 @@ export function ConversationFile({
                         key={i}
                         className="extracted"
                         onClick={() => seg.idea_id && onOpenIdea(seg.idea_id)}
-                        title="Open this idea"
                       >
                         {seg.text}
-                        <span className="why">
-                          <strong>{seg.claim}</strong>
-                          {seg.reasoning && <em>{seg.reasoning}</em>}
-                        </span>
+                        {seg.reasoning && (
+                          <span className="why">
+                            <em>{seg.reasoning}</em>
+                          </span>
+                        )}
                       </mark>
                     ),
                   )}
@@ -157,7 +157,7 @@ export function ConversationFile({
                   >
                     <span className="dot" />
                     <span className="row-main">
-                      {t.claim}
+                      {t.title}
                       {trace === t.ideaId && (
                         <span className="trace">“{t.quote}”</span>
                       )}

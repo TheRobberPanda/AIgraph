@@ -43,6 +43,11 @@ Substance:
 - Active voice with a real subject wherever there is one.
 - Vary sentence length. Three sentences of the same shape in a row reads as
   generated.
+
+Who is speaking:
+- Never write "the user" or "the speaker", in any field, anywhere. State what
+  the words do, not who did it: not "The user argues that X" but "Argues X."
+  Drop the subject entirely rather than name one.
 "#;
 
 #[cfg(test)]
@@ -62,6 +67,10 @@ mod tests {
         for (name, body) in prompts {
             assert!(body.contains("## How to write it"), "{name} is missing the style rules");
             assert!(body.contains("No em dashes"), "{name} lost part of the rules");
+            assert!(
+                body.contains("Never write \"the user\""),
+                "{name} lost the rule against naming who is speaking"
+            );
         }
     }
 
