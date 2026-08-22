@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { listSessions, type SessionSummary } from "../lib/chat";
+import {
+  deleteSession,
+  listSessions,
+  renameSession,
+  setSessionArchived,
+  type SessionSummary,
+} from "../lib/chat";
 import ImportChat from "./ImportChat";
+import ContextMenu from "./ContextMenu";
 import { longDate } from "../lib/format";
 
 /**
@@ -15,6 +22,9 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
+  const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
 
   const refresh = useCallback(() => {
     listSessions().then(setSessions).catch((e) => setError(String(e)));
@@ -33,15 +43,17 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     return sessions.filter((s) => {
+      if (s.archived !== showArchived) return false;
       if (tag && !s.tags.includes(tag)) return false;
       if (!q) return true;
       return (
         s.opening.toLowerCase().includes(q) ||
+        s.title.toLowerCase().includes(q) ||
         s.tags.some((t) => t.includes(q)) ||
         longDate(s.started_at).toLowerCase().includes(q)
       );
     });
-  }, [sessions, query, tag]);
+  }, [sessions, query, tag, showArchived]);
 
   return (
     <div className="pane-inner">
@@ -56,6 +68,12 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
         />
         <button className="btn" onClick={() => setAdding((a) => !a)}>
           {adding ? "Cancel" : "Add a conversation"}
+        </button>
+        <button
+          className={showArchived ? "btn on" : "btn"}
+          onClick={() => setShowArchived((a) => !a)}
+        >
+          {showArchived ? "Archived" : "Show archived"}
         </button>
       </div>
 
@@ -104,23 +122,84 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
         <ul className="list">
           {shown.map((s) => (
             <li key={s.id}>
-              <button onClick={() => onOpen?.(s.id)} className="row-btn chat-row">
-                <span className="row-main">
-                  <span className="chat-open">{s.opening || "(nothing was said)"}</span>
-                  <span className="chat-sub">
-                    {longDate(s.started_at)} · {s.turn_count} turns ·{" "}
-                    {s.idea_count > 0
-                      ? `${s.idea_count} idea${s.idea_count === 1 ? "" : "s"}`
-                      : s.extract_state === "done"
-                        ? "no ideas"
-                        : s.extract_state}
-                    {s.tags.length > 0 && ` · ${s.tags.join(", ")}`}
+              {renaming?.id === s.id ? (
+                <form
+                  className="row-btn chat-row"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const title = renaming.value.trim();
+                    setRenaming(null);
+                    if (!title) return;
+                    renameSession(s.id, title).then(refresh);
+                  }}
+                >
+                  <input
+                    className="field"
+                    autoFocus
+                    value={renaming.value}
+                    onChange={(e) => setRenaming({ id: s.id, value: e.target.value })}
+                    onBlur={() => setRenaming(null)}
+                    onKeyDown={(e) => e.key === "Escape" && setRenaming(null)}
+                  />
+                </form>
+              ) : (
+                <button
+                  onClick={() => onOpen?.(s.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, session: s });
+                  }}
+                  className="row-btn chat-row"
+                  title={s.opening || undefined}
+                >
+                  <span className="row-main">
+                    <span className="chat-open">
+                      {s.title || s.opening || "(nothing was said)"}
+                    </span>
+                    <span className="chat-sub">
+                      {longDate(s.started_at)} · {s.turn_count} turns ·{" "}
+                      {s.idea_count > 0
+                        ? `${s.idea_count} idea${s.idea_count === 1 ? "" : "s"}`
+                        : s.extract_state === "done"
+                          ? "no ideas"
+                          : s.extract_state}
+                      {s.tags.length > 0 && ` · ${s.tags.join(", ")}`}
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
+              )}
             </li>
           ))}
         </ul>
+      )}
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            {
+              label: "Rename",
+              onSelect: () =>
+                setRenaming({ id: menu.session.id, value: menu.session.title || menu.session.opening }),
+            },
+            {
+              label: menu.session.archived ? "Unarchive" : "Archive",
+              onSelect: () =>
+                setSessionArchived(menu.session.id, !menu.session.archived).then(refresh),
+            },
+            {
+              label: "Delete",
+              danger: true,
+              onSelect: () => {
+                if (confirm("Delete this conversation and the ideas found only in it?")) {
+                  deleteSession(menu.session.id).then(refresh);
+                }
+              },
+            },
+          ]}
+        />
       )}
     </div>
   );

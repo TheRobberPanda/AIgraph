@@ -89,6 +89,8 @@ export interface SessionSummary {
   idea_count: number;
   tags: string[];
   opening: string;
+  title: string;
+  archived: boolean;
 }
 
 /** Archive the current session and clear the stream. Returns null if nothing was said. */
@@ -98,6 +100,18 @@ export function endSession(reason: EndReason = "done"): Promise<Archived | null>
 
 export function listSessions(): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("list_sessions");
+}
+
+export function renameSession(sessionId: number, title: string): Promise<void> {
+  return invoke("rename_session", { sessionId, title });
+}
+
+export function setSessionArchived(sessionId: number, archived: boolean): Promise<void> {
+  return invoke("set_session_archived", { sessionId, archived });
+}
+
+export function deleteSession(sessionId: number): Promise<void> {
+  return invoke("delete_session", { sessionId });
 }
 
 /** Fires when a session is archived — including by idle timeout, with no user action. */

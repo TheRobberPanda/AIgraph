@@ -18,7 +18,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     model         TEXT NOT NULL,
     -- pending | extracting | done | failed
     extract_state TEXT NOT NULL DEFAULT 'pending',
-    extract_error TEXT
+    extract_error TEXT,
+    -- Short AI-generated title, e.g. "American Economic Empire". Empty until
+    -- extraction runs once.
+    title         TEXT NOT NULL DEFAULT '',
+    -- Set once a person renames the session by hand, so a later re-extraction
+    -- never overwrites their own choice.
+    title_locked  INTEGER NOT NULL DEFAULT 0,
+    archived      INTEGER NOT NULL DEFAULT 0
 );
 
 -- `start_byte`/`end_byte` locate this turn's CONTENT inside sessions.transcript.
@@ -196,6 +203,22 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
              -- comparing incomparable spaces forever.
              DELETE FROM embeddings;",
         )?;
+    }
+
+    let session_cols: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('sessions')")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !session_cols.iter().any(|c| c == "title") {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT '';")?;
+    }
+    if !session_cols.iter().any(|c| c == "title_locked") {
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    if !session_cols.iter().any(|c| c == "archived") {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;")?;
     }
     Ok(())
 }

@@ -538,6 +538,10 @@ pub async fn extract_session_inner(
                 .await
                 .map_err(|e| format!("saving ideas: {e}"))?;
 
+            if !extraction.title.is_empty() {
+                let _ = state.store.lock().await.set_session_title_ai(session_id, &extraction.title);
+            }
+
             finish(
                 app,
                 state,
@@ -1054,6 +1058,40 @@ pub async fn delete_session(
         .lock()
         .await
         .delete_session(session_id)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rename_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: i64,
+    title: String,
+) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .await
+        .rename_session(session_id, &title)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_session_archived(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: i64,
+    archived: bool,
+) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .await
+        .set_session_archived(session_id, archived)
         .map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
     Ok(())

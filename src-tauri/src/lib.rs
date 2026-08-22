@@ -61,6 +61,8 @@ pub fn run() {
             commands::idea_view,
             commands::reextract_session,
             commands::delete_session,
+            commands::rename_session,
+            commands::set_session_archived,
             commands::delete_idea,
             commands::get_settings,
             commands::save_settings,

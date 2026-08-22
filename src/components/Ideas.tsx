@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Source from "./Source";
-import { listSessions, type SessionSummary } from "../lib/chat";
+import {
+  deleteSession,
+  listSessions,
+  renameSession,
+  setSessionArchived,
+  type SessionSummary,
+} from "../lib/chat";
+import ContextMenu from "./ContextMenu";
 import { longDate } from "../lib/format";
 import {
   extractNow,
@@ -15,6 +22,13 @@ import {
   type Idea,
   type Phase,
 } from "../lib/ideas";
+
+/** A glanceable label; the full text is still there on hover. */
+function shortTitle(text: string, max = 56): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= max) return trimmed;
+  return trimmed.slice(0, max).trimEnd() + "…";
+}
 
 const PHASE_LABELS: Record<Phase, string> = {
   asking: "reading the conversation",
@@ -59,6 +73,8 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
   // Bridges the gap between the click and the first progress event from the
   // backend, so the button doesn't sit there looking ignored.
   const [requested, setRequested] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
+  const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
   // Re-renders once a second purely so the elapsed counter advances between
   // phase events — which can be minutes apart on a local model.
   const [, tick] = useState(0);
@@ -115,6 +131,8 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
             idea_count: list.length,
             tags: [],
             opening: "",
+            title: "",
+            archived: false,
           },
           ideas: list,
         });
@@ -259,23 +277,49 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
         <div className="tree">
           {groups.rows.map(({ session, ideas: sessionIdeas }) => {
             const isCollapsed = collapsed.has(session.id);
+            const label = session.title || session.opening || `Conversation ${session.id}`;
             return (
               <div key={session.id} className="tree-group">
-                <button
-                  className="tree-head"
-                  onClick={() => toggle(session.id)}
-                  aria-expanded={!isCollapsed}
-                >
-                  <span className={`tree-caret${isCollapsed ? " closed" : ""}`} aria-hidden="true" />
-                  <span className="tree-title">
-                    {session.opening || `Conversation ${session.id}`}
-                  </span>
-                  <span className="row-meta">
-                    {session.started_at && longDate(session.started_at)}
-                    {" · "}
-                    {sessionIdeas.length} idea{sessionIdeas.length === 1 ? "" : "s"}
-                  </span>
-                </button>
+                {renaming?.id === session.id ? (
+                  <form
+                    className="tree-head"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const title = renaming.value.trim();
+                      setRenaming(null);
+                      if (!title) return;
+                      renameSession(session.id, title).then(refresh);
+                    }}
+                  >
+                    <input
+                      className="field"
+                      autoFocus
+                      value={renaming.value}
+                      onChange={(e) => setRenaming({ id: session.id, value: e.target.value })}
+                      onBlur={() => setRenaming(null)}
+                      onKeyDown={(e) => e.key === "Escape" && setRenaming(null)}
+                    />
+                  </form>
+                ) : (
+                  <button
+                    className="tree-head"
+                    onClick={() => toggle(session.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({ x: e.clientX, y: e.clientY, session });
+                    }}
+                    aria-expanded={!isCollapsed}
+                    title={session.opening && session.opening !== label ? session.opening : undefined}
+                  >
+                    <span className={`tree-caret${isCollapsed ? " closed" : ""}`} aria-hidden="true" />
+                    <span className="tree-title">{label}</span>
+                    <span className="row-meta">
+                      {session.started_at && longDate(session.started_at)}
+                      {" · "}
+                      {sessionIdeas.length} idea{sessionIdeas.length === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                )}
 
                 {!isCollapsed && (
                   <ul className="list tree-children">
@@ -294,7 +338,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                             {/* Gold means the same thing here as on the map: a
                                 thought returned to elsewhere. */}
                             <span className={returned ? "dot returned" : "dot"} aria-hidden="true" />
-                            <span className="row-main">{idea.claim}</span>
+                            <span className="row-main" title={idea.claim.length > 56 ? idea.claim : undefined}>{shortTitle(idea.claim)}</span>
                             {(returned || idea.evidence.length > 1) && (
                               <span className="row-meta">
                                 {returned
@@ -357,7 +401,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                   <li key={idea.id} className="idea">
                     <span className="row-btn">
                       <span className="dot" aria-hidden="true" />
-                      <span className="row-main">{idea.claim}</span>
+                      <span className="row-main" title={idea.claim.length > 56 ? idea.claim : undefined}>{shortTitle(idea.claim)}</span>
                     </span>
                   </li>
                 ))}
@@ -365,6 +409,35 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
             </div>
           )}
         </div>
+      )}
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            {
+              label: "Rename",
+              onSelect: () =>
+                setRenaming({ id: menu.session.id, value: menu.session.title || menu.session.opening }),
+            },
+            {
+              label: menu.session.archived ? "Unarchive" : "Archive",
+              onSelect: () =>
+                setSessionArchived(menu.session.id, !menu.session.archived).then(refresh),
+            },
+            {
+              label: "Delete",
+              danger: true,
+              onSelect: () => {
+                if (confirm("Delete this conversation and the ideas found only in it?")) {
+                  deleteSession(menu.session.id).then(refresh);
+                }
+              },
+            },
+          ]}
+        />
       )}
     </div>
   );

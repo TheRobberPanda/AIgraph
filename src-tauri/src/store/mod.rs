@@ -56,6 +56,10 @@ pub struct SessionSummary {
     pub tags: Vec<String>,
     /// First thing the user said, for identifying a session at a glance.
     pub opening: String,
+    /// Short AI-generated title, e.g. "American Economic Empire". Empty until
+    /// extraction has run once, or set by hand.
+    pub title: String,
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -337,7 +341,8 @@ impl Store {
                     (SELECT COUNT(DISTINCT e.idea_id) FROM evidence e WHERE e.session_id = s.id),
                     COALESCE((SELECT t.text FROM turns t
                               WHERE t.session_id = s.id AND t.role = 'user'
-                              ORDER BY t.ord LIMIT 1), '')
+                              ORDER BY t.ord LIMIT 1), ''),
+                    s.title, s.archived
              FROM sessions s
              ORDER BY s.started_at DESC
              LIMIT ?1",
@@ -354,6 +359,8 @@ impl Store {
                 idea_count: r.get(7)?,
                 tags: Vec::new(),
                 opening: r.get(8)?,
+                title: r.get(9)?,
+                archived: r.get::<_, i64>(10)? != 0,
             })
         })?;
 
@@ -831,7 +838,8 @@ impl Store {
                     COALESCE((SELECT t.text FROM turns t
                               WHERE t.session_id = s.id AND t.role = 'user'
                               ORDER BY t.ord LIMIT 1), ''),
-                    (SELECT COUNT(DISTINCT e.idea_id) FROM evidence e WHERE e.session_id = s.id)
+                    (SELECT COUNT(DISTINCT e.idea_id) FROM evidence e WHERE e.session_id = s.id),
+                    s.title
              FROM sessions s
              WHERE EXISTS (SELECT 1 FROM evidence e WHERE e.session_id = s.id)",
         )?;
@@ -839,11 +847,12 @@ impl Store {
             let id: i64 = r.get(0)?;
             let started: String = r.get(1)?;
             let opening: String = r.get(2)?;
+            let title: String = r.get(4)?;
             let (strong, weak) = session_nudges.get(&id).cloned().unwrap_or_default();
             Ok(GraphNode {
                 id: format!("s{id}"),
                 kind: "conversation",
-                label: conversation_label(&opening, &started),
+                label: conversation_label(&title, &opening, &started),
                 weight: r.get(3)?,
                 session_id: Some(id),
                 idea_id: None,
@@ -1262,6 +1271,34 @@ impl Store {
         Ok(())
     }
 
+    /// Set the AI-generated title, unless someone has already named this
+    /// conversation by hand — a re-extraction must never quietly rename it back.
+    pub fn set_session_title_ai(&mut self, session_id: i64, title: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET title = ?2 WHERE id = ?1 AND title_locked = 0",
+            params![session_id, title],
+        )?;
+        Ok(())
+    }
+
+    /// A person's own name for the conversation. Locked in, so it survives
+    /// re-extraction.
+    pub fn rename_session(&mut self, session_id: i64, title: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET title = ?2, title_locked = 1 WHERE id = ?1",
+            params![session_id, title.trim()],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_session_archived(&mut self, session_id: i64, archived: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET archived = ?2 WHERE id = ?1",
+            params![session_id, archived as i64],
+        )?;
+        Ok(())
+    }
+
     /// Clear `extracting` marks left behind by a crash or a hard quit.
     ///
     /// Called at startup. Without it a session interrupted mid-extraction stays
@@ -1304,7 +1341,11 @@ fn normalize_category(raw: &str) -> String {
 /// opening sentence — but it took over the label and pushed the words that
 /// actually identify the conversation off the end. The date now lives in the
 /// tooltip and in the weight of the node instead.
-fn conversation_label(opening: &str, started_at: &str) -> String {
+fn conversation_label(title: &str, opening: &str, started_at: &str) -> String {
+    let title = title.trim();
+    if !title.is_empty() {
+        return title.to_string();
+    }
     let trimmed = opening.trim();
     if trimmed.is_empty() {
         return started_at.get(..10).unwrap_or(started_at).to_string();
@@ -1471,6 +1512,7 @@ mod tests {
             rejected: vec![],
             retried: false,
             conversation: Default::default(),
+            title: String::new(),
         };
         store.save_extraction(session_id, &extraction, "test", "m").unwrap();
 
@@ -1516,6 +1558,7 @@ mod tests {
                     rejected: vec![],
                     retried: false,
                     conversation: Default::default(),
+                    title: String::new(),
                 },
                 "t",
                 "m",
@@ -1749,15 +1792,23 @@ mod tests {
     #[test]
     fn conversations_are_labelled_by_their_opening_words() {
         assert_eq!(
-            conversation_label("Trump is a bad man", "2026-08-22T10:00:00Z"),
+            conversation_label("", "Trump is a bad man", "2026-08-22T10:00:00Z"),
             "Trump is a bad man",
             "the words identify the conversation; the date is shown elsewhere"
         );
-        assert_eq!(conversation_label("   ", "2026-08-22T10:00:00Z"), "2026-08-22");
+        assert_eq!(conversation_label("", "   ", "2026-08-22T10:00:00Z"), "2026-08-22");
         let long = "x".repeat(100);
         assert!(
-            conversation_label(&long, "2026-08-22").ends_with('…'),
+            conversation_label("", &long, "2026-08-22").ends_with('…'),
             "long openings are truncated"
+        );
+    }
+
+    #[test]
+    fn a_short_ai_title_wins_over_the_opening_words() {
+        assert_eq!(
+            conversation_label("American Economic Empire", "so today I wanted to talk about", "2026-08-22"),
+            "American Economic Empire"
         );
     }
 

@@ -779,3 +779,28 @@ blockquote {
 }
 .tree-children .idea { border-bottom: none; }
 .tree-children .idea + .idea { border-top: 1px solid var(--line); }
+
+.context-menu {
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: 0.3rem;
+  background: var(--surface-lift);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+}
+.context-item {
+  padding: 0.45rem 0.6rem;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.context-item:hover { background: var(--surface); }
+.context-item.danger { color: var(--danger); }

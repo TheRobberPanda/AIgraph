@@ -49,6 +49,9 @@ pub struct Extraction {
     /// What the model made of the whole conversation. Becomes the nudges on the
     /// conversation's node.
     pub conversation: crate::llm::types::ConversationNotes,
+    /// A short, glanceable name for the conversation, e.g. "American Economic
+    /// Empire". Empty if the model returned nothing usable.
+    pub title: String,
 }
 
 impl Extraction {
@@ -90,10 +93,12 @@ pub async fn run_with_progress(
     on_phase(Phase::Asking);
     let extracted = extractor.extract(transcript, known_categories).await?;
     let notes = extracted.conversation.clone();
+    let title = extracted.title.trim().to_string();
 
     on_phase(Phase::Verifying);
     let mut first = sort_out(extracted.ideas, turns);
     first.conversation = notes;
+    first.title = title;
 
     if first.rejected.is_empty() {
         return Ok(first);
@@ -124,6 +129,11 @@ pub async fn run_with_progress(
                 first.conversation.clone()
             } else {
                 extracted.conversation
+            };
+            second.title = if extracted.title.trim().is_empty() {
+                first.title.clone()
+            } else {
+                extracted.title.trim().to_string()
             };
             // Keep whichever attempt traced more ideas to real text. A retry
             // that does worse is discarded rather than trusted for being newer.
@@ -174,6 +184,7 @@ mod tests {
         ) -> Result<crate::extract::prompt::Extracted, LlmError> {
             let n = self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(crate::extract::prompt::Extracted {
+                title: String::new(),
                 ideas: self.passes.get(n).cloned().unwrap_or_default(),
                 conversation: Default::default(),
             })

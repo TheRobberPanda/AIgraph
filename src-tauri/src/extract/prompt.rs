@@ -12,7 +12,7 @@ use crate::llm::LlmError;
 pub fn json_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
-        "required": ["ideas"],
+        "required": ["ideas", "title"],
         "$defs": {
             "notes": {
                 "type": "array",
@@ -27,6 +27,7 @@ pub fn json_schema() -> serde_json::Value {
             }
         },
         "properties": {
+            "title": { "type": "string" },
             "conversation": {
                 "type": "object",
                 "properties": { "notes": { "$ref": "#/$defs/notes" } }
@@ -168,11 +169,18 @@ genuinely load-bearing. It is not a critique quota.
 
 {style}
 
+Also return "title": a short name for this conversation, two to five words,
+title case, no punctuation — the way a chat app names a thread from what was
+said in it. Name the subject, not the format: "American Economic Empire", not
+"Discussion About the Economy" or "Conversation Summary". This is what
+identifies the conversation at a glance, so it must be specific to what was
+actually said, never generic.
+
 Also return "conversation": notes on the whole stretch of thinking, under the
 same rules — usually none, and never more than two.
 
-Return JSON: {{"ideas": [...], "conversation": {{"notes": [...]}}}}. Return
-{{"ideas": []}} if nothing substantive was said.
+Return JSON: {{"title": "...", "ideas": [...], "conversation": {{"notes": [...]}}}}.
+Return {{"title": "...", "ideas": []}} if nothing substantive was said.
 {known_block}
 --- TRANSCRIPT ---
 {transcript}
@@ -183,6 +191,8 @@ Return JSON: {{"ideas": [...], "conversation": {{"notes": [...]}}}}. Return
 #[derive(serde::Deserialize)]
 struct Envelope {
     #[serde(default)]
+    title: String,
+    #[serde(default)]
     ideas: Vec<RawIdea>,
     #[serde(default)]
     conversation: ConversationNotes,
@@ -191,6 +201,7 @@ struct Envelope {
 /// Everything one extraction call returns.
 #[derive(Debug, Clone, Default)]
 pub struct Extracted {
+    pub title: String,
     pub ideas: Vec<RawIdea>,
     pub conversation: ConversationNotes,
 }
@@ -205,7 +216,7 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
     let text = raw.trim();
 
     if let Ok(env) = serde_json::from_str::<Envelope>(text) {
-        return Ok(Extracted { ideas: env.ideas, conversation: env.conversation });
+        return Ok(Extracted { title: env.title, ideas: env.ideas, conversation: env.conversation });
     }
 
     let start = text.find('{');
@@ -213,7 +224,7 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
     if let (Some(s), Some(e)) = (start, end) {
         if e > s {
             if let Ok(env) = serde_json::from_str::<Envelope>(&text[s..=e]) {
-                return Ok(Extracted { ideas: env.ideas, conversation: env.conversation });
+                return Ok(Extracted { title: env.title, ideas: env.ideas, conversation: env.conversation });
             }
         }
     }
@@ -248,6 +259,7 @@ mod tests {
         let top = out["required"].as_array().unwrap();
         assert!(top.iter().any(|r| r == "conversation"));
         assert!(top.iter().any(|r| r == "ideas"));
+        assert!(top.iter().any(|r| r == "title"));
         // No cap and no floor on notes — the model must be free to return none.
         assert!(out["$defs"]["notes"].get("maxItems").is_none());
         assert!(out["$defs"]["notes"].get("minItems").is_none());
