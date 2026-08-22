@@ -135,6 +135,11 @@ For each idea return:
   already in use over coining a near-synonym.
 - "reasoning": at most one sentence on what in those words carries this idea.
   Brief — it sits beside the sentence it describes.
+
+  Do not write "the user" or "the speaker" anywhere, in this field or any other.
+  State what the words do, not who did it: not "The user characterizes this as a
+  dilemma" but "Frames it as a choice between two bad outcomes." Drop the subject
+  entirely rather than name one.
 - "notes": questions or observations, ONLY where there is a real one. See below.
 
 ## Notes are optional, and usually absent
@@ -151,6 +156,7 @@ genuinely load-bearing. It is not a critique quota.
 - Mark each note "supports" where it strengthens the idea, or "questions" where
   something is unclear, assumed, or in tension with something else said.
 - Keep every note to one short sentence.
+- Same rule as above: no "the user", no "the speaker", in a note's text either.
 
 ## Other rules
 
