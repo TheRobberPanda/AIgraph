@@ -1,11 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import Chats from "./components/Chats";
+import {
+  IconThink,
+  IconMap,
+  IconIdeas,
+  IconChats,
+  IconModels,
+  IconSettings,
+  IconSend,
+} from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Graph from "./components/Graph";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
 import SettingsPanel from "./components/Settings";
-import { applyTheme, getSettings } from "./lib/settings";
+import { applyTheme, applyUiScale, getSettings } from "./lib/settings";
 import Markdown from "./components/Markdown";
 import { thinkingMessage } from "./lib/waiting";
 import { extractionProgress, onExtractionProgress, type ExtractionProgress } from "./lib/ideas";
@@ -34,6 +43,18 @@ const TAB_NAMES: Record<Tab, string> = {
   chats: "Conversations",
   models: "Models",
   settings: "Settings",
+};
+
+/** One icon per tab, so a place can be told apart at a glance rather than by
+ *  reading its label — the label stays too, since an icon alone is ambiguous
+ *  until it's memorised. */
+const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>> = {
+  chat: IconThink,
+  map: IconMap,
+  ideas: IconIdeas,
+  chats: IconChats,
+  models: IconModels,
+  settings: IconSettings,
 };
 
 const MAIN: Tab[] = ["chat", "map", "ideas", "chats"];
@@ -92,7 +113,10 @@ export default function App() {
 
   // Apply the saved theme before anything is looked at.
   useEffect(() => {
-    void getSettings().then((s) => applyTheme(s.theme));
+    void getSettings().then((s) => {
+      applyTheme(s.theme);
+      applyUiScale(s.ui_scale);
+    });
   }, []);
 
   useEffect(() => {
@@ -296,34 +320,40 @@ export default function App() {
       <aside className="rail">
         <div className="rail-title">Idea Graph</div>
 
-        {MAIN.map((t) => (
-          <button
-            key={t}
-            className={view === t && !deep ? "nav on" : "nav"}
-            onClick={() => {
-              setDeep(null);
-              setView(t);
-            }}
-          >
-            <span className="nav-dot" />
-            {TAB_NAMES[t]}
-          </button>
-        ))}
+        {MAIN.map((t) => {
+          const Icon = TAB_ICONS[t];
+          return (
+            <button
+              key={t}
+              className={view === t && !deep ? "nav on" : "nav"}
+              onClick={() => {
+                setDeep(null);
+                setView(t);
+              }}
+            >
+              <Icon className="nav-icon" />
+              {TAB_NAMES[t]}
+            </button>
+          );
+        })}
 
         <div className="rail-group">Setup</div>
-        {SETUP.map((t) => (
-          <button
-            key={t}
-            className={view === t && !deep ? "nav on" : "nav"}
-            onClick={() => {
-              setDeep(null);
-              setView(t);
-            }}
-          >
-            <span className="nav-dot" />
-            {TAB_NAMES[t]}
-          </button>
-        ))}
+        {SETUP.map((t) => {
+          const Icon = TAB_ICONS[t];
+          return (
+            <button
+              key={t}
+              className={view === t && !deep ? "nav on" : "nav"}
+              onClick={() => {
+                setDeep(null);
+                setView(t);
+              }}
+            >
+              <Icon className="nav-icon" />
+              {TAB_NAMES[t]}
+            </button>
+          );
+        })}
       </aside>
 
       <div className="pane">
@@ -427,6 +457,15 @@ export default function App() {
             disabled={streaming}
           />
           <span className="spacer" />
+          <button
+            className="btn btn-send"
+            onClick={() => void send()}
+            disabled={!draft.trim() || streaming || !provider}
+            title="Send (Enter)"
+          >
+            <IconSend />
+            Send
+          </button>
           {turns.length > 0 && (
             <button
               className={ending ? "btn busy" : "btn"}

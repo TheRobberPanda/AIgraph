@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Source from "./Source";
+import { listSessions, type SessionSummary } from "../lib/chat";
+import { longDate } from "../lib/format";
 import {
   extractNow,
   extractionProgress,
@@ -48,8 +50,10 @@ const REASON_LABELS: Record<string, string> = {
  */
 export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void }) {
   const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
   const [open, setOpen] = useState<number | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
   const [source, setSource] = useState<{ evidence: Evidence; claim: string } | null>(null);
   // Bridges the gap between the click and the first progress event from the
@@ -61,8 +65,72 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
 
   const refresh = useCallback(() => {
     void listIdeas().then(setIdeas);
+    void listSessions().then(setSessions);
     void getDiagnostics().then(setDiag);
   }, []);
+
+  /**
+   * Group ideas under the conversation that first produced them.
+   *
+   * An idea returned to in a later conversation still lives under the one
+   * where it was first said — that conversation is where the thought started,
+   * and repeating it under every conversation that touched it would turn one
+   * idea into several list entries.
+   */
+  const groups = useMemo(() => {
+    const bySession = new Map<number, Idea[]>();
+    const orphaned: Idea[] = [];
+    for (const idea of ideas) {
+      const first = idea.evidence.reduce<Evidence | null>(
+        (min, e) => (min === null || e.id < min.id ? e : min),
+        null,
+      );
+      if (first === null) {
+        orphaned.push(idea);
+        continue;
+      }
+      const list = bySession.get(first.session_id) ?? [];
+      list.push(idea);
+      bySession.set(first.session_id, list);
+    }
+
+    const known = new Set(sessions.map((s) => s.id));
+    const rows = sessions
+      .filter((s) => bySession.has(s.id))
+      .map((s) => ({ session: s, ideas: bySession.get(s.id)! }));
+
+    // A session not yet in the list (still extracting) still gets a home,
+    // rather than losing its ideas until the list catches up.
+    for (const [id, list] of bySession) {
+      if (!known.has(id)) {
+        rows.push({
+          session: {
+            id,
+            started_at: "",
+            ended_at: null,
+            md_path: null,
+            model: "",
+            extract_state: "done",
+            turn_count: 0,
+            idea_count: list.length,
+            tags: [],
+            opening: "",
+          },
+          ideas: list,
+        });
+      }
+    }
+    return { rows, orphaned };
+  }, [ideas, sessions]);
+
+  function toggle(sessionId: number) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  }
 
   useEffect(() => {
     refresh();
@@ -188,70 +256,115 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
           )}
         </p>
       ) : (
-        <ul className="list">
-          {ideas.map((idea) => {
-            const isOpen = open === idea.id;
+        <div className="tree">
+          {groups.rows.map(({ session, ideas: sessionIdeas }) => {
+            const isCollapsed = collapsed.has(session.id);
             return (
-              <li key={idea.id} className={isOpen ? "idea open" : "idea"}>
+              <div key={session.id} className="tree-group">
                 <button
-                  className="row-btn"
-                  onClick={() => (onOpen ? onOpen(idea.id) : setOpen(isOpen ? null : idea.id))}
-                  aria-expanded={isOpen}
+                  className="tree-head"
+                  onClick={() => toggle(session.id)}
+                  aria-expanded={!isCollapsed}
                 >
-                  {/* Gold means the same thing here as on the map: a thought you
-                      came back to. Everything else is a plain idea. */}
-                  <span
-                    className={sessionsFor(idea) > 1 ? "dot returned" : "dot"}
-                    aria-hidden="true"
-                  />
-                  <span className="row-main">{idea.claim}</span>
-                  {(sessionsFor(idea) > 1 || idea.evidence.length > 1) && (
-                    <span className="row-meta">
-                      {sessionsFor(idea) > 1
-                        ? `${sessionsFor(idea)} conversations`
-                        : `${idea.evidence.length} quotes`}
-                    </span>
-                  )}
+                  <span className={`tree-caret${isCollapsed ? " closed" : ""}`} aria-hidden="true" />
+                  <span className="tree-title">
+                    {session.opening || `Conversation ${session.id}`}
+                  </span>
+                  <span className="row-meta">
+                    {session.started_at && longDate(session.started_at)}
+                    {" · "}
+                    {sessionIdeas.length} idea{sessionIdeas.length === 1 ? "" : "s"}
+                  </span>
                 </button>
 
-                {isOpen && (
-                  <div className="detail">
-                    {idea.evidence.map((e) => (
-                      <blockquote key={e.id}>
-                        <button
-                          className="link"
-                          onClick={() => setSource({ evidence: e, claim: idea.claim })}
-                          title="See this in the conversation"
-                        >
-                          “{e.quote}”
-                        </button>
-                        {e.normalized && <span className="tag">loose match</span>}
-                        {e.ambiguous && <span className="tag">said more than once</span>}
-                      </blockquote>
-                    ))}
+                {!isCollapsed && (
+                  <ul className="list tree-children">
+                    {sessionIdeas.map((idea) => {
+                      const isOpen = open === idea.id;
+                      const returned = sessionsFor(idea) > 1;
+                      return (
+                        <li key={idea.id} className={isOpen ? "idea open" : "idea"}>
+                          <button
+                            className="row-btn"
+                            onClick={() =>
+                              onOpen ? onOpen(idea.id) : setOpen(isOpen ? null : idea.id)
+                            }
+                            aria-expanded={isOpen}
+                          >
+                            {/* Gold means the same thing here as on the map: a
+                                thought returned to elsewhere. */}
+                            <span className={returned ? "dot returned" : "dot"} aria-hidden="true" />
+                            <span className="row-main">{idea.claim}</span>
+                            {(returned || idea.evidence.length > 1) && (
+                              <span className="row-meta">
+                                {returned
+                                  ? `also in ${sessionsFor(idea) - 1} more`
+                                  : `${idea.evidence.length} quotes`}
+                              </span>
+                            )}
+                          </button>
 
-                    {(idea.strong.length > 0 || idea.weak.length > 0) && (
-                      <div className="notes">
-                        {idea.strong.map((t, i) => (
-                          <p key={`s${i}`} className="note strong">
-                            <span className="badge">AI</span>
-                            {t}
-                          </p>
-                        ))}
-                        {idea.weak.map((t, i) => (
-                          <p key={`w${i}`} className="note weak">
-                            <span className="badge">AI</span>
-                            {t}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                          {isOpen && (
+                            <div className="detail">
+                              {idea.evidence.map((e) => (
+                                <blockquote key={e.id}>
+                                  <button
+                                    className="link"
+                                    onClick={() => setSource({ evidence: e, claim: idea.claim })}
+                                    title="See this in the conversation"
+                                  >
+                                    “{e.quote}”
+                                  </button>
+                                  {e.normalized && <span className="tag">loose match</span>}
+                                  {e.ambiguous && <span className="tag">said more than once</span>}
+                                </blockquote>
+                              ))}
+
+                              {(idea.strong.length > 0 || idea.weak.length > 0) && (
+                                <div className="notes">
+                                  {idea.strong.map((t, i) => (
+                                    <p key={`s${i}`} className="note strong">
+                                      <span className="badge">AI</span>
+                                      {t}
+                                    </p>
+                                  ))}
+                                  {idea.weak.map((t, i) => (
+                                    <p key={`w${i}`} className="note weak">
+                                      <span className="badge">AI</span>
+                                      {t}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
                 )}
-              </li>
+              </div>
             );
           })}
-        </ul>
+
+          {groups.orphaned.length > 0 && (
+            <div className="tree-group">
+              <div className="tree-head">
+                <span className="tree-title muted">Not yet placed</span>
+              </div>
+              <ul className="list tree-children">
+                {groups.orphaned.map((idea) => (
+                  <li key={idea.id} className="idea">
+                    <span className="row-btn">
+                      <span className="dot" aria-hidden="true" />
+                      <span className="row-main">{idea.claim}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

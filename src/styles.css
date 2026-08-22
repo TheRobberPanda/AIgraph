@@ -18,20 +18,25 @@
 @import "@fontsource/ibm-plex-mono/400.css";
 
 :root {
-  --bg: #1c1c1f;
-  --surface: #232326;
-  --surface-lift: #2a2a2e;
-  --user: #26262a;
-  --line: #34343a;
+  /* Warm charcoal rather than a cold blue-grey — the previous neutral pass read
+     as clinical. A touch of brown in the dark tones keeps it from feeling like
+     an IDE while staying calm enough for dense information. */
+  --bg: #201d1b;
+  --surface: #2a2624;
+  --surface-lift: #33302c;
+  --user: #2d2a27;
+  --line: #423d38;
 
-  --fg: #dcdcdf;
-  --muted: #8b8b93;
-  --faint: #5f5f68;
+  --fg: #ece7e2;
+  --muted: #a39a92;
+  --faint: #776e66;
 
-  --accent: #8f7fd4;
-  --gold: #d5a04a;
-  --verdant: #6fa473;
-  --danger: #d4675e;
+  /* Coral rather than lavender — warmer, and it doesn't fight the gold used for
+     "returned to" the way a cool purple did. */
+  --accent: #e08659;
+  --gold: #dba53f;
+  --verdant: #7ead6f;
+  --danger: #e0705f;
 
   --sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
@@ -41,42 +46,42 @@
 
   color-scheme: dark;
   font-family: var(--sans);
-  font-size: 15px;
-  line-height: 1.5;
+  font-size: 16px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg: #fbfbfa;
-    --surface: #f2f2f0;
+    --bg: #faf6f1;
+    --surface: #f2ece4;
     --surface-lift: #ffffff;
-    --user: #eeeeec;
-    --line: #dedede;
-    --fg: #26262a;
-    --muted: #6d6d75;
-    --faint: #9a9aa2;
-    --accent: #6a58b8;
-    --gold: #9a6a15;
-    --verdant: #47733f;
-    --danger: #a8443a;
+    --user: #eee6dc;
+    --line: #ded2c4;
+    --fg: #2b2521;
+    --muted: #786e63;
+    --faint: #a89c8e;
+    --accent: #c15f31;
+    --gold: #93650f;
+    --verdant: #4f7440;
+    --danger: #ad4633;
     color-scheme: light;
   }
 }
 
 :root[data-theme="light"] {
-  --bg: #fbfbfa;
-  --surface: #f2f2f0;
+  --bg: #faf6f1;
+  --surface: #f2ece4;
   --surface-lift: #ffffff;
-  --user: #eeeeec;
-  --line: #dedede;
-  --fg: #26262a;
-  --muted: #6d6d75;
-  --faint: #9a9aa2;
-  --accent: #6a58b8;
-  --gold: #9a6a15;
-  --verdant: #47733f;
-  --danger: #a8443a;
+  --user: #eee6dc;
+  --line: #ded2c4;
+  --fg: #2b2521;
+  --muted: #786e63;
+  --faint: #a89c8e;
+  --accent: #c15f31;
+  --gold: #93650f;
+  --verdant: #4f7440;
+  --danger: #ad4633;
   color-scheme: light;
 }
 
@@ -110,56 +115,62 @@ body {
   overflow-y: auto;
 }
 
+/* The app's own name — brighter and larger than a nav label, so it reads as a
+   title rather than another button. */
 .rail-title {
-  padding: 0.3rem 0.6rem 0.6rem;
-  font-size: 0.76rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--muted);
+  padding: 0.4rem 0.65rem 0.9rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
 }
 
+/* A section break, not a label — a rule above it makes that unambiguous at a
+   glance, where relying on grey text alone did not. */
 .rail-group {
-  margin-top: 0.75rem;
-  padding: 0 0.6rem 0.3rem;
+  margin-top: 0.9rem;
+  padding: 0.7rem 0.65rem 0.3rem;
+  border-top: 1px solid var(--line);
   font-family: var(--mono);
   font-size: 0.6rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.1em;
   color: var(--faint);
 }
 
 .nav {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.55rem;
   width: 100%;
-  padding: 0.28rem 0.6rem;
+  padding: 0.4rem 0.65rem;
   border: none;
-  border-radius: 5px;
+  border-radius: 9px;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 0.86rem;
+  font-size: 0.87rem;
   text-align: left;
   cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
 }
 .nav:hover { background: var(--surface-lift); color: var(--fg); }
-.nav.on { background: var(--surface-lift); color: var(--fg); }
+.nav.on {
+  background: var(--surface-lift);
+  color: var(--fg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .nav-count {
   margin-left: auto;
   font-family: var(--mono);
   font-size: 0.62rem;
   color: var(--faint);
 }
-.nav-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.55;
-  flex: none;
-}
-.nav.on .nav-dot { opacity: 1; color: var(--accent); }
+/* Icons carry most of the identity; the label still follows, since an icon
+   alone reads as decoration until it has been learned. */
+.nav-icon { flex: none; opacity: 0.75; }
+.nav.on .nav-icon { opacity: 1; color: var(--accent); }
 
 .pane {
   grid-column: 2;
@@ -266,7 +277,7 @@ button { font-family: inherit; }
   gap: 0.4rem;
   padding: 0.28rem 0.7rem;
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 8px;
   background: var(--surface-lift);
   color: var(--muted);
   font: inherit;
@@ -299,7 +310,7 @@ input.field, textarea.field {
   width: 100%;
   padding: 0.35rem 0.6rem;
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 8px;
   background: var(--surface-lift);
   color: inherit;
   font: inherit;
@@ -503,7 +514,7 @@ blockquote {
 .why {
   display: none; position: absolute; left: 0; top: calc(100% + 0.35rem); z-index: 5;
   width: min(28rem, 70vw); padding: 0.55rem 0.7rem;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--surface-lift);
+  border: 1px solid var(--line); border-radius: 9px; background: var(--surface-lift);
   box-shadow: 0 6px 22px rgba(0,0,0,0.4);
   white-space: normal; font-size: 0.8rem; line-height: 1.45; cursor: default;
 }
@@ -523,7 +534,7 @@ blockquote {
 .md li { margin: 0.1rem 0; }
 .md strong { color: var(--fg); font-weight: 600; }
 .md code { padding: 0.08em 0.3em; border-radius: 3px; background: var(--user); font-family: var(--mono); font-size: 0.85em; }
-.md pre { margin: 0 0 0.55rem; padding: 0.6rem; border-radius: 6px; background: var(--user); overflow-x: auto; }
+.md pre { margin: 0 0 0.55rem; padding: 0.6rem; border-radius: 9px; background: var(--user); overflow-x: auto; }
 .md pre code { padding: 0; background: none; }
 .md blockquote { margin: 0 0 0.55rem; }
 .md table { width: 100%; border-collapse: collapse; margin: 0 0 0.55rem; display: block; overflow-x: auto; }
@@ -542,7 +553,7 @@ blockquote {
 .graph-tip {
   position: absolute; z-index: 6;
   max-width: 30rem; padding: 0.5rem 0.7rem;
-  border: 1px solid var(--line); border-radius: 6px;
+  border: 1px solid var(--line); border-radius: 9px;
   background: var(--surface-lift); font-size: 0.82rem; pointer-events: none;
 }
 .graph-tip.bottom { bottom: 0.6rem; } .graph-tip.top { top: 0.6rem; }
@@ -583,7 +594,7 @@ blockquote {
 .ai-text {
   display: none; position: absolute; left: 50%; top: calc(100% + 0.4rem);
   transform: translateX(-50%); width: max-content; max-width: 20rem;
-  padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 6px;
+  padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 9px;
   background: var(--surface-lift); box-shadow: 0 6px 22px rgba(0,0,0,0.45);
   color: var(--fg); font-family: var(--sans); font-size: 0.78rem; font-weight: 400;
   line-height: 1.4; text-align: left; white-space: normal; z-index: 3;
@@ -597,7 +608,7 @@ blockquote {
 .import { padding: 0 0 1rem; }
 .import-preview {
   display: flex; flex-direction: column; gap: 0.55rem;
-  padding: 0.6rem; border: 1px solid var(--line); border-radius: 6px;
+  padding: 0.6rem; border: 1px solid var(--line); border-radius: 9px;
   background: var(--surface); max-height: 20rem; overflow-y: auto; margin-top: 0.6rem;
 }
 .import-role {
@@ -610,7 +621,7 @@ blockquote {
 .model-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
 .model {
   display: flex; align-items: center; gap: 0.5rem; width: 100%;
-  padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 5px;
+  padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 8px;
   background: transparent; color: inherit; font: inherit; font-size: 0.82rem;
   text-align: left; cursor: pointer;
 }
@@ -674,3 +685,97 @@ blockquote {
 
 /* The short version of an answer. Set as a note rather than as speech. */
 .digest { font-size: 0.85rem; line-height: 1.55; color: var(--muted); }
+
+/* ---- Interface scale slider ---- */
+
+.scale-row { align-items: center; gap: 0.75rem; }
+.scale-slider {
+  flex: 1;
+  max-width: 18rem;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.scale-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  transition: transform 100ms ease;
+}
+.scale-slider::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.scale-slider::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+.scale-value {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  min-width: 3ch;
+}
+
+/* The one clearly primary action in the composer. */
+.btn-send {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.btn-send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.btn-send:disabled { border-color: var(--line); background: transparent; }
+
+/* ---- Ideas as a tree: conversation, then what came from it ---- */
+
+.tree { display: flex; flex-direction: column; }
+.tree-group { border-bottom: 1px solid var(--line); }
+.tree-group:first-child { border-top: 1px solid var(--line); }
+
+.tree-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0.35rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.tree-head:hover { background: var(--surface); }
+.tree-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tree-caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 5px 0 5px 7px;
+  border-color: transparent transparent transparent var(--muted);
+  transition: transform 120ms ease;
+}
+.tree-caret.closed { transform: rotate(0deg); }
+.tree-caret:not(.closed) { transform: rotate(90deg); }
+
+.tree-children {
+  padding-left: 1.3rem;
+  border-left: 1px solid var(--line);
+  margin: 0 0 0.35rem 0.95rem;
+}
+.tree-children .idea { border-bottom: none; }
+.tree-children .idea + .idea { border-top: 1px solid var(--line); }

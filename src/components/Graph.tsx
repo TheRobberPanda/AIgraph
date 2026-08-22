@@ -86,6 +86,27 @@ function short(text: string): string {
   return clean.length > LABEL_CHARS ? `${clean.slice(0, LABEL_CHARS)}…` : clean;
 }
 
+/**
+ * Truncate to an actual pixel width, not a character count.
+ *
+ * A character count is only a proxy for width, and a title with wide capital
+ * letters or an unusually long word overflowed it — nodes recorded before this
+ * fix still carry long opening-sentence titles, which is why they were the ones
+ * visibly cut off. Measuring the real rendered width fixes both old and new
+ * labels the same way.
+ */
+function fitWidth(ctx: CanvasRenderingContext2D, text: string, maxPx: number): string {
+  if (ctx.measureText(text).width <= maxPx) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(text.slice(0, mid) + "…").width <= maxPx) lo = mid;
+    else hi = mid - 1;
+  }
+  return text.slice(0, lo).trimEnd() + "…";
+}
+
 export default function Graph({
   onOpenIdea,
   onOpenConversation,
@@ -216,18 +237,55 @@ export default function Graph({
     const roomy = nodesRef.current.length <= 25;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    for (const n of nodesRef.current) {
+    // Bounding boxes already placed this frame, so a later label can be skipped
+    // rather than stamped on top of one that got there first. Conversations and
+    // hover are drawn before ideas so they always win a collision.
+    const placedBoxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    const overlaps = (b: { x0: number; y0: number; x1: number; y1: number }) =>
+      placedBoxes.some((p) => b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
+
+    const candidates = [...nodesRef.current].sort((a, b) => {
+      const rank = (n: Node) => (hover === n ? 0 : n.data.kind === "conversation" ? 1 : n.data.shared ? 2 : 3);
+      return rank(a) - rank(b);
+    });
+
+    const maxLabelWidth = 64 * Math.max(0.6, Math.min(viewRef.current.scale, 2));
+
+    for (const n of candidates) {
       const isConversation = n.data.kind === "conversation";
       if (!(roomy || isConversation || n.data.shared || hover === n)) continue;
-      ctx.globalAlpha = inFocus(n) ? 1 : 0.2;
+
       const s = toScreen(n, w, h);
       const r = n.r * Math.max(0.6, Math.min(viewRef.current.scale, 2));
+      // The map draws to a canvas, which the interface-scale setting cannot
+      // reach through CSS — read the root font-size directly so map text grows
+      // and shrinks with everything else instead of staying fixed.
+      const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const labelPx = (rootPx / 16) * 13;
       ctx.font = isConversation
-        ? "600 13.5px ui-sans-serif, system-ui, sans-serif"
-        : "13px ui-sans-serif, system-ui, sans-serif";
+        ? `600 ${labelPx * 1.04}px ui-sans-serif, system-ui, sans-serif`
+        : `${labelPx}px ui-sans-serif, system-ui, sans-serif`;
+
+      const text = fitWidth(ctx, short(n.data.label), maxLabelWidth);
+      const width = ctx.measureText(text).width;
+      const box = {
+        x0: s.x - width / 2 - 3,
+        x1: s.x + width / 2 + 3,
+        y0: s.y + r + 5,
+        y1: s.y + r + 21,
+      };
+
+      // A conversation, a shared idea, or whatever is hovered always renders —
+      // losing those would hide the map's most meaningful nodes. A plain idea
+      // steps aside instead of overlapping one of them.
+      const mustShow = isConversation || n.data.shared || hover === n;
+      if (!mustShow && overlaps(box)) continue;
+      placedBoxes.push(box);
+
+      ctx.globalAlpha = inFocus(n) ? 1 : 0.2;
       ctx.fillStyle =
         hover === n ? C.labelHover : isConversation ? C.labelConversation : C.labelIdea;
-      ctx.fillText(short(n.data.label), s.x, s.y + r + 7);
+      ctx.fillText(text, s.x, s.y + r + 7);
     }
     ctx.globalAlpha = 1;
   }, [toScreen]);
@@ -293,6 +351,17 @@ export default function Graph({
     nodesRef.current = nodes;
     linksRef.current = links;
 
+    // How many ideas orbit each conversation, so a crowded hub can push them
+    // further out. A fixed radius left eleven labels only a few pixels of arc
+    // apart regardless of how many there were — this is what made dense hubs
+    // truncate to almost nothing even with collision avoidance in place.
+    const orbitCount = new Map<string, number>();
+    for (const l of links) {
+      if (l.kind !== "from") continue;
+      const sourceId = (l.source as Node).data.id;
+      orbitCount.set(sourceId, (orbitCount.get(sourceId) ?? 0) + 1);
+    }
+
     simRef.current?.stop();
     const sim = forceSimulation<Node, Link>(nodes)
       .force(
@@ -300,8 +369,14 @@ export default function Graph({
         forceLink<Node, Link>(links)
           .id((n) => n.data.id)
           // Ideas sit close to the conversation they came from; a merely related
-          // pair is held further apart, so distance means something.
-          .distance((l) => (l.kind === "from" ? 90 : 190))
+          // pair is held further apart, so distance means something. The "from"
+          // radius grows with how many ideas share that hub, so each one still
+          // gets enough arc length for its label.
+          .distance((l) => {
+            if (l.kind !== "from") return 190;
+            const n = orbitCount.get((l.source as Node).data.id) ?? 1;
+            return 90 + Math.max(0, n - 4) * 14;
+          })
           .strength((l) => (l.kind === "from" ? 0.7 : 0.15)),
       )
       // Bigger nodes push harder, so conversations claim their own space.

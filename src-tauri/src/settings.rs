@@ -32,6 +32,10 @@ pub enum Theme {
 #[serde(default)]
 pub struct Settings {
     pub theme: Theme,
+    /// Overall interface scale, as a percentage of the default (100). Applied as
+    /// a root font-size multiplier, so it scales text, spacing and controls
+    /// together rather than just the type.
+    pub ui_scale: u32,
     /// Minutes of silence before a session is considered finished.
     pub idle_minutes: u32,
     /// Where the plain-markdown copies go. Empty means the default location.
@@ -51,6 +55,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: Theme::Auto,
+            ui_scale: 100,
             idle_minutes: 30,
             transcripts_dir: String::new(),
             chat: None,

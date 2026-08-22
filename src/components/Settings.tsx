@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   applyTheme,
+  applyUiScale,
   getSettings,
   reextractAll,
   saveSettings,
@@ -47,6 +48,7 @@ export default function Settings() {
     const next = { ...s, ...patch };
     setS(next);
     if (patch.theme) applyTheme(patch.theme);
+    if (patch.ui_scale) applyUiScale(patch.ui_scale);
     try {
       await saveSettings(next);
     } catch (e) {
@@ -72,6 +74,39 @@ export default function Settings() {
               {t.label}
             </button>
           ))}
+        </div>
+      </section>
+
+      <section>
+        <h2 className="section">Interface size</h2>
+        <p className="blurb">
+          Scales the whole interface — text, buttons and spacing together — not
+          just the type.
+        </p>
+        <div className="row scale-row">
+          <input
+            type="range"
+            className="scale-slider"
+            min={85}
+            max={160}
+            step={5}
+            value={s.ui_scale}
+            onChange={(e) => {
+              // Applied live as it's dragged, saved once it settles — a slider
+              // that only updates on release feels disconnected from the hand.
+              const v = Number(e.target.value);
+              setS({ ...s, ui_scale: v });
+              applyUiScale(v);
+            }}
+            onMouseUp={() => void update({ ui_scale: s.ui_scale })}
+            onKeyUp={() => void update({ ui_scale: s.ui_scale })}
+          />
+          <span className="scale-value">{s.ui_scale}%</span>
+          {s.ui_scale !== 100 && (
+            <button className="btn" onClick={() => void update({ ui_scale: 100 })}>
+              Reset
+            </button>
+          )}
         </div>
       </section>
 

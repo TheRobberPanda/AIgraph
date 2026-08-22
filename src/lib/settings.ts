@@ -12,6 +12,7 @@ export interface ModelChoice {
 
 export interface Settings {
   theme: Theme;
+  ui_scale: number;
   idle_minutes: number;
   transcripts_dir: string;
   chat: ModelChoice | null;
@@ -66,6 +67,17 @@ export function applyTheme(theme: Theme): void {
   const root = document.documentElement;
   if (theme === "auto") root.removeAttribute("data-theme");
   else root.setAttribute("data-theme", theme);
+}
+
+/**
+ * Scale the whole interface, not just its text.
+ *
+ * Set on the root font-size, since every dimension in the stylesheet is in rem —
+ * a control that only enlarged type would leave the buttons and spacing behind,
+ * which reads as broken rather than as bigger.
+ */
+export function applyUiScale(percent: number): void {
+  document.documentElement.style.fontSize = `${(percent / 100) * 15}px`;
 }
 
 export interface KeyStatus {
