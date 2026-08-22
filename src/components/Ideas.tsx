@@ -10,6 +10,7 @@ import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
 import FilePanel from "./FilePanel";
 import { ConversationFile, IdeaFile } from "./Deep";
+import { categoryColor } from "../lib/categories";
 import { longDate } from "../lib/format";
 import {
   extractionProgress,
@@ -70,7 +71,7 @@ export default function Ideas() {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
   const [panelSide, setPanelSide] = useState<"left" | "right">("right");
-  const [panelWidth, setPanelWidth] = useState(420);
+  const [panelWidth, setPanelWidth] = useState<number | null>(null);
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
@@ -176,7 +177,8 @@ export default function Ideas() {
   }, [running]);
 
   return (
-    <div className="ideas-wrap">
+    <div className={`split${panel && panelSide === "left" ? " panel-left" : ""}`}>
+    <div className="split-main">
     <div className="pane-inner">
       {(running || progress?.last?.error) && (
       <div className="diag">
@@ -282,9 +284,13 @@ export default function Ideas() {
                             onClick={() => openIdea(idea.id)}
                             aria-expanded={isOpen}
                           >
-                            {/* Gold means the same thing here as on the map: a
-                                thought returned to elsewhere. */}
-                            <span className={returned ? "dot returned" : "dot"} aria-hidden="true" />
+                            {/* Coloured by subject, as on the map. Gold ring
+                                means the same thing there too: returned to. */}
+                            <span
+                              className={returned ? "dot returned" : "dot"}
+                              style={{ "--dot-color": categoryColor(idea.category) } as React.CSSProperties}
+                              aria-hidden="true"
+                            />
                             <span className="row-main">{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
                             {(returned || idea.evidence.length > 1) && (
                               <span className="row-meta">
@@ -312,7 +318,11 @@ export default function Ideas() {
                 {groups.orphaned.map((idea) => (
                   <li key={idea.id} className="idea">
                     <span className="row-btn">
-                      <span className="dot" aria-hidden="true" />
+                      <span
+                        className="dot"
+                        style={{ "--dot-color": categoryColor(idea.category) } as React.CSSProperties}
+                        aria-hidden="true"
+                      />
                       <span className="row-main">{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
                     </span>
                   </li>
@@ -360,6 +370,7 @@ export default function Ideas() {
           onCancel={() => setDeleting(null)}
         />
       )}
+    </div>
     </div>
 
     {panel && (

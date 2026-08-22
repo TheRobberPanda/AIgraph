@@ -69,6 +69,9 @@ pub struct StoredIdea {
     /// A short, glanceable name — see the column comment on `ideas.title`.
     /// Falls back to the claim itself for ideas extracted before this existed.
     pub title: String,
+    /// What the idea is about. Carried so a list can colour by subject the
+    /// same way the map does.
+    pub category: String,
     pub evidence: Vec<StoredEvidence>,
     pub strong: Vec<String>,
     pub weak: Vec<String>,
@@ -523,13 +526,13 @@ impl Store {
     pub fn ideas(&self) -> Result<Vec<StoredIdea>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, claim, title FROM ideas ORDER BY updated_at DESC, id DESC")?;
-        let rows: Vec<(i64, String, String)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .prepare("SELECT id, claim, title, category FROM ideas ORDER BY updated_at DESC, id DESC")?;
+        let rows: Vec<(i64, String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<rusqlite::Result<_>>()?;
 
         let mut out = Vec::with_capacity(rows.len());
-        for (id, claim, title) in rows {
+        for (id, claim, title, category) in rows {
             let mut ev = self.conn.prepare(
                 "SELECT id, session_id, turn_id, quote, start_byte, end_byte, normalized, ambiguous
                  FROM evidence WHERE idea_id = ?1 ORDER BY created_at",
@@ -560,6 +563,7 @@ impl Store {
                 id,
                 title: if title.is_empty() { claim.clone() } else { title },
                 claim,
+                category,
                 evidence,
                 strong: nudges.iter().filter(|(k, _)| k == "strong").map(|(_, t)| t.clone()).collect(),
                 weak: nudges.iter().filter(|(k, _)| k == "weak").map(|(_, t)| t.clone()).collect(),

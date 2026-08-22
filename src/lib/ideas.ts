@@ -19,6 +19,8 @@ export interface Idea {
   claim: string;
   /** A short, glanceable name, written from context rather than sliced from the claim. */
   title: string;
+  /** What the idea is about — coloured the same way on the map and in lists. */
+  category: string;
   evidence: Evidence[];
   strong: string[];
   weak: string[];

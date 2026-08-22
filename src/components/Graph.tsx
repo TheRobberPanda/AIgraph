@@ -193,7 +193,7 @@ export default function Graph() {
   // content, rather than navigating away and losing the map's state.
   const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
   const [panelSide, setPanelSide] = useState<"left" | "right">("right");
-  const [panelWidth, setPanelWidth] = useState(420);
+  const [panelWidth, setPanelWidth] = useState<number | null>(null);
   const [edgeHover, setEdgeHover] = useState<
     { kind: "related" | "contradicts"; a: GraphNode; b: GraphNode; x: number; y: number } | null
   >(null);
@@ -580,8 +580,9 @@ export default function Graph() {
   }
 
   return (
+    <div className={`split${panel && panelSide === "left" ? " panel-left" : ""}`}>
     <div
-      className="graph-wrap"
+      className="split-main graph-wrap"
       // Hover ends when the pointer leaves the map — not when it lands on the
       // hover overlay, which is part of the hover state. On the canvas, the
       // nudge circles (which start stacked on the node before animating outward)
@@ -628,7 +629,14 @@ export default function Graph() {
             const w = toWorld(e.clientX, e.clientY);
             drag.fx = w.x;
             drag.fy = w.y;
-            if (panRef.current) panRef.current.moved = true;
+            // Same threshold the pan branch uses. Marking this moved on any
+            // motion event at all meant a click only counted if the pointer
+            // held perfectly still between press and release — one pixel of
+            // tremor, and opening a node silently did nothing.
+            const pan = panRef.current;
+            if (pan && Math.abs(e.clientX - pan.x) + Math.abs(e.clientY - pan.y) > 2) {
+              pan.moved = true;
+            }
             return;
           }
           const pan = panRef.current;
@@ -799,6 +807,8 @@ export default function Graph() {
           <div className="relation-side">{edgeHover.b.label}</div>
         </div>
       )}
+
+      </div>
 
       {panel && (
         <FilePanel side={panelSide} onSideChange={setPanelSide} width={panelWidth} onWidthChange={setPanelWidth}>

@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef } from "react";
 
+/** How much of the split the panel takes when first opened. */
+const DEFAULT_SHARE = 0.3;
+
 /**
- * A node or row's file, opened as a panel over whatever it was opened from —
- * the map, the idea list — rather than replacing it. Resizable by dragging its
- * inner edge, and can be moved to the other side when the thing it's covering
- * matters more on the right than the left.
+ * A node or row's file, opened beside whatever it was opened from — the map,
+ * the idea list — rather than replacing it or covering it.
+ *
+ * Laid out in flow rather than floated on top, so the thing it was opened
+ * from keeps the rest of the space to itself and never renders underneath.
+ * Resizable by dragging its inner edge, and movable to the other side.
  */
 export default function FilePanel({
   side,
@@ -15,20 +20,25 @@ export default function FilePanel({
 }: {
   side: "left" | "right";
   onSideChange: (side: "left" | "right") => void;
-  width: number;
+  /** Pixels, or null for the default share of the split. */
+  width: number | null;
   onWidthChange: (width: number) => void;
   children: React.ReactNode;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
   const startRef = useRef<{ x: number; width: number } | null>(null);
 
   const onMove = useCallback(
     (e: MouseEvent) => {
       const start = startRef.current;
       if (!start) return;
-      // Dragging toward the panel's own edge grows it, regardless of which
-      // side it's docked on.
+      // Dragging toward the panel's own edge grows it, whichever side it is
+      // docked on.
       const dx = side === "right" ? start.x - e.clientX : e.clientX - start.x;
-      onWidthChange(Math.min(Math.max(start.width + dx, 280), window.innerWidth - 240));
+      const parent = ref.current?.parentElement?.clientWidth ?? window.innerWidth;
+      // Always leave the other half something to be. A panel dragged to fill
+      // the window would be the full-page view this exists to replace.
+      onWidthChange(Math.min(Math.max(start.width + dx, 260), parent - 260));
     },
     [side, onWidthChange],
   );
@@ -39,20 +49,29 @@ export default function FilePanel({
     document.removeEventListener("mouseup", onUp);
   }, [onMove]);
 
-  useEffect(() => () => {
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-  }, [onMove, onUp]);
+  useEffect(
+    () => () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    },
+    [onMove, onUp],
+  );
 
   function startDrag(e: React.MouseEvent) {
     e.preventDefault();
-    startRef.current = { x: e.clientX, width };
+    // Measured rather than taken from the prop, so the first drag from the
+    // default share starts from where the panel actually is.
+    startRef.current = { x: e.clientX, width: ref.current?.clientWidth ?? 0 };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   }
 
   return (
-    <div className={`file-panel ${side}`} style={{ width }}>
+    <div
+      ref={ref}
+      className={`file-panel ${side}`}
+      style={{ flexBasis: width === null ? `${DEFAULT_SHARE * 100}%` : `${width}px` }}
+    >
       <div className="file-panel-resize" onMouseDown={startDrag} />
       <button
         className="file-panel-flip"

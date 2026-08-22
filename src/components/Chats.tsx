@@ -9,6 +9,8 @@ import {
 import ImportChat from "./ImportChat";
 import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
+import { IconArchive, IconPlus } from "./Icons";
+import { categoryColor } from "../lib/categories";
 import { longDate } from "../lib/format";
 
 /**
@@ -68,14 +70,19 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button className="btn" onClick={() => setAdding((a) => !a)}>
-          {adding ? "Cancel" : "Add a conversation"}
+        <button
+          className={adding ? "icon-btn on" : "icon-btn"}
+          data-tip={adding ? "Cancel" : "Add a conversation"}
+          onClick={() => setAdding((a) => !a)}
+        >
+          <IconPlus />
         </button>
         <button
-          className={showArchived ? "btn on" : "btn"}
+          className={showArchived ? "icon-btn on" : "icon-btn"}
+          data-tip={showArchived ? "Showing archived" : "Show archived"}
           onClick={() => setShowArchived((a) => !a)}
         >
-          {showArchived ? "Archived" : "Show archived"}
+          <IconArchive />
         </button>
       </div>
 
@@ -90,9 +97,13 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
           {tags.map(([name, count]) => (
             <button
               key={name}
-              className={tag === name ? "btn on" : "btn"}
+              className={tag === name ? "btn tag-btn on" : "btn tag-btn"}
+              // Same colour the subject has on the map, so a filter here and a
+              // cluster there are recognisably the same thing.
+              style={{ "--tag-color": categoryColor(name) } as React.CSSProperties}
               onClick={() => setTag(tag === name ? null : name)}
             >
+              <i className="tag-swatch" aria-hidden="true" />
               {name}
               <span className="row-meta">{count}</span>
             </button>

@@ -145,3 +145,21 @@ export function IconClose(props: SVGProps<SVGSVGElement>) {
     </Base>
   );
 }
+
+/** A plus — adding a conversation from outside the app. */
+export function IconPlus(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="15" height="15" {...props}>
+      <path d="M12 5v14M5 12h14" />
+    </Base>
+  );
+}
+
+/** A box with a lid — the archive. */
+export function IconArchive(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="15" height="15" {...props}>
+      <path d="M3 7h18v3H3zM5 10v9h14v-9M10 14h4" />
+    </Base>
+  );
+}

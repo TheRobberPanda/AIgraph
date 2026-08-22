@@ -123,10 +123,11 @@ input, textarea {
   padding: 0 0.6rem;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
-  overflow-x: auto;
-  scrollbar-width: none;
+  /* Deliberately not `overflow-x: auto`. Setting overflow on one axis makes
+     the other axis clip too, which cut every topbar tooltip off at the bar's
+     bottom edge — the hint appeared to render behind the app. The bar has
+     few enough items to never need scrolling. */
 }
-.topbar::-webkit-scrollbar { display: none; }
 
 .window-controls { display: flex; gap: 0.2rem; flex: none; margin-left: 0.4rem; }
 .window-btn {
@@ -335,6 +336,27 @@ button { font-family: inherit; }
 .btn.on { color: var(--fg); border-color: var(--accent); }
 .btn.danger { color: var(--danger); border-color: currentColor; }
 .btn.busy { color: var(--fg); border-color: var(--accent); cursor: progress; }
+
+/* A button that is only an icon. Squared off so a row of them reads as a
+   toolbar rather than as a set of oddly short labelled buttons. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 100ms ease, border-color 100ms ease;
+}
+.icon-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--accent); }
+.icon-btn.on { color: var(--accent); border-color: var(--accent); }
+.icon-btn:disabled { opacity: 0.45; cursor: default; }
 
 .modal-overlay {
   position: fixed;
@@ -559,8 +581,12 @@ textarea.field { font-family: var(--mono); font-size: 0.76rem; resize: vertical;
   white-space: nowrap;
 }
 
-.dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transform: translateY(-1px); }
-.dot.returned { background: var(--gold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 20%, transparent); }
+/* Coloured by subject, from --dot-color, so a list reads by the same colour
+   logic the map does. Falls back for ideas with no category yet. */
+.dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dot-color, var(--faint)); transform: translateY(-1px); }
+/* Gold means the same thing here as on the map: a thought returned to. The
+   ring says "returned", the fill still says which subject. */
+.dot.returned { box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 30%, transparent); }
 
 .diag {
   display: flex; flex-wrap: wrap; gap: 0.15rem 0.9rem;
@@ -665,66 +691,71 @@ blockquote {
 /* A node or row's file, opened as a panel over whatever it came from — the
    map, the idea list — rather than replacing it. Shared by both, so resizing
    or flipping it behaves the same everywhere it appears. */
+/* The split itself. Reversing the row moves the panel to the other side
+   without either child needing to know where it sits. */
+.split { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.split.panel-left { flex-direction: row-reverse; }
+/* Whatever the panel was opened from keeps the remaining space and is never
+   drawn underneath it. */
+.split-main { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
 .file-panel {
-  position: absolute;
-  top: 0.6rem;
-  bottom: 0.6rem;
+  position: relative;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  border-left: 1px solid var(--line);
   /* Scrolling happens on .pane-inner inside, not here — a second scrollbar on
      this outer box used to render right on top of the resize handle and the
      flip button, since both sit at this box's own edge. */
   overflow: hidden;
-  z-index: 40;
 }
-.file-panel.right { right: 0.6rem; }
-.file-panel.left { left: 0.6rem; }
+.file-panel.left { border-left: none; border-right: 1px solid var(--line); }
+
+/* A gutter along the panel's inner edge, reserved for the resize handle and
+   the flip tab. Keeping them in their own strip is what stops the content's
+   scrollbar from landing on top of either — the previous version put both on
+   the panel's edge, where the scrollbar also sits. */
+.file-panel { --gutter: 1.15rem; }
+.file-panel.right { padding-left: var(--gutter); }
+.file-panel.left { padding-right: var(--gutter); }
+
 .file-panel .pane-inner { padding: 0.9rem 1rem 1.5rem; }
-/* A left-docked panel's inner (content-facing) edge is its right edge — the
-   same place a scrollbar would normally land, and also where the resize
-   handle and flip button live. Flipping direction moves the scrollbar to the
-   panel's left (outer) edge instead, out of their way; the inner content
-   flips back to normal reading order immediately. */
-.file-panel.left .pane-inner { direction: rtl; }
-.file-panel.left .pane-inner > * { direction: ltr; }
 .file-panel .pane-inner > * { max-width: none; }
 
 .file-panel-resize {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 10px;
+  width: var(--gutter);
   cursor: ew-resize;
   z-index: 3;
 }
-.file-panel-resize:hover { background: color-mix(in srgb, var(--accent) 25%, transparent); }
-.file-panel.right .file-panel-resize { left: -5px; }
-.file-panel.left .file-panel-resize { right: -5px; }
+.file-panel-resize:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.file-panel.right .file-panel-resize { left: 0; }
+.file-panel.left .file-panel-resize { right: 0; }
 
-/* Sits on the panel's own edge, outside its content, so it can never collide
-   with the file's own header (its own "Back" button lives inside). */
+/* A slim tab in the gutter rather than a round button on the edge, so it has
+   somewhere to live that nothing else ever occupies. */
 .file-panel-flip {
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
+  top: 0.9rem;
+  width: var(--gutter);
+  height: 1.9rem;
+  padding: 0;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  width: 1.6rem;
-  height: 1.6rem;
   background: var(--surface-lift);
   color: var(--muted);
   cursor: pointer;
   z-index: 4;
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   line-height: 1;
 }
-.file-panel-flip:hover { color: var(--fg); }
-.file-panel.right .file-panel-flip { left: -0.8rem; }
-.file-panel.left .file-panel-flip { right: -0.8rem; }
+.file-panel-flip:hover { color: var(--fg); border-color: var(--accent); }
+.file-panel.right .file-panel-flip { left: 0; border-radius: 0 6px 6px 0; border-left: none; }
+.file-panel.left .file-panel-flip { right: 0; border-radius: 6px 0 0 6px; border-right: none; }
 .graph { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
 .graph:active { cursor: grabbing; }
 .graph-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
@@ -857,6 +888,17 @@ blockquote {
 .tag-row { margin-bottom: 0.85rem; }
 .tag-row .btn { font-size: 0.74rem; padding: 0.18rem 0.55rem; }
 .tag-row .row-meta { margin-left: 0.3rem; }
+
+/* A subject filter carries the same colour the subject has on the map. */
+.tag-btn { display: inline-flex; align-items: center; gap: 0.35rem; }
+.tag-swatch {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--tag-color, var(--muted));
+  flex: none;
+}
+.tag-btn.on { color: var(--fg); border-color: var(--tag-color, var(--accent)); }
 
 .chat-row { align-items: flex-start; padding: 0.6rem 0.35rem; }
 .chat-open {
