@@ -1,0 +1,1184 @@
+//! Tauri commands — the frontend's entire surface area.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use serde::Serialize;
+use tauri::{Emitter, Manager, State};
+use tokio::sync::Mutex;
+
+use crate::chat::Conversation;
+use crate::llm::detect::{self, Detected, LocalKind};
+use crate::llm::{ChatProvider, ChunkKind, IdeaExtractor};
+use crate::session::{ActiveSession, EndReason};
+use crate::stt::capture::{Dictation, Event as SttEvent};
+use crate::stt::model::{DownloadProgress, Models};
+use crate::embed::Embedder;
+use crate::reconcile;
+use crate::settings::{ModelChoice, Settings};
+use crate::store::{
+    ConversationView, Diagnostics, Graph, IdeaView, SessionSummary, SourceView, StoredIdea, Store,
+    StoredTurn,
+};
+
+/// The provider currently in use, if one has been chosen.
+struct Active {
+    provider: Arc<dyn ChatProvider>,
+    kind: LocalKind,
+    model: String,
+}
+
+/// The model that reads sessions afterwards. Independent of the chat model, and
+/// always a separate object even when both point at the same server — extraction
+/// must never share the chat's context.
+struct Extractor {
+    provider: Arc<dyn IdeaExtractor>,
+    label: String,
+    model: String,
+}
+
+pub struct AppState {
+    conversation: Mutex<Option<Conversation>>,
+    active: Mutex<Option<Active>>,
+    session: Mutex<Option<ActiveSession>>,
+    store: Mutex<Store>,
+    progress: Mutex<ExtractionProgress>,
+    models: Models,
+    dictation: Mutex<Option<Dictation>>,
+    /// Loaded on first use — the model is ~90MB and most of a session's work
+    /// happens before anything needs embedding.
+    embedder: Mutex<Option<Embedder>>,
+    embed_cache_dir: PathBuf,
+    extractor: Mutex<Option<Extractor>>,
+    settings: Mutex<Settings>,
+    data_dir: PathBuf,
+    /// Held for the duration of a drain. Extraction is serialized deliberately:
+    /// two sessions decoding at once on one local model is slower than doing
+    /// them in turn, and would make the progress display meaningless.
+    drain_lock: tokio::sync::Mutex<()>,
+    /// Where the plain-markdown copies go. The user owns these.
+    md_dir: PathBuf,
+}
+
+impl AppState {
+    pub fn new(db_path: &std::path::Path, md_dir: PathBuf) -> Result<Self, crate::store::StoreError> {
+        Ok(Self {
+            conversation: Mutex::new(None),
+            active: Mutex::new(None),
+            session: Mutex::new(None),
+            store: Mutex::new(Store::open(db_path)?),
+            progress: Mutex::new(ExtractionProgress::default()),
+            models: Models::new(
+                db_path.parent().unwrap_or(std::path::Path::new(".")),
+            ),
+            dictation: Mutex::new(None),
+            embedder: Mutex::new(None),
+            extractor: Mutex::new(None),
+            settings: Mutex::new(Settings::load(
+                db_path.parent().unwrap_or(std::path::Path::new(".")),
+            )),
+            data_dir: db_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf(),
+            embed_cache_dir: md_dir
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("embeddings"),
+            drain_lock: tokio::sync::Mutex::new(()),
+            md_dir,
+        })
+    }
+
+    /// Clear `extracting` marks left by a crash, so those sessions are picked up
+    /// again instead of being skipped forever.
+    pub async fn requeue_interrupted(&self) -> Result<usize, String> {
+        self.store
+            .lock()
+            .await
+            .reset_stale_extractions()
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// What extraction is doing right now, and what it did last.
+#[derive(Serialize, Clone, Default)]
+pub struct ExtractionProgress {
+    pub running: Option<RunningExtraction>,
+    pub last: Option<LastExtraction>,
+    pub pending: i64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct RunningExtraction {
+    pub session_id: i64,
+    pub phase: crate::extract::Phase,
+    /// RFC3339. The UI derives elapsed time from this rather than being told,
+    /// so the display keeps counting between events.
+    pub started_at: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct LastExtraction {
+    pub session_id: i64,
+    pub ideas: usize,
+    pub dropped: usize,
+    pub drop_rate: f32,
+    pub seconds: i64,
+    pub retried: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct Token {
+    pub text: String,
+}
+
+#[derive(Serialize)]
+pub struct Startup {
+    pub servers: Vec<Detected>,
+    /// Set when exactly one usable server was found and we selected it outright.
+    pub selected: Option<Selected>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct Selected {
+    pub kind: LocalKind,
+    pub label: String,
+    pub model: String,
+}
+
+/// Probe for local servers and, when the choice is unambiguous, make it.
+#[tauri::command]
+pub async fn startup(state: State<'_, AppState>) -> Result<Startup, String> {
+    let servers = detect::probe_local().await;
+
+    // A saved choice wins over anything detected. Without this, picking a model
+    // would be forgotten at the next launch, because auto-selection runs first
+    // and would quietly overrule it.
+    let saved = state.settings.lock().await.clone();
+    if let Some(choice) = &saved.chat {
+        let still_there = servers.iter().any(|s| {
+            s.kind == choice.kind && s.models.iter().any(|m| m.id == choice.model)
+        });
+        if still_there {
+            set_active(&state, choice.kind, &choice.host, &choice.model).await;
+            if let Some(ex) = &saved.extraction {
+                *state.extractor.lock().await = Some(Extractor {
+                    provider: detect::extractor(ex.kind, &ex.host, &ex.model),
+                    label: ex.kind.label().to_string(),
+                    model: ex.model.clone(),
+                });
+            }
+            return Ok(Startup {
+                servers,
+                selected: Some(Selected {
+                    kind: choice.kind,
+                    label: choice.kind.label().to_string(),
+                    model: choice.model.clone(),
+                }),
+            });
+        }
+        tracing::info!(model = %choice.model, "saved model is no longer available");
+    }
+
+    // Auto-select only when there is genuinely nothing to decide: exactly one
+    // server with exactly one ready chat model. Anything else is a real choice
+    // and belongs to the user — guessing picks which model shapes their thinking,
+    // and can pick one that cannot run at all.
+    let selected = match detect::obvious_choice(&servers) {
+        Some((server, model)) => {
+            let (kind, host, id) = (server.kind, server.host.clone(), model.id.clone());
+            set_active(&state, kind, &host, &id).await;
+            Some(Selected { kind, label: kind.label().to_string(), model: id })
+        }
+        None => None,
+    };
+
+    Ok(Startup { servers, selected })
+}
+
+#[tauri::command]
+pub async fn select_provider(
+    state: State<'_, AppState>,
+    kind: LocalKind,
+    host: String,
+    model: String,
+) -> Result<Selected, String> {
+    set_active(&state, kind, &host, &model).await;
+    Ok(Selected { kind, label: kind.label().to_string(), model })
+}
+
+async fn set_active(state: &State<'_, AppState>, kind: LocalKind, host: &str, model: &str) {
+    *state.active.lock().await = Some(Active {
+        provider: detect::chat_provider(kind, host, model),
+        kind,
+        model: model.to_string(),
+    });
+
+    // Extraction follows the chat model unless it has been chosen explicitly.
+    // Most people never touch it, and an unset extractor would mean sessions
+    // silently piling up unextracted.
+    if state.extractor.lock().await.is_none() {
+        *state.extractor.lock().await = Some(Extractor {
+            provider: detect::extractor(kind, host, model),
+            label: kind.label().to_string(),
+            model: model.to_string(),
+        });
+    }
+    // Switching models mid-conversation would mean the transcript was written by
+    // two different models. Start clean instead.
+    *state.conversation.lock().await = Some(Conversation::new(model));
+    *state.session.lock().await = None;
+}
+
+#[tauri::command]
+pub async fn send_message(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<String, String> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("empty message".into());
+    }
+
+    let provider = {
+        let active = state.active.lock().await;
+        let a = active.as_ref().ok_or("no model selected yet")?;
+        a.provider.clone()
+    };
+
+    // First message of a stretch of thinking starts the session clock.
+    {
+        let mut session = state.session.lock().await;
+        match session.as_mut() {
+            Some(s) => s.touch(),
+            None => {
+                let model = state.active.lock().await.as_ref().map(|a| a.model.clone());
+                *session = Some(ActiveSession::new(model.unwrap_or_default()));
+            }
+        }
+    }
+
+    let request = {
+        let mut guard = state.conversation.lock().await;
+        let convo = guard.as_mut().ok_or("no conversation")?;
+        convo.push_user(&text);
+        convo.to_request()
+    };
+
+    let emitter = app.clone();
+    let reply = provider
+        .chat_stream(&request, &move |kind, text| {
+            // Reasoning goes out on its own channel so the UI can show that
+            // something is happening without ever treating it as the reply.
+            let event = match kind {
+                ChunkKind::Content => "chat:token",
+                ChunkKind::Reasoning => "chat:reasoning",
+            };
+            let _ = emitter.emit(event, Token { text: text.to_string() });
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if let Some(convo) = state.conversation.lock().await.as_mut() {
+        convo.push_assistant(&reply);
+    }
+    if let Some(s) = state.session.lock().await.as_mut() {
+        s.touch();
+    }
+    Ok(reply)
+}
+
+#[derive(Serialize, Clone)]
+pub struct Archived {
+    pub session_id: i64,
+    pub reason: EndReason,
+    pub turn_count: usize,
+}
+
+/// Finish the current session: archive it, then clear the stream.
+///
+/// Archiving comes first and the stream is only cleared if it succeeded. Losing
+/// someone's thinking to a failed write would be the worst bug this app could
+/// have, and "it looked like it saved" is exactly how that happens.
+pub async fn end_session_inner(
+    state: &AppState,
+    reason: EndReason,
+) -> Result<Option<Archived>, String> {
+    let (rendered, model) = {
+        let guard = state.conversation.lock().await;
+        let Some(convo) = guard.as_ref() else { return Ok(None) };
+        if convo.is_empty() {
+            return Ok(None);
+        }
+        let model = state
+            .active
+            .lock()
+            .await
+            .as_ref()
+            .map(|a| a.model.clone())
+            .unwrap_or_default();
+        (convo.render(), model)
+    };
+
+    let started_at = state
+        .session
+        .lock()
+        .await
+        .as_ref()
+        .map(|s| s.started_at)
+        .unwrap_or_else(chrono::Utc::now);
+
+    let session_id = {
+        let mut store = state.store.lock().await;
+        store
+            .archive_session(&rendered, &model, started_at, Some(&state.md_dir))
+            .map_err(|e| e.to_string())?
+    };
+
+    let turn_count = rendered.spans.len();
+
+    // Only now is it safe to let go of the conversation.
+    *state.conversation.lock().await = Some(Conversation::new(&model));
+    *state.session.lock().await = None;
+
+    Ok(Some(Archived { session_id, reason, turn_count }))
+}
+
+#[tauri::command]
+pub async fn end_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    reason: EndReason,
+) -> Result<Option<Archived>, String> {
+    let out = end_session_inner(&state, reason).await?;
+    if let Some(a) = &out {
+        let _ = app.emit("session:archived", a.clone());
+
+        // Extraction runs in the background: it can take minutes on a local
+        // model, and the user should be free to start thinking again immediately
+        // rather than watching a spinner. The queue makes it safe to detach —
+        // if this task never finishes, the session is still marked pending and
+        // gets picked up later.
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            use tauri::Manager;
+            let state = handle.state::<AppState>();
+            drain_pending(&handle, &state).await;
+        });
+    }
+    Ok(out)
+}
+
+pub async fn is_session_idle(state: &AppState) -> bool {
+    state
+        .session
+        .lock()
+        .await
+        .as_ref()
+        .map(|s| s.is_idle(chrono::Utc::now()))
+        .unwrap_or(false)
+}
+
+/// Whether the current session has gone quiet long enough to be over.
+#[tauri::command]
+pub async fn session_idle(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(is_session_idle(&state).await)
+}
+
+#[tauri::command]
+pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionSummary>, String> {
+    state.store.lock().await.list_sessions(100).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn session_turns(
+    state: State<'_, AppState>,
+    session_id: i64,
+) -> Result<Vec<StoredTurn>, String> {
+    state.store.lock().await.turns(session_id).map_err(|e| e.to_string())
+}
+
+/// Current transcript. Milestone 2 hands this to the archiver; for now it makes
+/// the chat-purity boundary inspectable from the UI.
+#[tauri::command]
+pub async fn transcript(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state
+        .conversation
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.to_transcript())
+        .unwrap_or_default())
+}
+
+/// Which provider is in use, if any.
+#[tauri::command]
+pub async fn active_provider(state: State<'_, AppState>) -> Result<Option<Selected>, String> {
+    Ok(state.active.lock().await.as_ref().map(|a| Selected {
+        kind: a.kind,
+        label: a.kind.label().to_string(),
+        model: a.model.clone(),
+    }))
+}
+
+/// Extract ideas from one archived session.
+///
+/// Driven off the `sessions.extract_state` queue rather than fired once at
+/// archive time, so a crash or a quit mid-extraction is recoverable: the session
+/// stays `pending` and gets picked up next launch.
+pub async fn extract_session_inner(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    session_id: i64,
+) -> Result<usize, String> {
+    let (extractor, provider_label, model) = {
+        let guard = state.extractor.lock().await;
+        let e = guard.as_ref().ok_or("no extraction model selected")?;
+        (e.provider.clone(), e.label.clone(), e.model.clone())
+    };
+
+    let (transcript, turns) = {
+        let store = state.store.lock().await;
+        let t = store
+            .transcript(session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("no such session")?;
+        let turns = store.verify_turns(session_id).map_err(|e| e.to_string())?;
+        (t, turns)
+    };
+
+    let started = chrono::Utc::now();
+    state
+        .store
+        .lock()
+        .await
+        .set_extract_state(session_id, "extracting", None)
+        .map_err(|e| e.to_string())?;
+
+    set_running(
+        app,
+        state,
+        Some(RunningExtraction {
+            session_id,
+            phase: crate::extract::Phase::Asking,
+            started_at: started.to_rfc3339(),
+        }),
+    )
+    .await;
+
+    // Phase updates cross into a sync callback, so they go through a channel
+    // rather than trying to await inside it.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let pump = {
+        let app = app.clone();
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            use tauri::Manager;
+            while let Some(phase) = rx.recv().await {
+                let state = handle.state::<AppState>();
+                let mut p = state.progress.lock().await;
+                if let Some(r) = p.running.as_mut() {
+                    r.phase = phase;
+                }
+                let snapshot = p.clone();
+                drop(p);
+                let _ = app.emit("extraction:progress", snapshot);
+            }
+        })
+    };
+
+    // The store lock is deliberately not held across this call — extraction can
+    // take minutes on a local model, and holding it would freeze the whole app.
+    // Hand the model the categories already in use so it reuses them instead of
+    // coining a synonym for a subject it has seen before.
+    let known = state
+        .store
+        .lock()
+        .await
+        .categories()
+        .unwrap_or_default();
+
+    let result = crate::extract::run_with_progress(
+        extractor.as_ref(),
+        &transcript,
+        &turns,
+        &known,
+        &move |phase| {
+            let _ = tx.send(phase);
+        },
+    )
+    .await;
+
+    pump.abort();
+    let seconds = (chrono::Utc::now() - started).num_seconds();
+
+    match result {
+        Ok(extraction) => {
+            let (kept, dropped) = (extraction.ideas.len(), extraction.rejected.len());
+            tracing::info!(
+                session = session_id,
+                kept,
+                dropped,
+                drop_rate = extraction.drop_rate(),
+                retried = extraction.retried,
+                seconds,
+                "extracted"
+            );
+            reconcile_and_save(state, session_id, &extraction, &provider_label, &model)
+                .await
+                .map_err(|e| format!("saving ideas: {e}"))?;
+
+            finish(
+                app,
+                state,
+                LastExtraction {
+                    session_id,
+                    ideas: kept,
+                    dropped,
+                    drop_rate: extraction.drop_rate(),
+                    seconds,
+                    retried: extraction.retried,
+                    error: None,
+                },
+            )
+            .await;
+            Ok(kept)
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            // Back to `pending`, not `failed` — a model that was merely unloaded
+            // shouldn't cost the user their session permanently.
+            let _ = state
+                .store
+                .lock()
+                .await
+                .set_extract_state(session_id, "pending", Some(&msg));
+            finish(
+                app,
+                state,
+                LastExtraction {
+                    session_id,
+                    ideas: 0,
+                    dropped: 0,
+                    drop_rate: 0.0,
+                    seconds,
+                    retried: false,
+                    error: Some(msg.clone()),
+                },
+            )
+            .await;
+            Err(msg)
+        }
+    }
+}
+
+async fn set_running(app: &tauri::AppHandle, state: &AppState, running: Option<RunningExtraction>) {
+    let snapshot = {
+        let mut p = state.progress.lock().await;
+        p.running = running;
+        p.pending = state.store.lock().await.diagnostics().map(|d| d.sessions_pending).unwrap_or(0);
+        p.clone()
+    };
+    let _ = app.emit("extraction:progress", snapshot);
+}
+
+async fn finish(app: &tauri::AppHandle, state: &AppState, last: LastExtraction) {
+    let snapshot = {
+        let mut p = state.progress.lock().await;
+        p.running = None;
+        p.last = Some(last);
+        p.pending = state.store.lock().await.diagnostics().map(|d| d.sessions_pending).unwrap_or(0);
+        p.clone()
+    };
+    let _ = app.emit("extraction:progress", snapshot);
+}
+
+#[tauri::command]
+pub async fn extract_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: i64,
+) -> Result<usize, String> {
+    let _guard = state.drain_lock.lock().await;
+    let n = extract_session_inner(&app, &state, session_id).await?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(n)
+}
+
+/// Run extraction now, rather than waiting for the queue.
+///
+/// Returns false if a run is already in flight — the common case being an
+/// impatient second click, which should be a no-op rather than a second
+/// concurrent decode competing for the same model.
+#[tauri::command]
+pub async fn extract_now(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    if state.progress.lock().await.running.is_some() {
+        return Ok(false);
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri::Manager;
+        let state = handle.state::<AppState>();
+        drain_pending(&handle, &state).await;
+    });
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn extraction_progress(
+    state: State<'_, AppState>,
+) -> Result<ExtractionProgress, String> {
+    let mut p = state.progress.lock().await.clone();
+    p.pending = state.store.lock().await.diagnostics().map(|d| d.sessions_pending).unwrap_or(0);
+    Ok(p)
+}
+
+/// Work through every session awaiting extraction, oldest first.
+pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
+    // Serialized: one extraction at a time, whoever asked for it.
+    let _guard = state.drain_lock.lock().await;
+
+    let pending = match state.store.lock().await.pending_extraction() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "could not read extraction queue");
+            return;
+        }
+    };
+    if pending.is_empty() {
+        return;
+    }
+    for id in pending {
+        match extract_session_inner(app, state, id).await {
+            Ok(n) => tracing::info!(session = id, ideas = n, "extraction complete"),
+            Err(e) => {
+                tracing::warn!(session = id, error = %e, "extraction deferred");
+                // Usually means no model is available. Stop rather than
+                // hammering a dead server for every queued session.
+                break;
+            }
+        }
+    }
+    let _ = app.emit("ideas:changed", ());
+}
+
+#[tauri::command]
+pub async fn ideas(state: State<'_, AppState>) -> Result<Vec<StoredIdea>, String> {
+    state.store.lock().await.ideas().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn diagnostics(state: State<'_, AppState>) -> Result<Diagnostics, String> {
+    state.store.lock().await.diagnostics().map_err(|e| e.to_string())
+}
+
+/// The archived conversation, split around one quote.
+///
+/// Errors rather than guessing if the stored offsets no longer select the
+/// stored text — see `Store::source_view`.
+#[tauri::command]
+pub async fn source_view(
+    state: State<'_, AppState>,
+    evidence_id: i64,
+) -> Result<SourceView, String> {
+    state
+        .store
+        .lock()
+        .await
+        .source_view(evidence_id)
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------- dictation
+
+#[derive(Serialize, Clone)]
+pub struct SpeechModelStatus {
+    pub installed: bool,
+    /// Roughly what the first-run download costs, so the user can decide.
+    pub download_mb: u32,
+}
+
+#[tauri::command]
+pub async fn speech_model_status(state: State<'_, AppState>) -> Result<SpeechModelStatus, String> {
+    Ok(SpeechModelStatus {
+        installed: state.models.is_installed(),
+        download_mb: 488,
+    })
+}
+
+/// Download the speech models if they aren't already present.
+///
+/// Blocking work on a worker thread — half a gigabyte of download and a bzip2
+/// unpack would otherwise stall the async runtime the chat is streaming on.
+#[tauri::command]
+pub async fn download_speech_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if state.models.is_installed() {
+        return Ok(());
+    }
+    let models = Models::new(
+        app.path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .as_path(),
+    );
+    let emitter = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        models.ensure(&move |p: DownloadProgress| {
+            let _ = emitter.emit("speech:download", p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    let _ = app.emit("speech:ready", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_dictation(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if state.dictation.lock().await.is_some() {
+        return Ok(());
+    }
+    if !state.models.is_installed() {
+        return Err("speech model not downloaded yet".into());
+    }
+    let paths = state.models.paths();
+
+    let emitter = app.clone();
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        Dictation::start(
+            paths,
+            Arc::new(move |event| match event {
+                // Phrases land in the composer, never straight into the
+                // conversation. Transcription errors would otherwise become
+                // evidence errors that look authoritative — the one failure the
+                // verifier cannot catch. The user stays the last check.
+                SttEvent::Phrase(text) => {
+                    let _ = emitter.emit("dictation:phrase", text);
+                }
+                SttEvent::Speaking(on) => {
+                    let _ = emitter.emit("dictation:speaking", on);
+                }
+                SttEvent::Error(e) => {
+                    let _ = emitter.emit("dictation:error", e);
+                }
+            }),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    *state.dictation.lock().await = Some(handle);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_dictation(state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(d) = state.dictation.lock().await.take() {
+        // Blocking join, but only for as long as one in-flight segment takes.
+        tauri::async_runtime::spawn_blocking(move || d.stop())
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn dictation_active(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.dictation.lock().await.is_some())
+}
+
+/// Fold one session's extracted ideas into the existing graph.
+///
+/// Each idea is embedded, shortlisted against what is already there, and
+/// adjudicated. Most turn out to be new — the shortlist is usually empty, and
+/// then no model call happens at all.
+///
+/// A failure here must not lose the session: on error the session stays
+/// `pending` and is retried, rather than being marked done with nothing saved.
+async fn reconcile_and_save(
+    state: &AppState,
+    session_id: i64,
+    extraction: &crate::extract::Extraction,
+    provider: &str,
+    model: &str,
+) -> Result<(), String> {
+    // Embed every claim in one batch, off the async runtime — ONNX inference is
+    // blocking work and would otherwise stall the chat stream.
+    let claims: Vec<String> = extraction.ideas.iter().map(|i| i.raw.claim.clone()).collect();
+    let vectors = if claims.is_empty() {
+        Vec::new()
+    } else {
+        let cache = state.embed_cache_dir.clone();
+        let mut guard = state.embedder.lock().await;
+        if guard.is_none() {
+            let cache2 = cache.clone();
+            *guard = Some(
+                tauri::async_runtime::spawn_blocking(move || Embedder::load(&cache2))
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+        let embedder = guard.as_mut().expect("just loaded");
+        embedder.embed(&claims).map_err(|e| e.to_string())?
+    };
+
+    let adjudicator = {
+        let guard = state.extractor.lock().await;
+        guard.as_ref().ok_or("no extraction model selected")?.provider.clone()
+    };
+
+    for (idea, vector) in extraction.ideas.iter().zip(vectors) {
+        // Re-read each time: a decision may have added an idea that the next one
+        // should be compared against, including within this same session.
+        let existing = state
+            .store
+            .lock()
+            .await
+            .ideas_with_embeddings()
+            .map_err(|e| e.to_string())?;
+
+        let candidates = reconcile::shortlist(&vector, &existing);
+        let decision = reconcile::decide(adjudicator.as_ref(), &idea.raw.claim, &candidates)
+            .await
+            .unwrap_or_else(|e| {
+                // A failed adjudication must not merge anything. Keeping the
+                // idea separate is the safe direction — see the over-merging rule.
+                tracing::warn!(error = %e, "adjudication failed; keeping idea separate");
+                reconcile::Decision::New { related: Vec::new() }
+            });
+
+        if !matches!(decision, reconcile::Decision::New { .. }) {
+            tracing::info!(?decision, claim = %idea.raw.claim, "reconciled");
+        }
+
+        let mut store = state.store.lock().await;
+        let idea_id = store
+            .apply_decision(session_id, idea, &decision, provider, model)
+            .map_err(|e| e.to_string())?;
+
+        // A rewritten claim needs a fresh vector; a new one needs its first.
+        match &decision {
+            reconcile::Decision::Attach { .. } => {}
+            reconcile::Decision::Rewrite { new_claim, .. } => {
+                let claim = new_claim.clone();
+                drop(store);
+                let mut guard = state.embedder.lock().await;
+                if let Some(e) = guard.as_mut() {
+                    if let Ok(v) = e.embed_one(&claim) {
+                        let _ = state.store.lock().await.set_embedding(idea_id, &v);
+                    }
+                }
+            }
+            _ => {
+                store.set_embedding(idea_id, &vector).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    // Rejected ideas are recorded separately: the drop rate is only honest if
+    // the failures are kept.
+    state
+        .store
+        .lock()
+        .await
+        .save_rejections(session_id, extraction)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn revert_revision(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    revision_id: i64,
+) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .await
+        .revert_revision(revision_id)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn graph(state: State<'_, AppState>) -> Result<Graph, String> {
+    state.store.lock().await.graph().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn conversation_view(
+    state: State<'_, AppState>,
+    session_id: i64,
+) -> Result<ConversationView, String> {
+    state
+        .store
+        .lock()
+        .await
+        .conversation_view(session_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn idea_view(state: State<'_, AppState>, idea_id: i64) -> Result<IdeaView, String> {
+    state.store.lock().await.idea_view(idea_id).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize, Clone)]
+pub struct Cleared {
+    pub evidence_removed: usize,
+    pub ideas_removed: usize,
+}
+
+/// Throw away a session's ideas and extract it again.
+///
+/// The prompt changes as this project develops, and old sessions otherwise keep
+/// whatever the prompt of the day produced. This is also the recovery path for a
+/// run that went badly.
+#[tauri::command]
+pub async fn reextract_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: i64,
+) -> Result<Cleared, String> {
+    let (evidence_removed, ideas_removed) = state
+        .store
+        .lock()
+        .await
+        .clear_extraction(session_id)
+        .map_err(|e| e.to_string())?;
+
+    let _ = app.emit("ideas:changed", ());
+
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        drain_pending(&handle, &state).await;
+    });
+
+    Ok(Cleared { evidence_removed, ideas_removed })
+}
+
+#[tauri::command]
+pub async fn delete_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: i64,
+) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .await
+        .delete_session(session_id)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_idea(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    idea_id: i64,
+) -> Result<(), String> {
+    state.store.lock().await.delete_idea(idea_id).map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+// ------------------------------------------------------------ settings
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
+    Ok(state.settings.lock().await.clone())
+}
+
+/// Save settings and apply the ones that take effect immediately.
+#[tauri::command]
+pub async fn save_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Result<Settings, String> {
+    settings.save(&state.data_dir).map_err(|e| e.to_string())?;
+    *state.settings.lock().await = settings.clone();
+
+    if let Some(choice) = &settings.chat {
+        let current = state.active.lock().await.as_ref().map(|a| a.model.clone());
+        if current.as_deref() != Some(choice.model.as_str()) {
+            set_active(&state, choice.kind, &choice.host, &choice.model).await;
+        }
+    }
+
+    if let Some(choice) = &settings.extraction {
+        *state.extractor.lock().await = Some(Extractor {
+            provider: detect::extractor(choice.kind, &choice.host, &choice.model),
+            label: choice.kind.label().to_string(),
+            model: choice.model.clone(),
+        });
+    }
+
+    let _ = app.emit("settings:changed", settings.clone());
+    Ok(settings)
+}
+
+/// Which models are in use right now.
+#[derive(Serialize, Clone)]
+pub struct ActiveModels {
+    pub chat: Option<Selected>,
+    pub extraction: Option<Selected>,
+}
+
+#[tauri::command]
+pub async fn active_models(state: State<'_, AppState>) -> Result<ActiveModels, String> {
+    let chat = state.active.lock().await.as_ref().map(|a| Selected {
+        kind: a.kind,
+        label: a.kind.label().to_string(),
+        model: a.model.clone(),
+    });
+    let extraction = state.extractor.lock().await.as_ref().map(|e| Selected {
+        // `kind` is informational here; the label is what the UI shows.
+        kind: LocalKind::LmStudio,
+        label: e.label.clone(),
+        model: e.model.clone(),
+    });
+    Ok(ActiveModels { chat, extraction })
+}
+
+/// Choose the model for one role.
+#[tauri::command]
+pub async fn choose_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    role: String,
+    kind: LocalKind,
+    host: String,
+    model: String,
+) -> Result<(), String> {
+    let choice = ModelChoice { kind, host: host.clone(), model: model.clone() };
+    let mut settings = state.settings.lock().await.clone();
+    match role.as_str() {
+        "chat" => settings.chat = Some(choice),
+        "extraction" => settings.extraction = Some(choice),
+        other => return Err(format!("unknown role {other}")),
+    }
+    drop(settings.save(&state.data_dir));
+    *state.settings.lock().await = settings.clone();
+
+    match role.as_str() {
+        "chat" => set_active(&state, kind, &host, &model).await,
+        _ => {
+            *state.extractor.lock().await = Some(Extractor {
+                provider: detect::extractor(kind, &host, &model),
+                label: kind.label().to_string(),
+                model: model.clone(),
+            });
+        }
+    }
+
+    let _ = app.emit("settings:changed", settings);
+    Ok(())
+}
+
+/// Where transcripts are written, so Settings can show it.
+#[tauri::command]
+pub async fn transcripts_dir(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state
+        .settings
+        .lock()
+        .await
+        .transcripts_path(&state.md_dir)
+        .to_string_lossy()
+        .to_string())
+}
+
+/// Re-extract every archived session.
+///
+/// The prompts change as this develops, and old sessions otherwise keep whatever
+/// the prompt of the day produced.
+#[tauri::command]
+pub async fn reextract_all(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let sessions: Vec<i64> = state
+        .store
+        .lock()
+        .await
+        .list_sessions(1000)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+
+    for id in &sessions {
+        state
+            .store
+            .lock()
+            .await
+            .clear_extraction(*id)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let _ = app.emit("ideas:changed", ());
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        drain_pending(&handle, &state).await;
+    });
+    Ok(sessions.len())
+}
+
+// ------------------------------------------------------------ API keys
+
+#[derive(Serialize, Clone)]
+pub struct KeyStatus {
+    /// Whether a key is stored. The key itself is never sent to the frontend.
+    pub anthropic: bool,
+    /// Whether the `claude` CLI is on PATH.
+    pub claude_cli: bool,
+}
+
+#[tauri::command]
+pub async fn key_status() -> Result<KeyStatus, String> {
+    Ok(KeyStatus {
+        anthropic: crate::secrets::get(crate::secrets::ANTHROPIC).is_some(),
+        claude_cli: crate::llm::claude_cli::ClaudeCli::is_available(),
+    })
+}
+
+/// Store an Anthropic API key in the OS keychain.
+///
+/// Checked against the API before saving, so a typo is caught here rather than
+/// surfacing later as a failed extraction.
+#[tauri::command]
+pub async fn set_anthropic_key(key: String) -> Result<Vec<String>, String> {
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        return Err("no key given".into());
+    }
+    let models = crate::llm::anthropic::Anthropic::new(key.clone(), "")
+        .list_models()
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::secrets::set(crate::secrets::ANTHROPIC, &key).map_err(|e| e.to_string())?;
+    Ok(models)
+}
+
+#[tauri::command]
+pub async fn clear_anthropic_key() -> Result<(), String> {
+    crate::secrets::delete(crate::secrets::ANTHROPIC).map_err(|e| e.to_string())
+}

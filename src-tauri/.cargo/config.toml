@@ -1,0 +1,8 @@
+# sherpa-onnx ships as shared libraries that land beside the binary in
+# target/. Without an rpath the packaged app builds cleanly and then fails at
+# startup with "error while loading shared libraries" — so search $ORIGIN.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]

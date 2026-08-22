@@ -1,0 +1,1678 @@
+//! SQLite persistence.
+
+pub mod schema;
+
+use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
+
+use crate::embed;
+use crate::extract::verify::{Rejection, Turn};
+use crate::extract::{Extraction, VerifiedIdea};
+use crate::reconcile::Decision;
+use crate::llm::types::Role;
+use crate::session::transcript::Rendered;
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("database: {0}")]
+    Db(#[from] rusqlite::Error),
+    #[error("writing transcript: {0}")]
+    Io(#[from] std::io::Error),
+    /// Stored offsets no longer select the stored quote. Should be impossible;
+    /// surfaced loudly rather than papered over, because a wrong highlight is
+    /// worse than a missing one.
+    #[error("evidence {evidence_id} no longer matches its source (expected {quote:?}, found {found:?})")]
+    Provenance {
+        evidence_id: i64,
+        quote: String,
+        found: String,
+    },
+}
+
+pub type Result<T> = std::result::Result<T, StoreError>;
+
+pub struct Store {
+    conn: Connection,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionSummary {
+    pub id: i64,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub md_path: Option<String>,
+    pub model: String,
+    pub extract_state: String,
+    pub turn_count: i64,
+    /// How many ideas came out of it — the reason to go back to a conversation.
+    pub idea_count: i64,
+    /// First thing the user said, for identifying a session at a glance.
+    pub opening: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StoredIdea {
+    pub id: i64,
+    pub claim: String,
+    pub evidence: Vec<StoredEvidence>,
+    pub strong: Vec<String>,
+    pub weak: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StoredEvidence {
+    pub id: i64,
+    pub session_id: i64,
+    pub turn_id: i64,
+    pub quote: String,
+    pub start_byte: i64,
+    pub end_byte: i64,
+    pub normalized: bool,
+    pub ambiguous: bool,
+}
+
+/// A conversation's file: the transcript, pre-split around every extracted span.
+///
+/// Split in Rust for the same reason as [`SourceView`] — Rust counts UTF-8
+/// bytes and JavaScript indexes UTF-16 code units, so only whole strings cross
+/// the boundary.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationView {
+    pub session_id: i64,
+    pub started_at: String,
+    pub model: String,
+    pub turns: Vec<ViewTurn>,
+    pub strong: Vec<String>,
+    pub weak: Vec<String>,
+}
+
+/// One turn, split around the spans that produced ideas.
+///
+/// Grouped by turn rather than returned as one flat run, so the reader can show
+/// who is speaking without the `USER:` / `ASSISTANT:` markers leaking through —
+/// those exist to tell the extraction prompt whose words are whose, and are not
+/// something a person should ever have to read.
+#[derive(Debug, Clone, Serialize)]
+pub struct ViewTurn {
+    pub id: i64,
+    pub role: String,
+    pub segments: Vec<Segment>,
+}
+
+/// A run of transcript. Highlighted runs carry the idea they produced.
+#[derive(Debug, Clone, Serialize)]
+pub struct Segment {
+    pub text: String,
+    pub idea_id: Option<i64>,
+    pub claim: Option<String>,
+    /// Why the model read these words as carrying that claim.
+    pub reasoning: Option<String>,
+}
+
+/// An idea's file.
+#[derive(Debug, Clone, Serialize)]
+pub struct IdeaView {
+    pub id: i64,
+    pub claim: String,
+    pub revision: i64,
+    pub strong: Vec<String>,
+    pub weak: Vec<String>,
+    pub evidence: Vec<IdeaEvidence>,
+    pub revisions: Vec<IdeaRevision>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IdeaEvidence {
+    pub id: i64,
+    pub session_id: i64,
+    pub started_at: String,
+    pub quote: String,
+    pub reasoning: String,
+    pub normalized: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IdeaRevision {
+    pub id: i64,
+    pub prev_claim: String,
+    pub new_claim: String,
+    pub confidence: f32,
+    pub created_at: String,
+    pub reverted_at: Option<String>,
+}
+
+/// One node in the bipartite map.
+///
+/// Ids are prefixed (`s3`, `i7`) because conversations and ideas share a single
+/// node namespace in the renderer, and a collision would silently draw edges to
+/// the wrong thing.
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub kind: &'static str,
+    pub label: String,
+    /// Conversations: how many ideas came out of it.
+    /// Ideas: how many conversations it appears in — an idea you keep returning
+    /// to earns a bigger dot.
+    pub weight: i64,
+    pub session_id: Option<i64>,
+    pub idea_id: Option<i64>,
+    /// What the idea is about. Empty for conversations.
+    pub category: String,
+    /// Ideas only: true when more than one conversation supports it. These are
+    /// the nodes that actually connect the map together.
+    pub shared: bool,
+    /// Carried on the node rather than fetched on hover: the hover animation has
+    /// to start in the same frame as the mouse arriving, and a round trip would
+    /// make it stutter. At one person's scale this is a few KB of extra JSON.
+    pub strong: Vec<String>,
+    pub weak: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+    /// `from` (conversation → idea), `related`, or `contradicts`.
+    pub kind: String,
+    pub weight: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Graph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// The honesty metric, as shown in Diagnostics.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Diagnostics {
+    pub ideas: i64,
+    pub rejected: i64,
+    pub drop_rate: f32,
+    /// Ideas found only via the normalized fallback rather than an exact match.
+    /// Still real spans, but worth watching: a rising share means the model is
+    /// paraphrasing quotes rather than copying them.
+    pub normalized: i64,
+    pub sessions_extracted: i64,
+    pub sessions_pending: i64,
+    /// Rejections grouped by reason — `NotFound` climbing means invention,
+    /// `AttributedToAssistant` climbing means the prompt is losing track of who
+    /// said what. Different problems, different fixes.
+    pub by_reason: Vec<(String, i64)>,
+}
+
+/// An archived transcript, pre-split around one highlighted quote.
+///
+/// The split is done here rather than in the UI on purpose. Rust offsets count
+/// UTF-8 bytes; JavaScript strings are indexed in UTF-16 code units. Handing
+/// raw offsets across that boundary works perfectly until someone types an
+/// emoji or an accent, then silently highlights the wrong text — the exact
+/// class of failure the verifier exists to prevent. Slicing on this side means
+/// the boundary only ever carries whole strings.
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceView {
+    pub session_id: i64,
+    pub started_at: String,
+    pub before: String,
+    pub highlight: String,
+    pub after: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StoredTurn {
+    pub id: i64,
+    pub ord: i64,
+    pub role: String,
+    pub text: String,
+    pub start_byte: i64,
+    pub end_byte: i64,
+}
+
+impl Store {
+    pub fn open(path: &Path) -> Result<Self> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let conn = Connection::open(path)?;
+        Self::init(conn)
+    }
+
+    #[cfg(test)]
+    pub fn open_in_memory() -> Result<Self> {
+        Self::init(Connection::open_in_memory()?)
+    }
+
+    fn init(conn: Connection) -> Result<Self> {
+        // Foreign keys are off by default in SQLite; without this the ON DELETE
+        // CASCADE rules in the schema are silently decorative.
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.execute_batch(schema::SCHEMA)?;
+        schema::migrate(&conn)?;
+        conn.pragma_update(None, "user_version", schema::VERSION)?;
+        Ok(Self { conn })
+    }
+
+    /// Archive a finished session.
+    ///
+    /// The transcript and its turn offsets are written in one transaction, so a
+    /// crash can never leave turns pointing into a transcript that was never
+    /// stored. If `md_dir` is given, a markdown copy is written too — the
+    /// database is for the app, the markdown is for the user.
+    pub fn archive_session(
+        &mut self,
+        rendered: &Rendered,
+        model: &str,
+        started_at: DateTime<Utc>,
+        md_dir: Option<&Path>,
+    ) -> Result<i64> {
+        let ended_at = Utc::now();
+
+        // Written before the transaction so a failing disk doesn't leave a
+        // committed session pointing at a file that isn't there.
+        let md_path = match md_dir {
+            Some(dir) => Some(write_markdown(dir, rendered, model, started_at, ended_at)?),
+            None => None,
+        };
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO sessions (started_at, ended_at, md_path, transcript, model, extract_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'pending')",
+            params![
+                started_at.to_rfc3339(),
+                ended_at.to_rfc3339(),
+                md_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+                rendered.text,
+                model,
+            ],
+        )?;
+        let session_id = tx.last_insert_rowid();
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO turns (session_id, ord, role, text, start_byte, end_byte)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for span in &rendered.spans {
+                let role = match span.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                };
+                stmt.execute(params![
+                    session_id,
+                    span.ord as i64,
+                    role,
+                    &rendered.text[span.start..span.end],
+                    span.start as i64,
+                    span.end as i64,
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(session_id)
+    }
+
+    pub fn list_sessions(&self, limit: i64) -> Result<Vec<SessionSummary>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.started_at, s.ended_at, s.md_path, s.model, s.extract_state,
+                    (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id),
+                    (SELECT COUNT(DISTINCT e.idea_id) FROM evidence e WHERE e.session_id = s.id),
+                    COALESCE((SELECT t.text FROM turns t
+                              WHERE t.session_id = s.id AND t.role = 'user'
+                              ORDER BY t.ord LIMIT 1), '')
+             FROM sessions s
+             ORDER BY s.started_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |r| {
+            Ok(SessionSummary {
+                id: r.get(0)?,
+                started_at: r.get(1)?,
+                ended_at: r.get(2)?,
+                md_path: r.get(3)?,
+                model: r.get(4)?,
+                extract_state: r.get(5)?,
+                turn_count: r.get(6)?,
+                idea_count: r.get(7)?,
+                opening: r.get(8)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    pub fn transcript(&self, session_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT transcript FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn turns(&self, session_id: i64) -> Result<Vec<StoredTurn>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ord, role, text, start_byte, end_byte
+             FROM turns WHERE session_id = ?1 ORDER BY ord",
+        )?;
+        let rows = stmt.query_map([session_id], |r| {
+            Ok(StoredTurn {
+                id: r.get(0)?,
+                ord: r.get(1)?,
+                role: r.get(2)?,
+                text: r.get(3)?,
+                start_byte: r.get(4)?,
+                end_byte: r.get(5)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    /// Sessions archived but not yet extracted.
+    ///
+    /// Extraction runs after archiving and can be interrupted by a crash or a
+    /// quit, so it is driven off this queue rather than fired once and hoped
+    /// for. Nothing the user said should be lost to bad timing.
+    pub fn pending_extraction(&self) -> Result<Vec<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM sessions WHERE extract_state IN ('pending','extracting') ORDER BY id")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    /// Turns in the shape the verifier expects.
+    pub fn verify_turns(&self, session_id: i64) -> Result<Vec<Turn>> {
+        Ok(self
+            .turns(session_id)?
+            .into_iter()
+            .map(|t| Turn {
+                id: t.id,
+                role: if t.role == "user" { Role::User } else { Role::Assistant },
+                text: t.text,
+            })
+            .collect())
+    }
+
+    /// Persist one session's extraction.
+    ///
+    /// Ideas are inserted as new here. Milestone 5 puts reconciliation in front
+    /// of this, at which point most extracted ideas will attach evidence to an
+    /// existing bubble instead of creating one.
+    ///
+    /// Rejected ideas are stored too, not discarded — the drop rate can only be
+    /// honest if the failures are kept.
+    pub fn save_extraction(
+        &mut self,
+        session_id: i64,
+        extraction: &Extraction,
+        provider: &str,
+        model: &str,
+    ) -> Result<Vec<i64>> {
+        let now = Utc::now().to_rfc3339();
+        let tx = self.conn.transaction()?;
+        let mut ids = Vec::new();
+
+        for v in &extraction.ideas {
+            tx.execute(
+                "INSERT INTO ideas (claim, revision, created_at, updated_at) VALUES (?1, 0, ?2, ?2)",
+                params![v.raw.claim, now],
+            )?;
+            let idea_id = tx.last_insert_rowid();
+            ids.push(idea_id);
+
+            tx.execute(
+                "INSERT INTO evidence
+                   (idea_id, session_id, turn_id, quote, start_byte, end_byte,
+                    ambiguous, normalized, provider, model, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    idea_id,
+                    session_id,
+                    v.located.turn_id,
+                    v.located.matched_text,
+                    v.located.start_byte as i64,
+                    v.located.end_byte as i64,
+                    v.located.ambiguous as i64,
+                    v.located.normalized_match as i64,
+                    provider,
+                    model,
+                    now,
+                ],
+            )?;
+
+            for (kind, texts) in [("strong", &v.raw.strong_points), ("weak", &v.raw.weak_points)] {
+                for t in texts {
+                    tx.execute(
+                        "INSERT INTO nudges (idea_id, kind, text) VALUES (?1, ?2, ?3)",
+                        params![idea_id, kind, t],
+                    )?;
+                }
+            }
+        }
+
+        for r in &extraction.rejected {
+            let reason = match r.reason {
+                Rejection::NotFound => "not_found",
+                Rejection::AttributedToAssistant => "attributed_to_assistant",
+                Rejection::EmptyQuote => "empty_quote",
+            };
+            tx.execute(
+                "INSERT INTO rejected_ideas (session_id, claim, quote, reason, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![session_id, r.raw.claim, r.raw.quote, reason, now],
+            )?;
+        }
+
+        tx.execute(
+            "UPDATE sessions SET extract_state = 'done', extract_error = NULL WHERE id = ?1",
+            [session_id],
+        )?;
+        tx.commit()?;
+        Ok(ids)
+    }
+
+    pub fn ideas(&self) -> Result<Vec<StoredIdea>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, claim FROM ideas ORDER BY updated_at DESC, id DESC")?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for (id, claim) in rows {
+            let mut ev = self.conn.prepare(
+                "SELECT id, session_id, turn_id, quote, start_byte, end_byte, normalized, ambiguous
+                 FROM evidence WHERE idea_id = ?1 ORDER BY created_at",
+            )?;
+            let evidence = ev
+                .query_map([id], |r| {
+                    Ok(StoredEvidence {
+                        id: r.get(0)?,
+                        session_id: r.get(1)?,
+                        turn_id: r.get(2)?,
+                        quote: r.get(3)?,
+                        start_byte: r.get(4)?,
+                        end_byte: r.get(5)?,
+                        normalized: r.get::<_, i64>(6)? != 0,
+                        ambiguous: r.get::<_, i64>(7)? != 0,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let mut nudge = self
+                .conn
+                .prepare("SELECT kind, text FROM nudges WHERE idea_id = ?1")?;
+            let nudges = nudge
+                .query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            out.push(StoredIdea {
+                id,
+                claim,
+                evidence,
+                strong: nudges.iter().filter(|(k, _)| k == "strong").map(|(_, t)| t.clone()).collect(),
+                weak: nudges.iter().filter(|(k, _)| k == "weak").map(|(_, t)| t.clone()).collect(),
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn diagnostics(&self) -> Result<Diagnostics> {
+        let ideas: i64 = self.conn.query_row("SELECT COUNT(*) FROM ideas", [], |r| r.get(0))?;
+        let rejected: i64 =
+            self.conn.query_row("SELECT COUNT(*) FROM rejected_ideas", [], |r| r.get(0))?;
+        let normalized: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM evidence WHERE normalized = 1", [], |r| r.get(0))?;
+        let done: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE extract_state = 'done'", [], |r| r.get(0))?;
+        let pending: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE extract_state IN ('pending','extracting')",
+            [], |r| r.get(0))?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT reason, COUNT(*) FROM rejected_ideas GROUP BY reason ORDER BY 2 DESC")?;
+        let by_reason = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let total = ideas + rejected;
+        Ok(Diagnostics {
+            ideas,
+            rejected,
+            drop_rate: if total == 0 { 0.0 } else { rejected as f32 / total as f32 },
+            normalized,
+            sessions_extracted: done,
+            sessions_pending: pending,
+            by_reason,
+        })
+    }
+
+    /// The archived transcript, split around one piece of evidence.
+    ///
+    /// Verifies as it goes: the text at those offsets must still equal the quote
+    /// that was stored. If it doesn't, something has drifted, and the honest
+    /// response is an error rather than confidently highlighting the wrong
+    /// sentence.
+    pub fn source_view(&self, evidence_id: i64) -> Result<SourceView> {
+        let (session_id, turn_id, quote, start, end): (i64, i64, String, i64, i64) =
+            self.conn.query_row(
+                "SELECT session_id, turn_id, quote, start_byte, end_byte
+                 FROM evidence WHERE id = ?1",
+                [evidence_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?;
+
+        let (transcript, started_at): (String, String) = self.conn.query_row(
+            "SELECT transcript, started_at FROM sessions WHERE id = ?1",
+            [session_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+
+        // Offsets on `evidence` are relative to the turn; `turns` locates the
+        // turn within the transcript. Combining them is the only correct way to
+        // get an absolute position.
+        let turn_start: i64 = self
+            .conn
+            .query_row("SELECT start_byte FROM turns WHERE id = ?1", [turn_id], |r| r.get(0))?;
+
+        let (abs_start, abs_end) = ((turn_start + start) as usize, (turn_start + end) as usize);
+
+        let valid = abs_end <= transcript.len()
+            && transcript.is_char_boundary(abs_start)
+            && transcript.is_char_boundary(abs_end)
+            && transcript[abs_start..abs_end] == quote;
+
+        if !valid {
+            return Err(StoreError::Provenance {
+                evidence_id,
+                quote,
+                found: transcript
+                    .get(abs_start..abs_end)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "<out of range>".into()),
+            });
+        }
+
+        Ok(SourceView {
+            session_id,
+            started_at,
+            before: transcript[..abs_start].to_string(),
+            highlight: transcript[abs_start..abs_end].to_string(),
+            after: transcript[abs_end..].to_string(),
+        })
+    }
+
+    /// A conversation with every extracted span marked in place.
+    pub fn conversation_view(&self, session_id: i64) -> Result<ConversationView> {
+        let (started_at, model): (String, String) = self.conn.query_row(
+            "SELECT started_at, model FROM sessions WHERE id = ?1",
+            [session_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+
+        // Offsets on `evidence` are relative to the turn, which is exactly the
+        // frame needed here.
+        let mut stmt = self.conn.prepare(
+            "SELECT e.turn_id, e.idea_id, i.claim, e.reasoning, e.start_byte, e.end_byte
+             FROM evidence e JOIN ideas i ON i.id = e.idea_id
+             WHERE e.session_id = ?1
+             ORDER BY e.turn_id, e.start_byte",
+        )?;
+        let spans: Vec<(i64, i64, String, String, usize, usize)> = stmt
+            .query_map([session_id], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get::<_, i64>(4)? as usize,
+                    r.get::<_, i64>(5)? as usize,
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+
+        let mut turns = Vec::new();
+        for turn in self.turns(session_id)? {
+            let text = &turn.text;
+            let mut segments = Vec::new();
+            let mut cursor = 0usize;
+
+            for (_, idea_id, claim, reasoning, start, end) in
+                spans.iter().filter(|s| s.0 == turn.id)
+            {
+                // Skip overlaps and anything that no longer lands on a character
+                // boundary. A mangled highlight is worse than none.
+                if *start < cursor
+                    || *end > text.len()
+                    || start >= end
+                    || !text.is_char_boundary(*start)
+                    || !text.is_char_boundary(*end)
+                {
+                    continue;
+                }
+                if *start > cursor {
+                    segments.push(Segment {
+                        text: text[cursor..*start].to_string(),
+                        idea_id: None,
+                        claim: None,
+                        reasoning: None,
+                    });
+                }
+                segments.push(Segment {
+                    text: text[*start..*end].to_string(),
+                    idea_id: Some(*idea_id),
+                    claim: Some(claim.clone()),
+                    reasoning: Some(reasoning.clone()),
+                });
+                cursor = *end;
+            }
+            if cursor < text.len() {
+                segments.push(Segment {
+                    text: text[cursor..].to_string(),
+                    idea_id: None,
+                    claim: None,
+                    reasoning: None,
+                });
+            }
+
+            turns.push(ViewTurn { id: turn.id, role: turn.role, segments });
+        }
+
+        let (strong, weak) = self.nudges_for("session_nudges", "session_id", session_id)?;
+        Ok(ConversationView { session_id, started_at, model, turns, strong, weak })
+    }
+
+    /// One idea, with everything that supports it and how it has changed.
+    pub fn idea_view(&self, idea_id: i64) -> Result<IdeaView> {
+        let (claim, revision): (String, i64) = self.conn.query_row(
+            "SELECT claim, revision FROM ideas WHERE id = ?1",
+            [idea_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+
+        let mut ev = self.conn.prepare(
+            "SELECT e.id, e.session_id, s.started_at, e.quote, e.reasoning, e.normalized
+             FROM evidence e JOIN sessions s ON s.id = e.session_id
+             WHERE e.idea_id = ?1 ORDER BY s.started_at",
+        )?;
+        let evidence = ev
+            .query_map([idea_id], |r| {
+                Ok(IdeaEvidence {
+                    id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    started_at: r.get(2)?,
+                    quote: r.get(3)?,
+                    reasoning: r.get(4)?,
+                    normalized: r.get::<_, i64>(5)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut rev = self.conn.prepare(
+            "SELECT id, prev_claim, new_claim, confidence, created_at, reverted_at
+             FROM idea_revisions WHERE idea_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let revisions = rev
+            .query_map([idea_id], |r| {
+                Ok(IdeaRevision {
+                    id: r.get(0)?,
+                    prev_claim: r.get(1)?,
+                    new_claim: r.get(2)?,
+                    confidence: r.get(3)?,
+                    created_at: r.get(4)?,
+                    reverted_at: r.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let (strong, weak) = self.nudges_for("nudges", "idea_id", idea_id)?;
+        Ok(IdeaView { id: idea_id, claim, revision, strong, weak, evidence, revisions })
+    }
+
+    /// Every nudge in one table, grouped by owner.
+    fn grouped_nudges(
+        &self,
+        table: &str,
+        column: &str,
+    ) -> Result<std::collections::HashMap<i64, (Vec<String>, Vec<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {column}, kind, text FROM {table}"))?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+
+        let mut out: std::collections::HashMap<i64, (Vec<String>, Vec<String>)> = Default::default();
+        for (id, kind, text) in rows {
+            let entry = out.entry(id).or_default();
+            if kind == "strong" {
+                entry.0.push(text);
+            } else {
+                entry.1.push(text);
+            }
+        }
+        Ok(out)
+    }
+
+    fn nudges_for(&self, table: &str, column: &str, id: i64) -> Result<(Vec<String>, Vec<String>)> {
+        // `table` and `column` are compile-time constants at every call site,
+        // never user input.
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT kind, text FROM {table} WHERE {column} = ?1"))?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok((
+            rows.iter().filter(|(k, _)| k == "strong").map(|(_, t)| t.clone()).collect(),
+            rows.iter().filter(|(k, _)| k == "weak").map(|(_, t)| t.clone()).collect(),
+        ))
+    }
+
+    /// The whole map: conversations, ideas, and what links them.
+    ///
+    /// Small enough to send in one go — a few thousand nodes is a few hundred
+    /// kilobytes of JSON, and paging it would complicate the layout for no
+    /// benefit at the scale a person's own thinking reaches.
+    pub fn graph(&self) -> Result<Graph> {
+        let mut g = Graph::default();
+
+        // Fetched in two queries rather than per node, so a map with hundreds of
+        // nodes is still two round trips to SQLite instead of hundreds.
+        let session_nudges = self.grouped_nudges("session_nudges", "session_id")?;
+        let idea_nudges = self.grouped_nudges("nudges", "idea_id")?;
+
+        let mut sessions = self.conn.prepare(
+            "SELECT s.id, s.started_at,
+                    COALESCE((SELECT t.text FROM turns t
+                              WHERE t.session_id = s.id AND t.role = 'user'
+                              ORDER BY t.ord LIMIT 1), ''),
+                    (SELECT COUNT(DISTINCT e.idea_id) FROM evidence e WHERE e.session_id = s.id)
+             FROM sessions s
+             WHERE EXISTS (SELECT 1 FROM evidence e WHERE e.session_id = s.id)",
+        )?;
+        for row in sessions.query_map([], |r| {
+            let id: i64 = r.get(0)?;
+            let started: String = r.get(1)?;
+            let opening: String = r.get(2)?;
+            let (strong, weak) = session_nudges.get(&id).cloned().unwrap_or_default();
+            Ok(GraphNode {
+                id: format!("s{id}"),
+                kind: "conversation",
+                label: conversation_label(&opening, &started),
+                weight: r.get(3)?,
+                session_id: Some(id),
+                idea_id: None,
+                category: String::new(),
+                shared: false,
+                strong,
+                weak,
+            })
+        })? {
+            g.nodes.push(row?);
+        }
+
+        let mut ideas = self.conn.prepare(
+            "SELECT i.id, i.claim,
+                    (SELECT COUNT(DISTINCT e.session_id) FROM evidence e WHERE e.idea_id = i.id),
+                    i.category
+             FROM ideas i",
+        )?;
+        for row in ideas.query_map([], |r| {
+            let id: i64 = r.get(0)?;
+            let sessions: i64 = r.get(2)?;
+            let (strong, weak) = idea_nudges.get(&id).cloned().unwrap_or_default();
+            Ok(GraphNode {
+                id: format!("i{id}"),
+                kind: "idea",
+                label: r.get(1)?,
+                weight: sessions,
+                session_id: None,
+                idea_id: Some(id),
+                category: r.get(3)?,
+                shared: sessions > 1,
+                strong,
+                weak,
+            })
+        })? {
+            g.nodes.push(row?);
+        }
+
+        // A conversation links to every idea it produced. An idea supported by
+        // two conversations therefore joins them — which is the whole point of
+        // the shape: shared ideas are the only thing connecting one stretch of
+        // thinking to another.
+        let mut from = self
+            .conn
+            .prepare("SELECT DISTINCT session_id, idea_id FROM evidence")?;
+        for row in from.query_map([], |r| {
+            let (s, i): (i64, i64) = (r.get(0)?, r.get(1)?);
+            Ok(GraphEdge {
+                source: format!("s{s}"),
+                target: format!("i{i}"),
+                kind: "from".into(),
+                weight: 1.0,
+            })
+        })? {
+            g.edges.push(row?);
+        }
+
+        // Faint links between ideas judged related but not the same. Without
+        // these a conservative merge threshold leaves the map with no structure
+        // at all; with them it has structure without claiming false identity.
+        let mut rel = self
+            .conn
+            .prepare("SELECT idea_a, idea_b, kind, confidence FROM relations")?;
+        for row in rel.query_map([], |r| {
+            let (a, b): (i64, i64) = (r.get(0)?, r.get(1)?);
+            Ok(GraphEdge {
+                source: format!("i{a}"),
+                target: format!("i{b}"),
+                kind: r.get(2)?,
+                weight: r.get(3)?,
+            })
+        })? {
+            g.edges.push(row?);
+        }
+
+        Ok(g)
+    }
+
+    /// Record the ideas that could not be traced, and mark the session done.
+    ///
+    /// Split from `apply_decision` because reconciliation decides each idea
+    /// individually, while rejections are a property of the session as a whole.
+    pub fn save_rejections(&mut self, session_id: i64, extraction: &Extraction) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let tx = self.conn.transaction()?;
+
+        // Re-extraction of the same session should replace its notes, not
+        // accumulate a second set.
+        tx.execute("DELETE FROM session_nudges WHERE session_id = ?1", [session_id])?;
+        for (kind, texts) in [
+            ("strong", &extraction.conversation.strong_points),
+            ("weak", &extraction.conversation.weak_points),
+        ] {
+            for t in texts {
+                tx.execute(
+                    "INSERT INTO session_nudges (session_id, kind, text) VALUES (?1, ?2, ?3)",
+                    params![session_id, kind, t],
+                )?;
+            }
+        }
+
+        for r in &extraction.rejected {
+            let reason = match r.reason {
+                Rejection::NotFound => "not_found",
+                Rejection::AttributedToAssistant => "attributed_to_assistant",
+                Rejection::EmptyQuote => "empty_quote",
+            };
+            tx.execute(
+                "INSERT INTO rejected_ideas (session_id, claim, quote, reason, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![session_id, r.raw.claim, r.raw.quote, reason, now],
+            )?;
+        }
+        tx.execute(
+            "UPDATE sessions SET extract_state = 'done', extract_error = NULL WHERE id = ?1",
+            [session_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Categories already in use, most-used first.
+    ///
+    /// Offered to the model at extraction time so it reuses a subject it has met
+    /// before rather than inventing a near-synonym.
+    pub fn categories(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT category, COUNT(*) c FROM ideas
+             WHERE category <> '' GROUP BY category ORDER BY c DESC, category
+             LIMIT 40",
+        )?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    /// Every idea with its stored vector, for shortlisting.
+    ///
+    /// Vectors from a different embedding model are skipped rather than
+    /// compared — cosine between two models' spaces is meaningless, and would
+    /// silently produce nonsense candidates.
+    pub fn ideas_with_embeddings(&self) -> Result<Vec<(i64, String, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT i.id, i.claim, e.vec
+             FROM ideas i JOIN embeddings e ON e.idea_id = i.id
+             WHERE e.model = ?1",
+        )?;
+        let rows = stmt.query_map([embed::MODEL_ID], |r| {
+            let blob: Vec<u8> = r.get(2)?;
+            Ok((r.get(0)?, r.get(1)?, embed::unpack(&blob)))
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    /// Ideas whose claim has no vector for the current embedding model.
+    pub fn ideas_needing_embedding(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT i.id, i.claim FROM ideas i
+             WHERE NOT EXISTS (
+               SELECT 1 FROM embeddings e WHERE e.idea_id = i.id AND e.model = ?1
+             )",
+        )?;
+        let rows = stmt.query_map([embed::MODEL_ID], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    pub fn set_embedding(&self, idea_id: i64, vec: &[f32]) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO embeddings (idea_id, dims, vec, model) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(idea_id) DO UPDATE SET dims = ?2, vec = ?3, model = ?4",
+            params![idea_id, vec.len() as i64, embed::pack(vec), embed::MODEL_ID],
+        )?;
+        Ok(())
+    }
+
+    /// Apply one reconciliation decision, returning the idea it landed on.
+    pub fn apply_decision(
+        &mut self,
+        session_id: i64,
+        idea: &VerifiedIdea,
+        decision: &Decision,
+        provider: &str,
+        model: &str,
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+        let tx = self.conn.transaction()?;
+
+        let idea_id = match decision {
+            Decision::New { .. } | Decision::Conflict { .. } => {
+                tx.execute(
+                    "INSERT INTO ideas (claim, category, revision, created_at, updated_at)
+                     VALUES (?1, ?2, 0, ?3, ?3)",
+                    params![idea.raw.claim, normalize_category(&idea.raw.category), now],
+                )?;
+                tx.last_insert_rowid()
+            }
+            Decision::Attach { idea_id, .. } => *idea_id,
+            Decision::Rewrite { idea_id, new_claim, confidence } => {
+                let prev: String =
+                    tx.query_row("SELECT claim FROM ideas WHERE id = ?1", [idea_id], |r| r.get(0))?;
+                tx.execute(
+                    "UPDATE ideas SET claim = ?2, revision = revision + 1, updated_at = ?3
+                     WHERE id = ?1",
+                    params![idea_id, new_claim, now],
+                )?;
+                // History first, so a revert is always possible. A rewrite with
+                // no recoverable previous claim would be destruction, not editing.
+                tx.execute(
+                    "INSERT INTO idea_revisions
+                       (idea_id, prev_claim, new_claim, verdict, confidence, created_at)
+                     VALUES (?1, ?2, ?3, 'refines', ?4, ?5)",
+                    params![idea_id, prev, new_claim, confidence, now],
+                )?;
+                *idea_id
+            }
+        };
+
+        tx.execute(
+            "INSERT INTO evidence
+               (idea_id, session_id, turn_id, quote, start_byte, end_byte,
+                ambiguous, normalized, reasoning, provider, model, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                idea_id,
+                session_id,
+                idea.located.turn_id,
+                idea.located.matched_text,
+                idea.located.start_byte as i64,
+                idea.located.end_byte as i64,
+                idea.located.ambiguous as i64,
+                idea.located.normalized_match as i64,
+                idea.raw.reasoning,
+                provider,
+                model,
+                now,
+            ],
+        )?;
+
+        // Nudges belong to the new phrasing; only add them for a fresh bubble.
+        if matches!(decision, Decision::New { .. } | Decision::Conflict { .. }) {
+            for (kind, texts) in [
+                ("strong", &idea.raw.strong_points),
+                ("weak", &idea.raw.weak_points),
+            ] {
+                for t in texts {
+                    tx.execute(
+                        "INSERT INTO nudges (idea_id, kind, text) VALUES (?1, ?2, ?3)",
+                        params![idea_id, kind, t],
+                    )?;
+                }
+            }
+        }
+
+        match decision {
+            Decision::New { related } => {
+                for (other, sim) in related {
+                    relate(&tx, idea_id, *other, "related", *sim, &now)?;
+                }
+            }
+            Decision::Conflict { idea_id: other, confidence } => {
+                relate(&tx, idea_id, *other, "contradicts", *confidence, &now)?;
+            }
+            _ => {}
+        }
+
+        tx.commit()?;
+        Ok(idea_id)
+    }
+
+    /// Undo a rewrite, restoring the previous claim.
+    pub fn revert_revision(&mut self, revision_id: i64) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let tx = self.conn.transaction()?;
+        let (idea_id, prev): (i64, String) = tx.query_row(
+            "SELECT idea_id, prev_claim FROM idea_revisions
+             WHERE id = ?1 AND reverted_at IS NULL",
+            [revision_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        tx.execute(
+            "UPDATE ideas SET claim = ?2, updated_at = ?3 WHERE id = ?1",
+            params![idea_id, prev, now],
+        )?;
+        tx.execute(
+            "UPDATE idea_revisions SET reverted_at = ?2 WHERE id = ?1",
+            params![revision_id, now],
+        )?;
+        // The vector described the claim that has just been undone.
+        tx.execute("DELETE FROM embeddings WHERE idea_id = ?1", [idea_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Undo one session's extraction, so it can be run again.
+    ///
+    /// Needed whenever the extraction prompt changes — which it will, since
+    /// prompt quality *is* product quality here — and to recover from a bad run.
+    ///
+    /// **Destructive, and deliberately narrow.** It removes only what this
+    /// session contributed: its evidence, its notes, its rejections. An idea
+    /// that other conversations also support survives, minus this session's
+    /// quote. Only ideas left with no evidence at all are removed, because an
+    /// idea with nothing behind it is exactly what the provenance rule forbids.
+    ///
+    /// Returns (evidence removed, ideas orphaned).
+    pub fn clear_extraction(&mut self, session_id: i64) -> Result<(usize, usize)> {
+        let tx = self.conn.transaction()?;
+
+        let evidence = tx.execute("DELETE FROM evidence WHERE session_id = ?1", [session_id])?;
+        tx.execute("DELETE FROM session_nudges WHERE session_id = ?1", [session_id])?;
+        tx.execute("DELETE FROM rejected_ideas WHERE session_id = ?1", [session_id])?;
+
+        // Cascades take the nudges, embeddings, positions and relations with them.
+        let orphans = tx.execute(
+            "DELETE FROM ideas WHERE NOT EXISTS (
+               SELECT 1 FROM evidence e WHERE e.idea_id = ideas.id
+             )",
+            [],
+        )?;
+
+        tx.execute(
+            "UPDATE sessions SET extract_state = 'pending', extract_error = NULL WHERE id = ?1",
+            [session_id],
+        )?;
+        tx.commit()?;
+        Ok((evidence, orphans))
+    }
+
+    /// Delete a conversation and everything derived from it.
+    ///
+    /// Someone's own thinking is theirs to remove. Ideas supported only by this
+    /// conversation go with it; ideas other conversations also support stay.
+    pub fn delete_session(&mut self, session_id: i64) -> Result<()> {
+        let md_path: Option<String> = self
+            .conn
+            .query_row("SELECT md_path FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+            .optional()?
+            .flatten();
+
+        let tx = self.conn.transaction()?;
+        // Turns, evidence, and notes go by cascade.
+        tx.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        tx.execute(
+            "DELETE FROM ideas WHERE NOT EXISTS (
+               SELECT 1 FROM evidence e WHERE e.idea_id = ideas.id
+             )",
+            [],
+        )?;
+        tx.commit()?;
+
+        // The markdown copy is the user's own file. Removed only after the
+        // database change committed, so a failure here cannot orphan the row.
+        if let Some(path) = md_path {
+            std::fs::remove_file(path).ok();
+        }
+        Ok(())
+    }
+
+    /// Delete one idea and its evidence, leaving the conversations untouched.
+    pub fn delete_idea(&mut self, idea_id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM ideas WHERE id = ?1", [idea_id])?;
+        Ok(())
+    }
+
+    /// Clear `extracting` marks left behind by a crash or a hard quit.
+    ///
+    /// Called at startup. Without it a session interrupted mid-extraction stays
+    /// marked as in-progress forever, and the queue quietly skips it — the user
+    /// loses that session's ideas with no error anywhere.
+    pub fn reset_stale_extractions(&self) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE sessions SET extract_state = 'pending'
+             WHERE extract_state = 'extracting'",
+            [],
+        )?)
+    }
+
+    pub fn set_extract_state(&self, session_id: i64, state: &str, error: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET extract_state = ?2, extract_error = ?3 WHERE id = ?1",
+            params![session_id, state, error],
+        )?;
+        Ok(())
+    }
+}
+
+/// Trim a model-supplied category into something usable as a key.
+///
+/// Lowercased and squeezed so "Moral Philosophy" and "moral  philosophy" do not
+/// become two colours on the map.
+fn normalize_category(raw: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    cleaned.chars().take(40).collect()
+}
+
+/// A conversation's name: its date, then its opening words.
+///
+/// People recognise their own first sentence far faster than a timestamp, so the
+/// words carry it — but the date leads, because the first idea extracted from a
+/// conversation very often quotes that same opening sentence, and two nodes
+/// showing identical text next to each other is unreadable.
+fn conversation_label(opening: &str, started_at: &str) -> String {
+    let date = started_at.get(..10).unwrap_or(started_at);
+    let trimmed = opening.trim();
+    if trimmed.is_empty() {
+        return date.to_string();
+    }
+    let mut words: String = trimmed.chars().take(46).collect();
+    if trimmed.chars().count() > 46 {
+        words.push('…');
+    }
+    format!("{date} · {words}")
+}
+
+fn relate(
+    tx: &rusqlite::Transaction<'_>,
+    a: i64,
+    b: i64,
+    kind: &str,
+    confidence: f32,
+    now: &str,
+) -> Result<()> {
+    if a == b {
+        return Ok(());
+    }
+    // Stored with the lower id first so the pair is recorded once, not twice.
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    tx.execute(
+        "INSERT OR IGNORE INTO relations (idea_a, idea_b, kind, confidence, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![lo, hi, kind, confidence, now],
+    )?;
+    Ok(())
+}
+
+/// Write the human-readable copy.
+///
+/// Plain markdown in a folder the user picked, so their thinking is never
+/// trapped in our database — readable by Obsidian, grep, or anything else, and
+/// still there if this project is abandoned.
+fn write_markdown(
+    dir: &Path,
+    rendered: &Rendered,
+    model: &str,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let stamp = started_at.format("%Y-%m-%d-%H%M%S");
+    let path = dir.join(format!("{stamp}.md"));
+
+    let body = format!(
+        "---\nstarted: {}\nended: {}\nmodel: {}\n---\n\n{}\n",
+        started_at.to_rfc3339(),
+        ended_at.to_rfc3339(),
+        model,
+        rendered.text,
+    );
+    std::fs::write(&path, body)?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::types::Message;
+    use crate::session::transcript;
+
+    fn convo() -> Vec<Message> {
+        vec![
+            Message { role: Role::User, content: "latency is the problem".into() },
+            Message { role: Role::Assistant, content: "say more".into() },
+            Message { role: Role::User, content: "caf\u{e9} \u{1F600} it compounds".into() },
+        ]
+    }
+
+    #[test]
+    fn archived_turns_index_the_stored_transcript() {
+        let mut store = Store::open_in_memory().unwrap();
+        let rendered = transcript::render(&convo());
+        let id = store.archive_session(&rendered, "test-model", Utc::now(), None).unwrap();
+
+        let stored = store.transcript(id).unwrap().unwrap();
+        assert_eq!(stored, rendered.text);
+
+        // The guarantee that matters: every stored offset still selects the
+        // stored turn text, after a full round trip through the database.
+        for turn in store.turns(id).unwrap() {
+            let (s, e) = (turn.start_byte as usize, turn.end_byte as usize);
+            assert_eq!(&stored[s..e], turn.text, "turn {} offsets drifted", turn.ord);
+        }
+    }
+
+    #[test]
+    fn markdown_copy_contains_the_transcript() {
+        let dir = std::env::temp_dir().join(format!("ideagraph-test-{}", std::process::id()));
+        let mut store = Store::open_in_memory().unwrap();
+        let rendered = transcript::render(&convo());
+        let id = store.archive_session(&rendered, "m", Utc::now(), Some(&dir)).unwrap();
+
+        let summary = &store.list_sessions(10).unwrap()[0];
+        assert_eq!(summary.id, id);
+        let path = summary.md_path.clone().expect("markdown path recorded");
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("latency is the problem"));
+        assert!(body.contains("model: m"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn summary_shows_the_opening_user_line() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
+        let s = &store.list_sessions(10).unwrap()[0];
+        assert_eq!(s.opening, "latency is the problem");
+        assert_eq!(s.turn_count, 3);
+        assert_eq!(s.extract_state, "pending");
+    }
+
+    #[test]
+    fn extraction_queue_tracks_state() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
+        assert_eq!(store.pending_extraction().unwrap(), vec![id]);
+
+        store.set_extract_state(id, "done", None).unwrap();
+        assert!(store.pending_extraction().unwrap().is_empty());
+    }
+
+    /// The full chain: extract → verify → store → read back → highlight.
+    ///
+    /// Deliberately stuffed with emoji and accents *before* the quote, so any
+    /// byte/char confusion anywhere in the chain shifts the highlight and fails
+    /// here rather than in front of a user.
+    #[test]
+    fn source_view_highlights_the_real_words_through_multibyte_text() {
+        use crate::extract::verify::{self, Turn};
+        use crate::extract::{Extraction, VerifiedIdea};
+        use crate::llm::types::RawIdea;
+
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: "caf\u{e9} \u{1F600} \u{1F680} na\u{ef}ve — latency is the real problem".into(),
+            },
+            Message { role: Role::Assistant, content: "\u{1F914} say more".into() },
+            Message { role: Role::User, content: "\u{e9}verything compounds".into() },
+        ];
+
+        let mut store = Store::open_in_memory().unwrap();
+        let rendered = transcript::render(&messages);
+        let session_id = store.archive_session(&rendered, "m", Utc::now(), None).unwrap();
+
+        let turns: Vec<Turn> = store.verify_turns(session_id).unwrap();
+        let raw = RawIdea {
+            claim: "Latency is the real problem".into(),
+            quote: "latency is the real problem".into(),
+            reasoning: String::new(),
+            category: String::new(),
+            strong_points: vec![],
+            weak_points: vec![],
+        };
+        let located = verify::verify(&raw, &turns).expect("quote should verify");
+
+        let extraction = Extraction {
+            ideas: vec![VerifiedIdea { raw, located }],
+            rejected: vec![],
+            retried: false,
+            conversation: Default::default(),
+        };
+        store.save_extraction(session_id, &extraction, "test", "m").unwrap();
+
+        let idea = &store.ideas().unwrap()[0];
+        let view = store.source_view(idea.evidence[0].id).unwrap();
+
+        assert_eq!(view.highlight, "latency is the real problem");
+        // And it must sit in the right place, not merely contain the right text.
+        assert_eq!(
+            format!("{}{}{}", view.before, view.highlight, view.after),
+            store.transcript(session_id).unwrap().unwrap()
+        );
+        assert!(view.before.contains("caf\u{e9}"));
+        assert!(view.after.contains("compounds"));
+    }
+
+    #[test]
+    fn source_view_refuses_to_highlight_drifted_offsets() {
+        use crate::extract::verify::{self, Turn};
+        use crate::extract::{Extraction, VerifiedIdea};
+        use crate::llm::types::RawIdea;
+
+        let mut store = Store::open_in_memory().unwrap();
+        let rendered = transcript::render(&[Message {
+            role: Role::User,
+            content: "latency is the real problem".into(),
+        }]);
+        let session_id = store.archive_session(&rendered, "m", Utc::now(), None).unwrap();
+        let turns: Vec<Turn> = store.verify_turns(session_id).unwrap();
+        let raw = RawIdea {
+            claim: "c".into(),
+            quote: "latency".into(),
+            reasoning: String::new(),
+            category: String::new(),
+            strong_points: vec![],
+            weak_points: vec![],
+        };
+        let located = verify::verify(&raw, &turns).unwrap();
+        store
+            .save_extraction(
+                session_id,
+                &Extraction {
+                    ideas: vec![VerifiedIdea { raw, located }],
+                    rejected: vec![],
+                    retried: false,
+                    conversation: Default::default(),
+                },
+                "t",
+                "m",
+            )
+            .unwrap();
+
+        // Corrupt the stored offsets, as a bad migration might.
+        store
+            .conn
+            .execute("UPDATE evidence SET start_byte = start_byte + 3", [])
+            .unwrap();
+
+        let id = store.ideas().unwrap()[0].evidence[0].id;
+        assert!(
+            matches!(store.source_view(id), Err(StoreError::Provenance { .. })),
+            "a drifted highlight must error, never render"
+        );
+    }
+
+    fn verified(claim: &str, quote: &str, turns: &[crate::extract::verify::Turn]) -> VerifiedIdea {
+        use crate::llm::types::RawIdea;
+        let raw = RawIdea {
+            claim: claim.into(),
+            quote: quote.into(),
+            reasoning: "because they said so".into(),
+            category: "testing".into(),
+            strong_points: vec!["s".into()],
+            weak_points: vec!["w".into()],
+        };
+        let located = crate::extract::verify::verify(&raw, turns).expect("verify");
+        VerifiedIdea { raw, located }
+    }
+
+    fn session_with(store: &mut Store, text: &str) -> (i64, Vec<crate::extract::verify::Turn>) {
+        let rendered = transcript::render(&[Message { role: Role::User, content: text.into() }]);
+        let id = store.archive_session(&rendered, "m", Utc::now(), None).unwrap();
+        let turns = store.verify_turns(id).unwrap();
+        (id, turns)
+    }
+
+    /// The plan's worked example, end to end through the database.
+    #[test]
+    fn a_refinement_rewrites_the_bubble_and_keeps_both_quotes() {
+        let mut store = Store::open_in_memory().unwrap();
+
+        let (s1, t1) = session_with(&mut store, "Trump is a bad man");
+        let first = verified("Trump is a bad man", "Trump is a bad man", &t1);
+        let idea_id = store
+            .apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m")
+            .unwrap();
+
+        let (s2, t2) = session_with(&mut store, "he acts like a bad person in certain circumstances");
+        let second = verified(
+            "He acts badly in certain circumstances",
+            "he acts like a bad person in certain circumstances",
+            &t2,
+        );
+        let same = store
+            .apply_decision(
+                s2,
+                &second,
+                &Decision::Rewrite {
+                    idea_id,
+                    new_claim: "He acts badly in certain circumstances".into(),
+                    confidence: 0.9,
+                },
+                "t",
+                "m",
+            )
+            .unwrap();
+
+        assert_eq!(same, idea_id, "a refinement must not create a second bubble");
+
+        let ideas = store.ideas().unwrap();
+        assert_eq!(ideas.len(), 1, "one idea, not two");
+        assert_eq!(ideas[0].claim, "He acts badly in certain circumstances");
+        assert_eq!(ideas[0].evidence.len(), 2, "both moments support it");
+        assert_eq!(
+            ideas[0].evidence[0].session_id, s1,
+            "the original quote survives the rewrite"
+        );
+    }
+
+    #[test]
+    fn a_rewrite_can_always_be_undone() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (s1, t1) = session_with(&mut store, "Trump is a bad man");
+        let first = verified("Trump is a bad man", "Trump is a bad man", &t1);
+        let idea_id = store
+            .apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m")
+            .unwrap();
+
+        let (s2, t2) = session_with(&mut store, "he acts like a bad person sometimes");
+        let second = verified("Nuanced", "he acts like a bad person sometimes", &t2);
+        store
+            .apply_decision(
+                s2,
+                &second,
+                &Decision::Rewrite { idea_id, new_claim: "Nuanced".into(), confidence: 0.9 },
+                "t",
+                "m",
+            )
+            .unwrap();
+
+        let revision: i64 = store
+            .conn
+            .query_row("SELECT id FROM idea_revisions WHERE idea_id = ?1", [idea_id], |r| r.get(0))
+            .unwrap();
+        store.revert_revision(revision).unwrap();
+
+        assert_eq!(store.ideas().unwrap()[0].claim, "Trump is a bad man");
+        // Reverting twice must not silently re-apply anything.
+        assert!(store.revert_revision(revision).is_err());
+    }
+
+    #[test]
+    fn attaching_adds_evidence_without_duplicating_nudges() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (s1, t1) = session_with(&mut store, "latency is the problem");
+        let first = verified("Latency is the problem", "latency is the problem", &t1);
+        let idea_id = store
+            .apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m")
+            .unwrap();
+
+        let (s2, t2) = session_with(&mut store, "latency is the problem");
+        let again = verified("Latency is the problem", "latency is the problem", &t2);
+        store
+            .apply_decision(s2, &again, &Decision::Attach { idea_id, confidence: 0.9 }, "t", "m")
+            .unwrap();
+
+        let ideas = store.ideas().unwrap();
+        assert_eq!(ideas.len(), 1);
+        assert_eq!(ideas[0].evidence.len(), 2);
+        assert_eq!(ideas[0].strong.len(), 1, "nudges belong to the bubble, not each quote");
+    }
+
+    #[test]
+    fn embeddings_from_another_model_are_not_offered_for_comparison() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (s1, t1) = session_with(&mut store, "latency is the problem");
+        let idea = verified("Latency", "latency is the problem", &t1);
+        let id = store
+            .apply_decision(s1, &idea, &Decision::New { related: vec![] }, "t", "m")
+            .unwrap();
+
+        store.set_embedding(id, &[0.1; 384]).unwrap();
+        assert_eq!(store.ideas_with_embeddings().unwrap().len(), 1);
+        assert!(store.ideas_needing_embedding().unwrap().is_empty());
+
+        store
+            .conn
+            .execute("UPDATE embeddings SET model = 'some-other-model'", [])
+            .unwrap();
+        assert!(
+            store.ideas_with_embeddings().unwrap().is_empty(),
+            "cosine across two models' spaces is meaningless"
+        );
+        assert_eq!(store.ideas_needing_embedding().unwrap().len(), 1, "so it is re-embedded");
+    }
+
+    #[test]
+    fn a_shared_idea_joins_two_conversations() {
+        let mut store = Store::open_in_memory().unwrap();
+
+        let (s1, t1) = session_with(&mut store, "latency is the problem");
+        let a = verified("Latency is the problem", "latency is the problem", &t1);
+        let idea_id = store
+            .apply_decision(s1, &a, &Decision::New { related: vec![] }, "t", "m")
+            .unwrap();
+
+        let (s2, t2) = session_with(&mut store, "latency is the problem");
+        let b = verified("Latency is the problem", "latency is the problem", &t2);
+        store
+            .apply_decision(s2, &b, &Decision::Attach { idea_id, confidence: 0.9 }, "t", "m")
+            .unwrap();
+
+        let g = store.graph().unwrap();
+
+        let idea = g.nodes.iter().find(|n| n.idea_id == Some(idea_id)).unwrap();
+        assert!(idea.shared, "an idea in two conversations is shared");
+        assert_eq!(idea.weight, 2);
+
+        // The structural claim: both conversations reach the same idea node, so
+        // the map is connected rather than two separate stars.
+        let to_idea: Vec<_> = g
+            .edges
+            .iter()
+            .filter(|e| e.target == format!("i{idea_id}") && e.kind == "from")
+            .map(|e| e.source.clone())
+            .collect();
+        assert_eq!(to_idea.len(), 2);
+        assert!(to_idea.contains(&format!("s{s1}")));
+        assert!(to_idea.contains(&format!("s{s2}")));
+    }
+
+    #[test]
+    fn a_conversation_with_no_ideas_is_not_drawn() {
+        // An empty star would be noise: nothing came out of it, so it says
+        // nothing about the person's thinking.
+        let mut store = Store::open_in_memory().unwrap();
+        session_with(&mut store, "just saying hello");
+        assert!(store.graph().unwrap().nodes.is_empty());
+    }
+
+    #[test]
+    fn related_ideas_are_linked_without_being_merged() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (s1, t1) = session_with(&mut store, "latency is the problem");
+        let first = verified("Latency is the problem", "latency is the problem", &t1);
+        let a = store
+            .apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m")
+            .unwrap();
+
+        let (s2, t2) = session_with(&mut store, "speed matters most of all");
+        let second = verified("Speed matters most", "speed matters most of all", &t2);
+        let b = store
+            .apply_decision(s2, &second, &Decision::New { related: vec![(a, 0.7)] }, "t", "m")
+            .unwrap();
+
+        assert_ne!(a, b, "related is not the same as merged");
+        let g = store.graph().unwrap();
+        assert_eq!(
+            g.edges.iter().filter(|e| e.kind == "related").count(),
+            1,
+            "one faint link between two distinct ideas"
+        );
+    }
+
+    #[test]
+    fn conversations_are_labelled_by_their_opening_words() {
+        assert_eq!(
+            conversation_label("Trump is a bad man", "2026-08-22T10:00:00Z"),
+            "2026-08-22 · Trump is a bad man"
+        );
+        assert_eq!(conversation_label("   ", "2026-08-22T10:00:00Z"), "2026-08-22");
+        let long = "x".repeat(100);
+        assert!(
+            conversation_label(&long, "2026-08-22").ends_with('…'),
+            "long openings are truncated"
+        );
+    }
+
+    #[test]
+    fn deleting_a_session_takes_its_turns_with_it() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
+        store.conn.execute("DELETE FROM sessions WHERE id = ?1", [id]).unwrap();
+        assert!(store.turns(id).unwrap().is_empty(), "cascade did not fire");
+    }
+}

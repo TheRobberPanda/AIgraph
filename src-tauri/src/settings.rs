@@ -1,0 +1,167 @@
+//! User settings.
+//!
+//! Stored as JSON next to the database rather than inside it. It is a handful of
+//! values a person might reasonably want to read, edit, or copy between machines
+//! without a SQL client — which fits the rest of the app's local-first, nothing-
+//! locked-away stance.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::llm::detect::LocalKind;
+
+/// Which model, on which server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelChoice {
+    pub kind: LocalKind,
+    pub host: String,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    Auto,
+    Dark,
+    Light,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub theme: Theme,
+    /// Minutes of silence before a session is considered finished.
+    pub idle_minutes: u32,
+    /// Where the plain-markdown copies go. Empty means the default location.
+    pub transcripts_dir: String,
+    /// The model you talk to.
+    pub chat: Option<ModelChoice>,
+    /// The model that reads sessions afterwards.
+    ///
+    /// Separate from `chat` on purpose. Extraction is a mechanical structured
+    /// task where a small fast model does fine, while conversation may want a
+    /// larger one — and tying them together means paying for the large model
+    /// twice.
+    pub extraction: Option<ModelChoice>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: Theme::Auto,
+            idle_minutes: 30,
+            transcripts_dir: String::new(),
+            chat: None,
+            extraction: None,
+        }
+    }
+}
+
+impl Settings {
+    fn path(dir: &Path) -> PathBuf {
+        dir.join("settings.json")
+    }
+
+    /// Read settings, falling back to defaults.
+    ///
+    /// A corrupt or half-written file yields defaults rather than an error: it
+    /// is a preferences file, and refusing to start over it would be absurd.
+    pub fn load(dir: &Path) -> Self {
+        std::fs::read_to_string(Self::path(dir))
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, dir: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        let body = serde_json::to_string_pretty(self)?;
+        // Write beside, then rename, so an interrupted save cannot leave a
+        // truncated file that reads back as defaults.
+        let tmp = Self::path(dir).with_extension("json.tmp");
+        std::fs::write(&tmp, body)?;
+        std::fs::rename(tmp, Self::path(dir))
+    }
+
+    /// Where transcripts should be written.
+    pub fn transcripts_path(&self, default_dir: &Path) -> PathBuf {
+        if self.transcripts_dir.trim().is_empty() {
+            default_dir.to_path_buf()
+        } else {
+            PathBuf::from(&self.transcripts_dir)
+        }
+    }
+
+    pub fn idle_timeout(&self) -> std::time::Duration {
+        // A zero timeout would archive a session the moment you paused to think,
+        // which is exactly when people pause.
+        std::time::Duration::from_secs(60 * self.idle_minutes.max(1) as u64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A directory per test. Tests run in parallel, and sharing one meant they
+    /// deleted each other's files mid-run.
+    fn tmpdir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ig-settings-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn round_trips() {
+        let dir = tmpdir("round");
+        let mut s = Settings::default();
+        s.theme = Theme::Dark;
+        s.idle_minutes = 5;
+        s.chat = Some(ModelChoice {
+            kind: LocalKind::LmStudio,
+            host: "http://x/v1".into(),
+            model: "m".into(),
+        });
+        s.save(&dir).unwrap();
+
+        let back = Settings::load(&dir);
+        assert_eq!(back.theme, Theme::Dark);
+        assert_eq!(back.idle_minutes, 5);
+        assert_eq!(back.chat.unwrap().model, "m");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_corrupt_file_yields_defaults_rather_than_failing() {
+        let dir = tmpdir("corrupt");
+        std::fs::write(Settings::path(&dir), "{ not json").unwrap();
+        assert_eq!(Settings::load(&dir).idle_minutes, 30);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_fields_fall_back_rather_than_wiping_the_file() {
+        // An older settings file, or one edited by hand, must still load.
+        let dir = tmpdir("partial");
+        std::fs::write(Settings::path(&dir), r#"{"idle_minutes": 7}"#).unwrap();
+        let s = Settings::load(&dir);
+        assert_eq!(s.idle_minutes, 7);
+        assert_eq!(s.theme, Theme::Auto);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn idle_timeout_never_collapses_to_nothing() {
+        let mut s = Settings::default();
+        s.idle_minutes = 0;
+        assert_eq!(s.idle_timeout().as_secs(), 60, "a pause to think is not the end");
+    }
+
+    #[test]
+    fn transcripts_default_when_unset() {
+        let s = Settings::default();
+        assert_eq!(s.transcripts_path(Path::new("/tmp/def")), PathBuf::from("/tmp/def"));
+    }
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Idea Graph",
+  "version": "0.1.0",
+  "identifier": "dev.ideagraph.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Idea Graph",
+        "width": 1400,
+        "height": 920,
+        "minWidth": 640,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [],
+        "files": {
+          "/usr/bin/libsherpa-onnx-c-api.so": "target/release/libsherpa-onnx-c-api.so",
+          "/usr/bin/libsherpa-onnx-cxx-api.so": "target/release/libsherpa-onnx-cxx-api.so",
+          "/usr/bin/libonnxruntime.so": "target/release/libonnxruntime.so"
+        }
+      }
+    }
+  }
+}

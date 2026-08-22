@@ -1,0 +1,50 @@
+[package]
+name = "idea-graph"
+version = "0.1.0"
+description = "Think out loud, get a map back"
+authors = ["Idea Graph contributors"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "idea_graph_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+
+rusqlite = { version = "0.32", features = ["bundled", "chrono", "uuid"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+async-trait = "0.1"
+# Speech recognition. `download-binaries` pulls prebuilt sherpa-onnx rather than
+# compiling C++ here; `tts` is off since we only transcribe.
+sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries"] }
+cpal = "0.18"
+fastembed = "6"
+tar = "0.4"
+ureq = "2"
+bzip2 = "0.4"
+
+keyring = { version = "3", features = ["linux-native", "apple-native", "windows-native"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+hound = "3"

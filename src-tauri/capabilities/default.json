@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimum the UI needs: invoke our own commands, and listen for the streaming-token events they emit.",
+  "windows": ["main"],
+  "permissions": ["core:default", "opener:default"]
+}
