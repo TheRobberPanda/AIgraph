@@ -17,6 +17,8 @@ export interface Evidence {
 export interface Idea {
   id: number;
   claim: string;
+  /** A short, glanceable name, written from context rather than sliced from the claim. */
+  title: string;
   evidence: Evidence[];
   strong: string[];
   weak: string[];

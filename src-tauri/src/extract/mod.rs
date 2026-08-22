@@ -204,6 +204,7 @@ mod tests {
     fn idea(quote: &str) -> RawIdea {
         RawIdea {
             claim: "c".into(),
+            title: String::new(),
             quote: quote.into(),
             reasoning: String::new(),
             category: String::new(),

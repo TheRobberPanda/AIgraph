@@ -137,7 +137,7 @@ impl ChatProvider for Anthropic {
         req: &ChatRequest,
         on_chunk: &(dyn for<'a> Fn(ChunkKind, &'a str) + Send + Sync),
     ) -> Result<String, LlmError> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": req.model,
             "max_tokens": CHAT_MAX_TOKENS,
             "messages": messages_json(&req.messages),
@@ -146,6 +146,9 @@ impl ChatProvider for Anthropic {
             // as working rather than as a frozen screen.
             "thinking": { "type": "adaptive", "display": "summarized" },
         });
+        if let Some(system) = &req.system {
+            body["system"] = serde_json::json!(system);
+        }
 
         let resp = self
             .post("/messages")

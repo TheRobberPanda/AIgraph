@@ -41,7 +41,7 @@ impl ClaudeCli {
     ///
     /// The prompt goes in on stdin rather than as an argument: transcripts run to
     /// tens of kilobytes and would blow past the command-line length limit.
-    async fn run(&self, prompt: &str) -> Result<String, LlmError> {
+    async fn run(&self, prompt: &str, system: Option<&str>) -> Result<String, LlmError> {
         let mut cmd = tokio::process::Command::new("claude");
         cmd.arg("-p")
             .arg("--output-format")
@@ -51,6 +51,9 @@ impl ClaudeCli {
             .stderr(std::process::Stdio::piped());
         if let Some(model) = &self.model {
             cmd.arg("--model").arg(model);
+        }
+        if let Some(system) = system {
+            cmd.arg("--append-system-prompt").arg(system);
         }
 
         let mut child = cmd
@@ -131,7 +134,7 @@ impl ChatProvider for ClaudeCli {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        let reply = self.run(&prompt).await?;
+        let reply = self.run(&prompt, req.system.as_deref()).await?;
         // No token stream from the CLI, so the whole reply arrives at once.
         on_chunk(ChunkKind::Content, &reply);
         Ok(reply)
@@ -150,10 +153,10 @@ impl IdeaExtractor for ClaudeCli {
         known_categories: &[String],
     ) -> Result<crate::extract::prompt::Extracted, LlmError> {
         let raw = self
-            .run(&crate::extract::prompt::build_with_categories(
-                transcript,
-                known_categories,
-            ))
+            .run(
+                &crate::extract::prompt::build_with_categories(transcript, known_categories),
+                None,
+            )
             .await?;
         crate::extract::prompt::parse(&raw)
     }
@@ -161,7 +164,7 @@ impl IdeaExtractor for ClaudeCli {
     async fn judge(&self, prompt: &str, _schema: serde_json::Value) -> Result<String, LlmError> {
         // No schema enforcement through the CLI, so the parsers' leniency about
         // chatty wrappers is doing the work here.
-        self.run(prompt).await
+        self.run(prompt, None).await
     }
 
     fn model_id(&self) -> String {

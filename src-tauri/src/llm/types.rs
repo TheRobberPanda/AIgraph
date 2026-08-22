@@ -15,16 +15,15 @@ pub struct Message {
 
 /// The complete outgoing chat payload.
 ///
-/// This struct is the chat-purity guarantee made structural. There is no
-/// `system` field, no `tools` field, and no `instructions` field — so no future
-/// feature can quietly add app instructions to a user's conversation without a
-/// visible change to this type and the test that guards it.
-///
-/// `Role` has no `System` variant for the same reason.
+/// No `tools` field, no `instructions` field, no retrieved context. `system` is
+/// the one deliberate exception — see `chat::style` — and it is always the
+/// same fixed string, never built from the user's words or from extraction.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
 }
 
 /// One idea as the model reported it — before verification.
@@ -36,6 +35,10 @@ pub struct ChatRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawIdea {
     pub claim: String,
+    /// A short, glanceable name for this idea, written from what it means in
+    /// context rather than sliced out of the claim's own wording.
+    #[serde(default)]
+    pub title: String,
     pub quote: String,
     /// Why this passage yields this claim. Shown on hover in a conversation's
     /// deep dive, so the extraction is inspectable rather than magic.

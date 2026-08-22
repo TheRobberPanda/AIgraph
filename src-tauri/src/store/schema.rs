@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS turns (
 CREATE TABLE IF NOT EXISTS ideas (
     id         INTEGER PRIMARY KEY,
     claim      TEXT NOT NULL,
+    -- A short, glanceable name for the idea, written from its context rather
+    -- than sliced out of the claim — "Giving as a hedge against envy", not the
+    -- first sixty characters of the sentence.
+    title      TEXT NOT NULL DEFAULT '',
     -- What the idea is about. Colours the map by subject rather than by which
     -- conversation happened to produce it.
     category   TEXT NOT NULL DEFAULT '',
@@ -193,6 +197,9 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         .collect::<rusqlite::Result<_>>()?;
     if !idea_cols.iter().any(|c| c == "category") {
         conn.execute_batch("ALTER TABLE ideas ADD COLUMN category TEXT NOT NULL DEFAULT '';")?;
+    }
+    if !idea_cols.iter().any(|c| c == "title") {
+        conn.execute_batch("ALTER TABLE ideas ADD COLUMN title TEXT NOT NULL DEFAULT '';")?;
     }
 
     if !columns.iter().any(|c| c == "model") {

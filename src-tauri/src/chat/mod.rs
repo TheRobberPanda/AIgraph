@@ -2,25 +2,21 @@
 //!
 //! # The purity rule
 //!
-//! The chat must behave exactly as the model would outside this app. No system
-//! prompt, no persona, no tool definitions, no retrieved context, no extraction
-//! instructions. The chat is a listener that helps the user get ideas out; the
-//! moment it starts steering, the thing being mapped is no longer purely the
-//! user's own thinking.
+//! The chat carries no persona, no tool definitions, no retrieved context, and
+//! no extraction instructions — nothing built from what the user said or from
+//! what the app knows. The one exception is [`style::SYSTEM_PROMPT`]: a fixed
+//! house voice, identical for every conversation and every provider, asking for
+//! direct engagement over agreeableness. It is a product decision, not a quiet
+//! addition — see `style.rs`.
 //!
-//! This is enforced three ways, deliberately redundant because it is the kind of
-//! promise that erodes quietly:
+//! This is enforced two ways:
 //!
-//! 1. [`ChatRequest`] has no field for app instructions, and [`Role`] has no
-//!    `System` variant. There is nowhere to put one.
-//! 2. [`Conversation`] only ever grows by real user and assistant turns.
-//! 3. `tests/chat_purity.rs` asserts the serialized request body carries nothing
-//!    but the user's own words.
-//!
-//! If a future feature needs to inject context — the backlogged idea-lookup
-//! feature will — that is a real product decision that retires this promise. It
-//! should require editing this module and deleting a failing test, not slip in
-//! as a quiet addition somewhere else.
+//! 1. [`Conversation`] only ever grows by real user and assistant turns; the
+//!    system prompt is carried separately and is always the same constant.
+//! 2. `tests/chat_purity.rs` asserts the serialized request body carries
+//!    nothing but the user's own words and that one fixed string.
+
+pub mod style;
 
 use crate::llm::types::{ChatRequest, Message, Role};
 
@@ -51,11 +47,13 @@ impl Conversation {
         self.messages.is_empty()
     }
 
-    /// Build the outgoing request. The only transformation applied is `clone`.
+    /// Build the outgoing request. The only additions are a `clone` and the
+    /// one fixed house-style system prompt — see the module doc.
     pub fn to_request(&self) -> ChatRequest {
         ChatRequest {
             model: self.model.clone(),
             messages: self.messages.clone(),
+            system: Some(style::SYSTEM_PROMPT.to_string()),
         }
     }
 
@@ -78,7 +76,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn request_contains_only_the_users_conversation() {
+    fn request_contains_only_the_conversation_and_the_fixed_house_voice() {
         let mut c = Conversation::new("llama3.2");
         c.push_user("I think latency is the real problem");
         c.push_assistant("What makes you say that?");
@@ -90,11 +88,13 @@ mod tests {
         keys.sort();
         assert_eq!(
             keys,
-            vec!["messages", "model"],
-            "the chat payload grew a field — if that field steers the model, \
+            vec!["messages", "model", "system"],
+            "the chat payload grew a field beyond the conversation and the one \
+             fixed system prompt — if that field steers the model per-request, \
              the purity promise is broken"
         );
         assert_eq!(req.messages.len(), 2);
+        assert_eq!(req.system.as_deref(), Some(style::SYSTEM_PROMPT));
     }
 
     #[test]

@@ -8,6 +8,7 @@ import {
 } from "../lib/chat";
 import ImportChat from "./ImportChat";
 import ContextMenu from "./ContextMenu";
+import Confirm from "./Confirm";
 import { longDate } from "../lib/format";
 
 /**
@@ -24,6 +25,7 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
   const [tag, setTag] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
+  const [deleting, setDeleting] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
 
   const refresh = useCallback(() => {
@@ -192,13 +194,22 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
             {
               label: "Delete",
               danger: true,
-              onSelect: () => {
-                if (confirm("Delete this conversation and the ideas found only in it?")) {
-                  deleteSession(menu.session.id).then(refresh);
-                }
-              },
+              onSelect: () => setDeleting(menu.session.id),
             },
           ]}
+        />
+      )}
+
+      {deleting !== null && (
+        <Confirm
+          title="Delete this conversation and the ideas found only in it?"
+          danger
+          onConfirm={() => {
+            const id = deleting;
+            setDeleting(null);
+            deleteSession(id).then(refresh);
+          }}
+          onCancel={() => setDeleting(null)}
         />
       )}
     </div>

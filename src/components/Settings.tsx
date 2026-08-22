@@ -79,10 +79,6 @@ export default function Settings() {
 
       <section>
         <h2 className="section">Interface size</h2>
-        <p className="blurb">
-          Scales the whole interface — text, buttons and spacing together — not
-          just the type.
-        </p>
         <div className="row scale-row">
           <input
             type="range"
@@ -112,10 +108,7 @@ export default function Settings() {
 
       <section>
         <h2 className="section">Ending a session</h2>
-        <p className="blurb">
-          How long a session can sit quiet before it is treated as finished and
-          filed. Pressing <b>Done</b> ends it immediately.
-        </p>
+        <p className="blurb">Idle timeout before a session is filed.</p>
         <div className="row">
           {[10, 30, 60, 120].map((m) => (
             <button
@@ -131,31 +124,20 @@ export default function Settings() {
 
       <section>
         <h2 className="section">Transcripts</h2>
-        <p className="blurb">
-          Every conversation is written here as plain markdown as well as to the
-          database — the full exchange, exactly as it happened, readable without
-          this program.
-        </p>
         <p className="path">{dir}</p>
       </section>
 
       <section>
         <h2 className="section">Dictation</h2>
         {speech?.installed ? (
-          <p className="blurb">
-            Speech recognition is installed and runs on the CPU, so it does not
-            compete with the chat model for the graphics card.
-          </p>
+          <p className="blurb">Installed, runs on the CPU.</p>
         ) : downloading ? (
           <p className="blurb">
             Downloading… {Math.round((downloading.received / (downloading.total || 1)) * 100)}%
           </p>
         ) : (
           <>
-            <p className="blurb">
-              Talk instead of typing. Downloads about {speech?.mb ?? 488}MB once
-              and runs entirely on this machine.
-            </p>
+            <p className="blurb">About {speech?.mb ?? 488}MB, once, offline.</p>
             <button className="btn" onClick={() => void downloadSpeechModel()}>
               Download the speech model
             </button>
@@ -166,9 +148,8 @@ export default function Settings() {
       <section>
         <h2 className="section">Re-read every conversation</h2>
         <p className="blurb">
-          Discards the recorded ideas and reads every conversation again. Useful
-          after the app has been updated. The conversations themselves are never
-          touched — only what was taken from them.
+          Re-extracts ideas from every conversation. The conversations
+          themselves are untouched.
         </p>
         {confirming ? (
           <div className="row">
@@ -204,7 +185,7 @@ export default function Settings() {
           <li>Ideas are recorded by a model taking notes. It can misread, so every idea links back to the exact words it came from.</li>
           <li>An idea the model cannot quote is discarded rather than shown. The Ideas page reports how often that happens.</li>
           <li>Notes in the margin are the model's, marked <b>AI</b>, and never become recorded ideas.</li>
-          <li>The conversation is never steered. No instructions about this app are added to it.</li>
+          <li>The chat is asked to argue rather than agree — the same fixed instruction every time, regardless of model. Nothing about this app or its extraction is added.</li>
           <li>Nothing leaves this machine unless a remote model is chosen in Models.</li>
         </ul>
       </section>

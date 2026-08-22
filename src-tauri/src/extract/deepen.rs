@@ -35,15 +35,16 @@ NOTES ALREADY TAKEN:
 {}
 {}
 
-Write what a student writes in the margin after a seminar: what would need to be
-understood before this idea could be used, and the place it would be pushed
-hardest by a disagreement.
+Name the one specific claim, assumption, or step in this idea that would break
+first under real pushback, and say plainly what breaks it — not the general
+topic, the exact point.
 
 Hard limits:
 
-- At most 120 words. Shorter is better. If two sentences cover it, write two.
+- At most 80 words. Shorter is better. If one sentence covers it, write one.
 - Do not restate the idea. It is written above; repeating it wastes the space.
 - Do not summarise, do not conclude, and do not offer encouragement.
+- Plain, direct language. No "one could argue", no hedging, no academic tone.
 - Ask rather than assert wherever asking is honest. The thinking is not yours to
   conclude.
 

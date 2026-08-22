@@ -63,11 +63,21 @@ impl ChatProvider for Ollama {
         req: &ChatRequest,
         on_chunk: &(dyn for<'a> Fn(ChunkKind, &'a str) + Send + Sync),
     ) -> Result<String, LlmError> {
-        // `req` serializes to exactly {model, messages}. There is no system
-        // prompt to forget to strip, because the type has nowhere to put one.
+        // Ollama's chat endpoint takes the system prompt as an ordinary leading
+        // message with role "system" — there is no separate top-level field.
+        let mut messages = Vec::with_capacity(req.messages.len() + 1);
+        if let Some(system) = &req.system {
+            messages.push(serde_json::json!({ "role": "system", "content": system }));
+        }
+        messages.extend(req.messages.iter().map(|m| {
+            serde_json::json!({
+                "role": match m.role { Role::User => "user", Role::Assistant => "assistant" },
+                "content": m.content,
+            })
+        }));
         let body = serde_json::json!({
             "model": req.model,
-            "messages": req.messages,
+            "messages": messages,
             "stream": true,
         });
 

@@ -190,11 +190,20 @@ impl ChatProvider for OpenAiCompat {
         req: &ChatRequest,
         on_chunk: &(dyn for<'a> Fn(ChunkKind, &'a str) + Send + Sync),
     ) -> Result<String, LlmError> {
-        // Same as Ollama: `req` has no room for a system prompt, so there is
-        // nothing to strip here.
+        // OpenAI-compatible servers take the system prompt as a leading message.
+        let mut messages = Vec::with_capacity(req.messages.len() + 1);
+        if let Some(system) = &req.system {
+            messages.push(serde_json::json!({ "role": "system", "content": system }));
+        }
+        messages.extend(req.messages.iter().map(|m| {
+            serde_json::json!({
+                "role": match m.role { Role::User => "user", Role::Assistant => "assistant" },
+                "content": m.content,
+            })
+        }));
         let body = serde_json::json!({
             "model": req.model,
-            "messages": req.messages,
+            "messages": messages,
             "stream": true,
         });
 

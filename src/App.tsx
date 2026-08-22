@@ -17,7 +17,12 @@ import SettingsPanel from "./components/Settings";
 import { applyTheme, applyUiScale, getSettings } from "./lib/settings";
 import Markdown from "./components/Markdown";
 import { thinkingMessage } from "./lib/waiting";
-import { extractionProgress, onExtractionProgress, type ExtractionProgress } from "./lib/ideas";
+import {
+  extractionProgress,
+  extractNow,
+  onExtractionProgress,
+  type ExtractionProgress,
+} from "./lib/ideas";
 import Mic from "./components/Mic";
 import {
   endSession,
@@ -107,6 +112,7 @@ export default function App() {
   // Rotates the waiting message. Slow on purpose — faster reads as jittery.
   const [waitTick, setWaitTick] = useState(0);
   const [digesting, setDigesting] = useState<ExtractionProgress | null>(null);
+  const [digestBusy, setDigestBusy] = useState(false);
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -315,46 +321,66 @@ export default function App() {
     );
   }
 
+  const pending = digesting?.pending ?? 0;
+
   return (
     <main className="app">
-      <aside className="rail">
-        <div className="rail-title">Idea Graph</div>
+      <nav className="topbar">
+        <div className="brand">Idea Graph</div>
 
-        {MAIN.map((t) => {
-          const Icon = TAB_ICONS[t];
-          return (
-            <button
-              key={t}
-              className={view === t && !deep ? "nav on" : "nav"}
-              onClick={() => {
-                setDeep(null);
-                setView(t);
-              }}
-            >
-              <Icon className="nav-icon" />
-              {TAB_NAMES[t]}
-            </button>
-          );
-        })}
+        <div className="topbar-tabs">
+          {MAIN.map((t) => {
+            const Icon = TAB_ICONS[t];
+            return (
+              <button
+                key={t}
+                className={view === t && !deep ? "nav on" : "nav"}
+                onClick={() => {
+                  setDeep(null);
+                  setView(t);
+                }}
+              >
+                <Icon className="nav-icon" />
+                {TAB_NAMES[t]}
+              </button>
+            );
+          })}
+        </div>
 
-        <div className="rail-group">Setup</div>
-        {SETUP.map((t) => {
-          const Icon = TAB_ICONS[t];
-          return (
-            <button
-              key={t}
-              className={view === t && !deep ? "nav on" : "nav"}
-              onClick={() => {
-                setDeep(null);
-                setView(t);
-              }}
-            >
-              <Icon className="nav-icon" />
-              {TAB_NAMES[t]}
-            </button>
-          );
-        })}
-      </aside>
+        <div className="topbar-spacer" />
+
+        {pending > 0 && (
+          <button
+            className="digest-btn"
+            disabled={digestBusy || !!digesting?.running}
+            onClick={() => {
+              setDigestBusy(true);
+              void extractNow().finally(() => setDigestBusy(false));
+            }}
+          >
+            {digesting?.running ? "Digesting…" : `Digest (${pending})`}
+          </button>
+        )}
+
+        <div className="topbar-tabs topbar-setup">
+          {SETUP.map((t) => {
+            const Icon = TAB_ICONS[t];
+            return (
+              <button
+                key={t}
+                className={view === t && !deep ? "nav on" : "nav"}
+                onClick={() => {
+                  setDeep(null);
+                  setView(t);
+                }}
+                title={TAB_NAMES[t]}
+              >
+                <Icon className="nav-icon" />
+              </button>
+            );
+          })}
+        </div>
+      </nav>
 
       <div className="pane">
       {deep ? (
@@ -390,11 +416,6 @@ export default function App() {
         {turns.length === 0 && !justArchived && (
           <p className="empty">
             <strong>Think out loud.</strong>
-            Nothing is organised while the conversation runs — that happens
-            after.
-            <span className="empty-hint">
-              Press <b>Done</b> to close a session and let it be read back.
-            </span>
           </p>
         )}
 

@@ -46,6 +46,7 @@ export interface IdeaRevision {
 export interface IdeaView {
   id: number;
   claim: string;
+  title: string;
   revision: number;
   strong: string[];
   weak: string[];

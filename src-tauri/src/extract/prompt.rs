@@ -36,8 +36,9 @@ pub fn json_schema() -> serde_json::Value {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["claim", "quote", "category", "reasoning", "notes"],
+                    "required": ["title", "claim", "quote", "category", "reasoning", "notes"],
                     "properties": {
+                        "title": { "type": "string" },
                         "claim": { "type": "string" },
                         "quote": { "type": "string" },
                         "category": { "type": "string" },
@@ -118,6 +119,11 @@ Record the ideas in the USER lines. Ignore the ASSISTANT lines entirely.
 
 For each idea return:
 
+- "title": two to six words naming what the idea actually is, written from what
+  it means, not sliced out of its own sentence. "Giving as a hedge against
+  envy", not the first few words of the claim. This is what identifies the
+  idea at a glance in a list of many, so it must say something the claim's
+  first words don't already say.
 - "claim": one sentence, in the words as spoken.
 
   **Where a sentence already stands on its own, use it exactly as spoken.** That
@@ -155,8 +161,14 @@ genuinely load-bearing. It is not a critique quota.
 - A note must be specific to this idea and say something that could not be said
   about any other idea. "This could be more specific" is not a note.
 - Mark each note "supports" where it strengthens the idea, or "questions" where
-  something is unclear, assumed, or in tension with something else said.
-- Keep every note to one short sentence.
+  a specific part of the argument does not hold.
+- **A "questions" note names the flawed step, not the general topic.** Point at
+  the exact claim, assumption, or link in the reasoning that breaks, and say
+  what breaks it — "assumes the reader already agrees this is unfair" is a
+  note; "this needs more thought" is not.
+- One plain sentence, ten to twenty words. No hedging ("might", "could
+  perhaps"), no academic throat-clearing ("one could argue that"). Say the
+  problem directly.
 - Same rule as above: no "the user", no "the speaker", in a note's text either.
 
 ## Other rules
@@ -249,7 +261,7 @@ mod tests {
         let ideas = &out["properties"]["ideas"]["items"];
         assert_eq!(ideas["additionalProperties"], serde_json::json!(false));
         let required = ideas["required"].as_array().unwrap();
-        for field in ["claim", "quote", "category", "reasoning", "notes"] {
+        for field in ["title", "claim", "quote", "category", "reasoning", "notes"] {
             assert!(
                 required.iter().any(|r| r == field),
                 "{field} must be required under a strict schema"

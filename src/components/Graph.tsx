@@ -29,7 +29,10 @@ import { categoryColors, UNCATEGORISED } from "../lib/categories";
 
 const CONVERSATION_RADIUS = 15;
 const IDEA_RADIUS = 7;
-const LABEL_CHARS = 44;
+// Titles are now short AI-written names rather than sliced-out sentences, so
+// there is little left to truncate — this cap only guards against an
+// unusually long one, not the common case.
+const LABEL_CHARS = 64;
 /** Fitts's law: a 7px dot is not a target. */
 const MIN_HIT_RADIUS = 16;
 
@@ -249,7 +252,7 @@ export default function Graph({
       return rank(a) - rank(b);
     });
 
-    const maxLabelWidth = 64 * Math.max(0.6, Math.min(viewRef.current.scale, 2));
+    const maxLabelWidth = 120 * Math.max(0.6, Math.min(viewRef.current.scale, 2));
 
     for (const n of candidates) {
       const isConversation = n.data.kind === "conversation";
@@ -656,9 +659,6 @@ export default function Graph({
             {hovered.shared && ` · returned to in ${hovered.weight} conversations`}
           </span>
           <div className="graph-tip-label">{hovered.label}</div>
-          <span className="muted graph-tip-hint">
-            Click to open · drag a node · scroll to zoom
-          </span>
         </div>
       )}
 

@@ -8,9 +8,9 @@ import {
   type SessionSummary,
 } from "../lib/chat";
 import ContextMenu from "./ContextMenu";
+import Confirm from "./Confirm";
 import { longDate } from "../lib/format";
 import {
-  extractNow,
   extractionProgress,
   getDiagnostics,
   listIdeas,
@@ -70,10 +70,8 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
   const [source, setSource] = useState<{ evidence: Evidence; claim: string } | null>(null);
-  // Bridges the gap between the click and the first progress event from the
-  // backend, so the button doesn't sit there looking ignored.
-  const [requested, setRequested] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
+  const [deleting, setDeleting] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
   // Re-renders once a second purely so the elapsed counter advances between
   // phase events — which can be minutes apart on a local model.
@@ -161,9 +159,6 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
 
   const running = progress?.running ?? null;
   useEffect(() => {
-    if (running) setRequested(false);
-  }, [running]);
-  useEffect(() => {
     if (!running) return;
     const id = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(id);
@@ -178,55 +173,22 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
           onClose={() => setSource(null)}
         />
       )}
-      {(running || (progress?.pending ?? 0) > 0 || progress?.last) && (
+      {(running || progress?.last?.error) && (
       <div className="diag">
         {running ? (
           <div className="row">
             <span className="spinner" aria-hidden="true" />
-            <span>
-              Extracting session {running.session_id} — {PHASE_LABELS[running.phase]}
-            </span>
+            <span>{PHASE_LABELS[running.phase]}</span>
             <span className="muted">{elapsed(running.started_at)}</span>
           </div>
-        ) : (progress?.pending ?? 0) > 0 ? (
-          <div className="row">
-            <span>
-              {progress?.pending} session{progress?.pending === 1 ? "" : "s"} waiting
-            </span>
-            {(
-              <button
-                className={requested ? "btn busy" : "btn"}
-                disabled={requested}
-                aria-busy={requested}
-                onClick={() => {
-                  setRequested(true);
-                  void extractNow().catch(() => setRequested(false));
-                }}
-              >
-                {requested && <span className="spinner" aria-hidden="true" />}
-                {requested ? "Starting…" : "Extract now"}
-              </button>
-            )}
-          </div>
-        ) : null}
-
-        {!running && progress?.last && (
-          <p className="blurb">
-            {progress.last.error ? (
+        ) : (
+          progress?.last?.error && (
+            <p className="blurb">
               <span className="error">
-                Session {progress.last.session_id} failed after{" "}
-                {progress.last.seconds}s: {progress.last.error}
+                Session {progress.last.session_id} failed: {progress.last.error}
               </span>
-            ) : (
-              <span className="muted">
-                Last run: {progress.last.ideas} idea
-                {progress.last.ideas === 1 ? "" : "s"} from session{" "}
-                {progress.last.session_id} in {progress.last.seconds}s
-                {progress.last.dropped > 0 && `, ${progress.last.dropped} dropped`}
-                {progress.last.retried && " (needed a retry)"}
-              </span>
-            )}
-          </p>
+            </p>
+          )
         )}
       </div>
       )}
@@ -246,12 +208,6 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
               {diag.normalized} loose {diag.normalized === 1 ? "match" : "matches"}
             </span>
           )}
-          {diag.sessions_pending > 0 && (
-            <span className="pending">
-              {diag.sessions_pending} session
-              {diag.sessions_pending === 1 ? "" : "s"} awaiting extraction
-            </span>
-          )}
           {diag.by_reason.map(([reason, n]) => (
             <span key={reason} className="reason">
               {n} {REASON_LABELS[reason] ?? reason}
@@ -261,18 +217,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
       )}
 
       {ideas.length === 0 ? (
-        <p className="empty">
-          No ideas yet. Have a conversation, press Done, and they’ll appear here.
-          {diag && diag.sessions_pending > 0 && (
-            <>
-              <br />
-              <span className="muted">
-                A session is queued — extraction runs in the background and can
-                take a few minutes on a local model.
-              </span>
-            </>
-          )}
-        </p>
+        <p className="empty">No ideas yet.</p>
       ) : (
         <div className="tree">
           {groups.rows.map(({ session, ideas: sessionIdeas }) => {
@@ -338,7 +283,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                             {/* Gold means the same thing here as on the map: a
                                 thought returned to elsewhere. */}
                             <span className={returned ? "dot returned" : "dot"} aria-hidden="true" />
-                            <span className="row-main" title={idea.claim.length > 56 ? idea.claim : undefined}>{shortTitle(idea.claim)}</span>
+                            <span className="row-main" title={idea.claim}>{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
                             {(returned || idea.evidence.length > 1) && (
                               <span className="row-meta">
                                 {returned
@@ -401,7 +346,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                   <li key={idea.id} className="idea">
                     <span className="row-btn">
                       <span className="dot" aria-hidden="true" />
-                      <span className="row-main" title={idea.claim.length > 56 ? idea.claim : undefined}>{shortTitle(idea.claim)}</span>
+                      <span className="row-main" title={idea.claim}>{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
                     </span>
                   </li>
                 ))}
@@ -430,13 +375,22 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
             {
               label: "Delete",
               danger: true,
-              onSelect: () => {
-                if (confirm("Delete this conversation and the ideas found only in it?")) {
-                  deleteSession(menu.session.id).then(refresh);
-                }
-              },
+              onSelect: () => setDeleting(menu.session.id),
             },
           ]}
+        />
+      )}
+
+      {deleting !== null && (
+        <Confirm
+          title="Delete this conversation and the ideas found only in it?"
+          danger
+          onConfirm={() => {
+            const id = deleting;
+            setDeleting(null);
+            deleteSession(id).then(refresh);
+          }}
+          onCancel={() => setDeleting(null)}
         />
       )}
     </div>

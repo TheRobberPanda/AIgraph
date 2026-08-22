@@ -66,6 +66,9 @@ pub struct SessionSummary {
 pub struct StoredIdea {
     pub id: i64,
     pub claim: String,
+    /// A short, glanceable name — see the column comment on `ideas.title`.
+    /// Falls back to the claim itself for ideas extracted before this existed.
+    pub title: String,
     pub evidence: Vec<StoredEvidence>,
     pub strong: Vec<String>,
     pub weak: Vec<String>,
@@ -128,6 +131,7 @@ pub struct Segment {
 pub struct IdeaView {
     pub id: i64,
     pub claim: String,
+    pub title: String,
     pub revision: i64,
     pub strong: Vec<String>,
     pub weak: Vec<String>,
@@ -515,13 +519,13 @@ impl Store {
     pub fn ideas(&self) -> Result<Vec<StoredIdea>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, claim FROM ideas ORDER BY updated_at DESC, id DESC")?;
-        let rows: Vec<(i64, String)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .prepare("SELECT id, claim, title FROM ideas ORDER BY updated_at DESC, id DESC")?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<rusqlite::Result<_>>()?;
 
         let mut out = Vec::with_capacity(rows.len());
-        for (id, claim) in rows {
+        for (id, claim, title) in rows {
             let mut ev = self.conn.prepare(
                 "SELECT id, session_id, turn_id, quote, start_byte, end_byte, normalized, ambiguous
                  FROM evidence WHERE idea_id = ?1 ORDER BY created_at",
@@ -550,6 +554,7 @@ impl Store {
 
             out.push(StoredIdea {
                 id,
+                title: if title.is_empty() { claim.clone() } else { title },
                 claim,
                 evidence,
                 strong: nudges.iter().filter(|(k, _)| k == "strong").map(|(_, t)| t.clone()).collect(),
@@ -735,11 +740,12 @@ impl Store {
 
     /// One idea, with everything that supports it and how it has changed.
     pub fn idea_view(&self, idea_id: i64) -> Result<IdeaView> {
-        let (claim, revision): (String, i64) = self.conn.query_row(
-            "SELECT claim, revision FROM ideas WHERE id = ?1",
+        let (claim, title, revision): (String, String, i64) = self.conn.query_row(
+            "SELECT claim, title, revision FROM ideas WHERE id = ?1",
             [idea_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
+        let title = if title.is_empty() { claim.clone() } else { title };
 
         let mut ev = self.conn.prepare(
             "SELECT e.id, e.session_id, s.started_at, e.quote, e.reasoning, e.normalized
@@ -777,7 +783,7 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let (strong, weak) = self.nudges_for("nudges", "idea_id", idea_id)?;
-        Ok(IdeaView { id: idea_id, claim, revision, strong, weak, evidence, revisions })
+        Ok(IdeaView { id: idea_id, claim, title, revision, strong, weak, evidence, revisions })
     }
 
     /// Every nudge in one table, grouped by owner.
@@ -871,17 +877,20 @@ impl Store {
             "SELECT i.id, i.claim,
                     (SELECT COUNT(DISTINCT e.session_id) FROM evidence e WHERE e.idea_id = i.id),
                     i.category,
-                    (i.revision > 0 AND i.updated_at > datetime('now', '-10 minutes'))
+                    (i.revision > 0 AND i.updated_at > datetime('now', '-10 minutes')),
+                    i.title
              FROM ideas i",
         )?;
         for row in ideas.query_map([], |r| {
             let id: i64 = r.get(0)?;
+            let claim: String = r.get(1)?;
             let sessions: i64 = r.get(2)?;
+            let title: String = r.get(5)?;
             let (strong, weak) = idea_nudges.get(&id).cloned().unwrap_or_default();
             Ok(GraphNode {
                 id: format!("i{id}"),
                 kind: "idea",
-                label: r.get(1)?,
+                label: if title.is_empty() { claim } else { title },
                 weight: sessions,
                 session_id: None,
                 idea_id: Some(id),
@@ -1102,9 +1111,14 @@ impl Store {
         let idea_id = match decision {
             Decision::New { .. } | Decision::Conflict { .. } => {
                 tx.execute(
-                    "INSERT INTO ideas (claim, category, revision, created_at, updated_at)
-                     VALUES (?1, ?2, 0, ?3, ?3)",
-                    params![idea.raw.claim, normalize_category(&idea.raw.category), now],
+                    "INSERT INTO ideas (claim, title, category, revision, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, 0, ?4, ?4)",
+                    params![
+                        idea.raw.claim,
+                        idea.raw.title,
+                        normalize_category(&idea.raw.category),
+                        now
+                    ],
                 )?;
                 tx.last_insert_rowid()
             }
@@ -1117,6 +1131,14 @@ impl Store {
                      WHERE id = ?1",
                     params![idea_id, new_claim, now],
                 )?;
+                // A rewritten claim gets a fresh title too, when the model
+                // extracting the new phrasing offered one.
+                if !idea.raw.title.is_empty() {
+                    tx.execute(
+                        "UPDATE ideas SET title = ?2 WHERE id = ?1",
+                        params![idea_id, idea.raw.title],
+                    )?;
+                }
                 // History first, so a revert is always possible. A rewrite with
                 // no recoverable previous claim would be destruction, not editing.
                 tx.execute(
@@ -1500,6 +1522,7 @@ mod tests {
         let turns: Vec<Turn> = store.verify_turns(session_id).unwrap();
         let raw = RawIdea {
             claim: "Latency is the real problem".into(),
+            title: String::new(),
             quote: "latency is the real problem".into(),
             reasoning: String::new(),
             category: String::new(),
@@ -1544,6 +1567,7 @@ mod tests {
         let turns: Vec<Turn> = store.verify_turns(session_id).unwrap();
         let raw = RawIdea {
             claim: "c".into(),
+            title: String::new(),
             quote: "latency".into(),
             reasoning: String::new(),
             category: String::new(),
@@ -1582,6 +1606,7 @@ mod tests {
         use crate::llm::types::RawIdea;
         let raw = RawIdea {
             claim: claim.into(),
+            title: String::new(),
             quote: quote.into(),
             reasoning: "because they said so".into(),
             category: "testing".into(),
