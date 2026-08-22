@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import Chats from "./components/Chats";
 import {
   IconThink,
@@ -8,6 +9,9 @@ import {
   IconModels,
   IconSettings,
   IconSend,
+  IconMinimize,
+  IconMaximize,
+  IconClose,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
@@ -133,6 +137,15 @@ export default function App() {
       applyTheme(s.theme);
       applyUiScale(s.ui_scale);
     });
+  }, []);
+
+  // No native context menu anywhere in the app by default — only the places
+  // that build their own (a message, a conversation, an idea) show one, and
+  // those already call preventDefault themselves before this ever runs.
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener("contextmenu", onContextMenu);
+    return () => document.removeEventListener("contextmenu", onContextMenu);
   }, []);
 
   useEffect(() => {
@@ -296,6 +309,29 @@ export default function App() {
   if (servers && !provider) {
     return (
       <main className="app centered">
+        <nav className="topbar" data-tauri-drag-region>
+          <div className="brand" data-tauri-drag-region>Idea Graph</div>
+          <div className="topbar-spacer" />
+          <div className="window-controls">
+            <button className="window-btn" data-tip="Minimize" onClick={() => void getCurrentWindow().minimize()}>
+              <IconMinimize />
+            </button>
+            <button
+              className="window-btn"
+              data-tip="Maximize"
+              onClick={() => void getCurrentWindow().toggleMaximize()}
+            >
+              <IconMaximize />
+            </button>
+            <button
+              className="window-btn close"
+              data-tip="Close"
+              onClick={() => void getCurrentWindow().close()}
+            >
+              <IconClose />
+            </button>
+          </div>
+        </nav>
         <div className="setup">
           <h1>Pick a model</h1>
           {usable.length === 0 ? (
@@ -348,8 +384,8 @@ export default function App() {
 
   return (
     <main className="app">
-      <nav className="topbar">
-        <div className="brand">Idea Graph</div>
+      <nav className="topbar" data-tauri-drag-region>
+        <div className="brand" data-tauri-drag-region>Idea Graph</div>
 
         <div className="topbar-tabs">
           {MAIN.map((t) => {
@@ -403,6 +439,26 @@ export default function App() {
             );
           })}
         </div>
+
+        <div className="window-controls">
+          <button className="window-btn" data-tip="Minimize" onClick={() => void getCurrentWindow().minimize()}>
+            <IconMinimize />
+          </button>
+          <button
+            className="window-btn"
+            data-tip="Maximize"
+            onClick={() => void getCurrentWindow().toggleMaximize()}
+          >
+            <IconMaximize />
+          </button>
+          <button
+            className="window-btn close"
+            data-tip="Close"
+            onClick={() => void getCurrentWindow().close()}
+          >
+            <IconClose />
+          </button>
+        </div>
       </nav>
 
       <div className="pane">
@@ -423,7 +479,7 @@ export default function App() {
       ) : view === "map" ? (
         <Graph />
       ) : view === "ideas" ? (
-        <Ideas onOpen={(id) => setDeep({ kind: "idea", id })} />
+        <Ideas />
       ) : view === "chats" ? (
         <Chats onOpen={(id) => setDeep({ kind: "conversation", id })} />
       ) : view === "models" ? (

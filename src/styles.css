@@ -106,6 +106,8 @@ body {
 
 .topbar {
   grid-row: 1;
+  position: relative;
+  z-index: 70;
   display: flex;
   align-items: center;
   gap: 0.2rem;
@@ -116,6 +118,22 @@ body {
   scrollbar-width: none;
 }
 .topbar::-webkit-scrollbar { display: none; }
+
+.window-controls { display: flex; gap: 0.2rem; flex: none; margin-left: 0.4rem; }
+.window-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 1.9rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.window-btn:hover { background: var(--surface-lift); color: var(--fg); }
+.window-btn.close:hover { background: var(--danger); color: var(--bg); }
 
 /* The app's own name — brighter than a nav label, so it reads as a mark
    rather than another button. Compact: this is a bar, not a page header. */
@@ -338,10 +356,12 @@ button { font-family: inherit; }
   content: attr(data-tip);
   position: absolute;
   top: calc(100% + 7px);
-  left: 50%;
-  transform: translateX(-50%);
+  /* Left-anchored rather than centered — centering pushed a tooltip on a
+     left-edge trigger halfway off the window, clipping its start. Elements
+     near the right edge (the topbar's own icons) override this below. */
+  left: 0;
   width: max-content;
-  max-width: 22rem;
+  max-width: min(22rem, 80vw);
   white-space: normal;
   background: var(--surface-lift);
   color: var(--fg);
@@ -353,7 +373,9 @@ button { font-family: inherit; }
   font-family: var(--sans);
   font-weight: 400;
   text-align: left;
-  z-index: 80;
+  /* Below the topbar and any real UI layer — a hint must never sit on top of
+     something clickable. */
+  z-index: 25;
   opacity: 0;
   pointer-events: none;
   transition: opacity 100ms ease;
@@ -361,6 +383,9 @@ button { font-family: inherit; }
 }
 [data-tip]:hover::after,
 [data-tip]:focus-visible::after { opacity: 1; }
+
+/* Near the window's right edge, extend the tooltip leftward instead. */
+.topbar [data-tip]::after { left: auto; right: 0; }
 
 .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 
@@ -623,15 +648,18 @@ blockquote {
 
 .graph-wrap { position: relative; flex: 1; min-height: 0; width: 100%; }
 
-/* A node's file, opened over the map rather than instead of it — the map
-   keeps its position and simulation state, since navigating away and back
-   used to reset what you were looking at. */
-.graph-panel {
+/* Ideas gets the same treatment: the list is the scrollable child, the file
+   panel is an absolutely-positioned sibling so it overlays without being
+   carried along by the list's own scroll. */
+.ideas-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* A node or row's file, opened as a panel over whatever it came from — the
+   map, the idea list — rather than replacing it. Shared by both, so resizing
+   or flipping it behaves the same everywhere it appears. */
+.file-panel {
   position: absolute;
   top: 0.6rem;
-  right: 0.6rem;
   bottom: 0.6rem;
-  width: min(26rem, 40%);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -639,8 +667,42 @@ blockquote {
   overflow-y: auto;
   z-index: 40;
 }
-.graph-panel .pane-inner { padding: 0.9rem 1rem 1.5rem; }
-.graph-panel .pane-inner > * { max-width: none; }
+.file-panel.right { right: 0.6rem; }
+.file-panel.left { left: 0.6rem; }
+.file-panel .pane-inner { padding: 0.9rem 1rem 1.5rem; }
+.file-panel .pane-inner > * { max-width: none; }
+
+.file-panel-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 1;
+}
+.file-panel.right .file-panel-resize { left: -4px; }
+.file-panel.left .file-panel-resize { right: -4px; }
+
+/* Sits on the panel's own edge, outside its content, so it can never collide
+   with the file's own header (its own "Back" button lives inside). */
+.file-panel-flip {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  width: 1.6rem;
+  height: 1.6rem;
+  background: var(--surface-lift);
+  color: var(--muted);
+  cursor: pointer;
+  z-index: 2;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.file-panel-flip:hover { color: var(--fg); }
+.file-panel.right .file-panel-flip { left: -0.8rem; }
+.file-panel.left .file-panel-flip { right: -0.8rem; }
 .graph { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
 .graph:active { cursor: grabbing; }
 .graph-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
@@ -657,13 +719,49 @@ blockquote {
 .graph-tip .muted { font-family: var(--mono); font-size: 0.62rem; }
 .graph-tip-label { margin: 0.15rem 0; }
 
+.relation-popup {
+  position: absolute;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 16rem;
+  max-width: 22rem;
+  padding: 0.7rem 0.8rem;
+  background: var(--surface-lift);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+.relation-kind {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.relation-kind.related { color: var(--verdant); }
+.relation-kind.contradicts { color: var(--danger); }
+.relation-popup .link { text-align: left; }
+
 .graph-key {
   position: absolute; right: 0.6rem; bottom: 0.6rem;
   display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.15rem 0.7rem;
   max-width: 60%;
   font-family: var(--mono); font-size: 0.6rem; color: var(--faint); pointer-events: none;
 }
-.graph-key span { display: inline-flex; align-items: center; gap: 0.25rem; }
+.graph-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  pointer-events: auto;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+}
+.graph-key span.on { background: var(--surface-lift); color: var(--fg); }
 .graph-key i { width: 7px; height: 7px; border-radius: 50%; }
 
 .nudge-layer { position: absolute; inset: 0; pointer-events: none; }

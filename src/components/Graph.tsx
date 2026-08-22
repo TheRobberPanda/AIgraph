@@ -13,6 +13,7 @@ import { loadGraph, type GraphNode } from "../lib/graph";
 import { onIdeasChanged } from "../lib/ideas";
 import { categoryColors, UNCATEGORISED } from "../lib/categories";
 import { ConversationFile, IdeaFile } from "./Deep";
+import FilePanel from "./FilePanel";
 
 /**
  * The map, drawn on a 2D canvas over a live force simulation.
@@ -85,10 +86,14 @@ function readPalette(): Palette {
   const fg = token(st, "--fg", "#ece5d9");
   const line = token(st, "--line", "#2c2722");
   const danger = token(st, "--danger", "#c96b5f");
+  const verdant = token(st, "--verdant", "#7ead6f");
   return {
     conversation: accent,
     edge: `color-mix(in srgb, ${muted} 55%, ${line})`,
-    related: `color-mix(in srgb, ${accent} 55%, transparent)`,
+    // "related" is shown to the user as a correlation — green, to sit opposite
+    // a contradiction rather than blend into the accent color used everywhere
+    // else on the map.
+    related: `color-mix(in srgb, ${verdant} 70%, transparent)`,
     contradicts: `color-mix(in srgb, ${danger} 70%, transparent)`,
     category: `color-mix(in srgb, ${muted} 30%, transparent)`,
     labelConversation: accent,
@@ -167,6 +172,8 @@ export default function Graph() {
   const simRef = useRef<Simulation<Node, Link> | null>(null);
   const viewRef = useRef({ x: 0, y: 0, scale: 1 });
   const hoverRef = useRef<Node | null>(null);
+  const legendFocusRef = useRef<string | null>(null);
+  const [legendFocus, setLegendFocus] = useState<string | null>(null);
   const dragNodeRef = useRef<Node | null>(null);
   const panRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const frameRef = useRef(0);
@@ -185,6 +192,11 @@ export default function Graph() {
   // the same node again closes it, clicking a different one swaps the panel's
   // content, rather than navigating away and losing the map's state.
   const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
+  const [panelSide, setPanelSide] = useState<"left" | "right">("right");
+  const [panelWidth, setPanelWidth] = useState(420);
+  const [relationPopup, setRelationPopup] = useState<
+    { kind: "related" | "contradicts"; a: GraphNode; b: GraphNode } | null
+  >(null);
   const openIdea = useRef((id: number) =>
     setPanel((p) => (p?.kind === "idea" && p.id === id ? null : { kind: "idea", id })),
   );
@@ -218,9 +230,10 @@ export default function Graph() {
     ctx.clearRect(0, 0, w, h);
 
     const hover = hoverRef.current;
-    // Hovering an idea lifts everything in the same category and pushes the rest
-    // back, so a subject can be picked out of the whole map at once.
-    const focus = hover?.data.category || null;
+    // Hovering an idea — or a tag in the legend — lifts everything in the same
+    // category and pushes the rest back, so a subject can be picked out of
+    // the whole map at once.
+    const focus = legendFocusRef.current || hover?.data.category || null;
     const inFocus = (n: Node) =>
       !focus || (n.data.kind === "idea" && n.data.category === focus) || n === hover;
 
@@ -239,8 +252,8 @@ export default function Graph() {
             : link.kind === "category"
               ? C.category
               : C.edge;
-      ctx.lineWidth = link.kind === "from" ? 1 : link.kind === "category" ? 1 : 1.4;
-      if (link.kind === "related") ctx.setLineDash([4, 4]);
+      ctx.lineWidth = link.kind === "from" ? 1 : link.kind === "category" ? 1 : 1.6;
+      if (link.kind === "related" || link.kind === "contradicts") ctx.setLineDash([4, 4]);
       if (link.kind === "category") ctx.setLineDash([1, 3]);
       ctx.beginPath();
       ctx.moveTo(sa.x, sa.y);
@@ -524,6 +537,37 @@ export default function Graph() {
     return best;
   }
 
+  /** The nearest correlation or contradiction line, if the click landed close
+   *  enough to it — the only edges meant to be clickable. */
+  function edgeAt(clientX: number, clientY: number): Link | null {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+
+    let best: Link | null = null;
+    let bestDist = 8;
+    for (const link of linksRef.current) {
+      if (link.kind !== "related" && link.kind !== "contradicts") continue;
+      const a = toScreen(link.source as Node, rect.width, rect.height);
+      const b = toScreen(link.target as Node, rect.width, rect.height);
+      // Distance from the click to the segment a–b.
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lenSq = dx * dx + dy * dy;
+      const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / lenSq));
+      const cx = a.x + t * dx;
+      const cy = a.y + t * dy;
+      const d = Math.hypot(px - cx, py - cy);
+      if (d < bestDist) {
+        best = link;
+        bestDist = d;
+      }
+    }
+    return best;
+  }
+
   /** Canvas coordinates to simulation coordinates. */
   function toWorld(clientX: number, clientY: number) {
     const canvas = canvasRef.current!;
@@ -639,11 +683,25 @@ export default function Graph() {
           if (wasDrag) return;
 
           const hit = nodeAt(e.clientX, e.clientY);
-          if (!hit) return;
-          if (hit.data.kind === "idea" && hit.data.idea_id !== null)
-            openIdea.current(hit.data.idea_id);
-          if (hit.data.kind === "conversation" && hit.data.session_id !== null)
-            openConversation.current(hit.data.session_id);
+          if (hit) {
+            setRelationPopup(null);
+            if (hit.data.kind === "idea" && hit.data.idea_id !== null)
+              openIdea.current(hit.data.idea_id);
+            if (hit.data.kind === "conversation" && hit.data.session_id !== null)
+              openConversation.current(hit.data.session_id);
+            return;
+          }
+
+          const edge = edgeAt(e.clientX, e.clientY);
+          if (edge) {
+            setRelationPopup({
+              kind: edge.kind as "related" | "contradicts",
+              a: (edge.source as Node).data,
+              b: (edge.target as Node).data,
+            });
+          } else {
+            setRelationPopup(null);
+          }
         }}
         onWheel={(e) => {
           const canvas = canvasRef.current;
@@ -703,14 +761,54 @@ export default function Graph() {
           <i style={{ background: "var(--accent)" }} /> conversation
         </span>
         {legend.slice(0, 6).map(([name, color]) => (
-          <span key={name}>
+          <span
+            key={name}
+            className={legendFocus === name ? "on" : undefined}
+            onMouseEnter={() => {
+              legendFocusRef.current = name;
+              setLegendFocus(name);
+            }}
+            onMouseLeave={() => {
+              legendFocusRef.current = null;
+              setLegendFocus(null);
+            }}
+          >
             <i style={{ background: color }} /> {name}
           </span>
         ))}
       </div>
 
+      {relationPopup && (
+        <div className="relation-popup" onClick={(e) => e.stopPropagation()}>
+          <div className={`relation-kind ${relationPopup.kind}`}>
+            {relationPopup.kind === "contradicts" ? "Contradiction" : "Correlation"}
+          </div>
+          <button
+            className="link"
+            onClick={() => {
+              setRelationPopup(null);
+              if (relationPopup.a.idea_id !== null) openIdea.current(relationPopup.a.idea_id);
+            }}
+          >
+            {relationPopup.a.label}
+          </button>
+          <button
+            className="link"
+            onClick={() => {
+              setRelationPopup(null);
+              if (relationPopup.b.idea_id !== null) openIdea.current(relationPopup.b.idea_id);
+            }}
+          >
+            {relationPopup.b.label}
+          </button>
+          <button className="btn" onClick={() => setRelationPopup(null)}>
+            Close
+          </button>
+        </div>
+      )}
+
       {panel && (
-        <div className="graph-panel">
+        <FilePanel side={panelSide} onSideChange={setPanelSide} width={panelWidth} onWidthChange={setPanelWidth}>
           {panel.kind === "idea" ? (
             <IdeaFile
               ideaId={panel.id}
@@ -724,7 +822,7 @@ export default function Graph() {
               onClose={() => setPanel(null)}
             />
           )}
-        </div>
+        </FilePanel>
       )}
     </div>
   );

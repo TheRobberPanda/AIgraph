@@ -120,3 +120,28 @@ export function IconRewind(props: SVGProps<SVGSVGElement>) {
     </Base>
   );
 }
+
+/** The window's own chrome, since the OS titlebar is gone. */
+export function IconMinimize(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="12" height="12" {...props}>
+      <path d="M4 12h16" />
+    </Base>
+  );
+}
+
+export function IconMaximize(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="12" height="12" {...props}>
+      <rect x="5" y="5" width="14" height="14" rx="1" />
+    </Base>
+  );
+}
+
+export function IconClose(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="12" height="12" {...props}>
+      <path d="M5 5l14 14M19 5L5 19" />
+    </Base>
+  );
+}

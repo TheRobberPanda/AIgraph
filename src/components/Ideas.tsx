@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Source from "./Source";
 import {
   deleteSession,
   listSessions,
@@ -9,6 +8,8 @@ import {
 } from "../lib/chat";
 import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
+import FilePanel from "./FilePanel";
+import { ConversationFile, IdeaFile } from "./Deep";
 import { longDate } from "../lib/format";
 import {
   extractionProgress,
@@ -62,14 +63,15 @@ const REASON_LABELS: Record<string, string> = {
  * graph will need to be trustworthy. Getting this right first means the graph
  * is a rendering problem rather than a correctness one.
  */
-export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void }) {
+export default function Ideas() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
-  const [open, setOpen] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
+  const [panelSide, setPanelSide] = useState<"left" | "right">("right");
+  const [panelWidth, setPanelWidth] = useState(420);
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
-  const [source, setSource] = useState<{ evidence: Evidence; claim: string } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
@@ -148,6 +150,15 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
     });
   }
 
+  // Opened as a panel over the list rather than a page of its own — clicking
+  // the same idea again closes it, clicking another swaps the panel's content.
+  function openIdea(id: number) {
+    setPanel((p) => (p?.kind === "idea" && p.id === id ? null : { kind: "idea", id }));
+  }
+  function openConversation(id: number) {
+    setPanel((p) => (p?.kind === "conversation" && p.id === id ? null : { kind: "conversation", id }));
+  }
+
   useEffect(() => {
     refresh();
     void extractionProgress().then(setProgress);
@@ -165,14 +176,8 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
   }, [running]);
 
   return (
+    <div className="ideas-wrap">
     <div className="pane-inner">
-      {source && (
-        <Source
-          evidence={source.evidence}
-          claim={source.claim}
-          onClose={() => setSource(null)}
-        />
-      )}
       {(running || progress?.last?.error) && (
       <div className="diag">
         {running ? (
@@ -200,11 +205,11 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
           </span>
           {/* The honesty metric. Shown rather than logged, because a drop rate
               nobody looks at is a drop rate nobody fixes. */}
-          <span data-tip="Proposed ideas that could not be traced back to the words as spoken">
+          <span>
             <strong>{(diag.drop_rate * 100).toFixed(0)}%</strong> dropped
           </span>
           {diag.normalized > 0 && (
-            <span data-tip="Matched after normalizing whitespace, quotes, or casing">
+            <span>
               {diag.normalized} loose {diag.normalized === 1 ? "match" : "matches"}
             </span>
           )}
@@ -254,7 +259,6 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                       setMenu({ x: e.clientX, y: e.clientY, session });
                     }}
                     aria-expanded={!isCollapsed}
-                    data-tip={session.opening && session.opening !== label ? session.opening : undefined}
                   >
                     <span className={`tree-caret${isCollapsed ? " closed" : ""}`} aria-hidden="true" />
                     <span className="tree-title">{label}</span>
@@ -269,21 +273,19 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                 {!isCollapsed && (
                   <ul className="list tree-children">
                     {sessionIdeas.map((idea) => {
-                      const isOpen = open === idea.id;
+                      const isOpen = panel?.kind === "idea" && panel.id === idea.id;
                       const returned = sessionsFor(idea) > 1;
                       return (
                         <li key={idea.id} className={isOpen ? "idea open" : "idea"}>
                           <button
                             className="row-btn"
-                            onClick={() =>
-                              onOpen ? onOpen(idea.id) : setOpen(isOpen ? null : idea.id)
-                            }
+                            onClick={() => openIdea(idea.id)}
                             aria-expanded={isOpen}
                           >
                             {/* Gold means the same thing here as on the map: a
                                 thought returned to elsewhere. */}
                             <span className={returned ? "dot returned" : "dot"} aria-hidden="true" />
-                            <span className="row-main" data-tip={idea.claim}>{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
+                            <span className="row-main">{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
                             {(returned || idea.evidence.length > 1) && (
                               <span className="row-meta">
                                 {returned
@@ -292,41 +294,6 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                               </span>
                             )}
                           </button>
-
-                          {isOpen && (
-                            <div className="detail">
-                              {idea.evidence.map((e) => (
-                                <blockquote key={e.id}>
-                                  <button
-                                    className="link"
-                                    onClick={() => setSource({ evidence: e, claim: idea.claim })}
-                                    data-tip="See this in the conversation"
-                                  >
-                                    “{e.quote}”
-                                  </button>
-                                  {e.normalized && <span className="tag">loose match</span>}
-                                  {e.ambiguous && <span className="tag">said more than once</span>}
-                                </blockquote>
-                              ))}
-
-                              {(idea.strong.length > 0 || idea.weak.length > 0) && (
-                                <div className="notes">
-                                  {idea.strong.map((t, i) => (
-                                    <p key={`s${i}`} className="note strong">
-                                      <span className="badge">AI</span>
-                                      {t}
-                                    </p>
-                                  ))}
-                                  {idea.weak.map((t, i) => (
-                                    <p key={`w${i}`} className="note weak">
-                                      <span className="badge">AI</span>
-                                      {t}
-                                    </p>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
                         </li>
                       );
                     })}
@@ -346,7 +313,7 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
                   <li key={idea.id} className="idea">
                     <span className="row-btn">
                       <span className="dot" aria-hidden="true" />
-                      <span className="row-main" data-tip={idea.claim}>{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
+                      <span className="row-main">{idea.title && idea.title !== idea.claim ? idea.title : shortTitle(idea.claim)}</span>
                     </span>
                   </li>
                 ))}
@@ -393,6 +360,25 @@ export default function Ideas({ onOpen }: { onOpen?: (ideaId: number) => void })
           onCancel={() => setDeleting(null)}
         />
       )}
+    </div>
+
+    {panel && (
+      <FilePanel side={panelSide} onSideChange={setPanelSide} width={panelWidth} onWidthChange={setPanelWidth}>
+        {panel.kind === "idea" ? (
+          <IdeaFile
+            ideaId={panel.id}
+            onOpenConversation={(id) => openConversation(id)}
+            onClose={() => setPanel(null)}
+          />
+        ) : (
+          <ConversationFile
+            sessionId={panel.id}
+            onOpenIdea={(id) => openIdea(id)}
+            onClose={() => setPanel(null)}
+          />
+        )}
+      </FilePanel>
+    )}
     </div>
   );
 }
