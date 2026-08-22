@@ -8,8 +8,11 @@ import {
   IconModels,
   IconSettings,
   IconSend,
+  IconTrash,
+  IconRewind,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
+import Confirm from "./components/Confirm";
 import Graph from "./components/Graph";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
@@ -25,8 +28,10 @@ import {
 } from "./lib/ideas";
 import Mic from "./components/Mic";
 import {
+  deleteTurn,
   endSession,
   onArchived,
+  rewindConversation,
   selectProvider,
   sendMessage,
   startup,
@@ -113,6 +118,11 @@ export default function App() {
   const [waitTick, setWaitTick] = useState(0);
   const [digesting, setDigesting] = useState<ExtractionProgress | null>(null);
   const [digestBusy, setDigestBusy] = useState(false);
+  // A pending delete or rewind, waiting on confirmation — losing a message is
+  // not something a stray click should be able to do.
+  const [turnAction, setTurnAction] = useState<{ index: number; kind: "delete" | "rewind" } | null>(
+    null,
+  );
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -229,6 +239,19 @@ export default function App() {
       setStreaming(false);
       setThinking(false);
       inputRef.current?.focus();
+    }
+  }
+
+  async function confirmTurnAction() {
+    if (!turnAction) return;
+    const { index, kind } = turnAction;
+    setTurnAction(null);
+    if (kind === "delete") {
+      await deleteTurn(index).catch((e) => setError(String(e)));
+      setTurns((t) => t.filter((_, i) => i !== index));
+    } else {
+      await rewindConversation(index).catch((e) => setError(String(e)));
+      setTurns((t) => t.slice(0, index));
     }
   }
 
@@ -429,6 +452,26 @@ export default function App() {
 
         {turns.map((t, i) => (
           <div key={i} className={`turn ${t.role}`}>
+            {!streaming && (
+              <span className="turn-actions">
+                <button
+                  className="icon-btn"
+                  data-tip="Delete this message"
+                  onClick={() => setTurnAction({ index: i, kind: "delete" })}
+                >
+                  <IconTrash />
+                </button>
+                {i < turns.length - 1 && (
+                  <button
+                    className="icon-btn"
+                    data-tip="Go back to before this message"
+                    onClick={() => setTurnAction({ index: i, kind: "rewind" })}
+                  >
+                    <IconRewind />
+                  </button>
+                )}
+              </span>
+            )}
             {/* The user's own words stay verbatim — they are what quotes get
                 matched against, and markdown would render some of them away. */}
             {t.role === "assistant" && t.content ? (
@@ -447,6 +490,19 @@ export default function App() {
             )}
           </div>
         ))}
+
+        {turnAction && (
+          <Confirm
+            title={
+              turnAction.kind === "delete"
+                ? "Delete this message?"
+                : "Go back to before this message? Everything said after it goes too."
+            }
+            danger
+            onConfirm={() => void confirmTurnAction()}
+            onCancel={() => setTurnAction(null)}
+          />
+        )}
 
         {error && <div className="error">{error}</div>}
         <div ref={endRef} />

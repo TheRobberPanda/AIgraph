@@ -47,6 +47,29 @@ impl Conversation {
         self.messages.is_empty()
     }
 
+    /// Remove one turn, leaving everything else in place.
+    ///
+    /// Out-of-range is a no-op rather than a panic: by the time this runs the
+    /// index came from a UI snapshot that may already be stale (a reply
+    /// finished streaming, another turn was deleted), and losing nothing is
+    /// the safe direction when that happens.
+    pub fn remove(&mut self, index: usize) {
+        if index < self.messages.len() {
+            self.messages.remove(index);
+        }
+    }
+
+    /// Rewind to before a turn, dropping it and everything said after it.
+    ///
+    /// Chat is sequential — a later reply can only be understood in light of
+    /// what came before it, so "go back" has to mean the conversation from
+    /// that point on, not one arbitrary turn plucked out of the middle.
+    pub fn rewind(&mut self, index: usize) {
+        if index < self.messages.len() {
+            self.messages.truncate(index);
+        }
+    }
+
     /// Build the outgoing request. The only additions are a `clone` and the
     /// one fixed house-style system prompt — see the module doc.
     pub fn to_request(&self) -> ChatRequest {
@@ -103,5 +126,36 @@ mod tests {
         c.push_user("hello");
         c.push_assistant("hi");
         assert_eq!(c.to_transcript(), "USER: hello\n\nASSISTANT: hi");
+    }
+
+    #[test]
+    fn removing_a_turn_leaves_the_rest_in_order() {
+        let mut c = Conversation::new("m");
+        c.push_user("one");
+        c.push_assistant("two");
+        c.push_user("three");
+        c.remove(1);
+        let texts: Vec<_> = c.messages().iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(texts, vec!["one", "three"]);
+    }
+
+    #[test]
+    fn removing_out_of_range_does_nothing() {
+        let mut c = Conversation::new("m");
+        c.push_user("one");
+        c.remove(5);
+        assert_eq!(c.messages().len(), 1);
+    }
+
+    #[test]
+    fn rewinding_drops_a_turn_and_everything_after_it() {
+        let mut c = Conversation::new("m");
+        c.push_user("one");
+        c.push_assistant("two");
+        c.push_user("three");
+        c.push_assistant("four");
+        c.rewind(1);
+        let texts: Vec<_> = c.messages().iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(texts, vec!["one"], "everything from the rewind point on should be gone");
     }
 }

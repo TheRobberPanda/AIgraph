@@ -298,6 +298,26 @@ pub async fn send_message(
     Ok(reply)
 }
 
+/// Remove one turn from the conversation still being had, without touching
+/// the rest of it.
+#[tauri::command]
+pub async fn delete_turn(state: State<'_, AppState>, index: usize) -> Result<(), String> {
+    let mut guard = state.conversation.lock().await;
+    let convo = guard.as_mut().ok_or("no conversation")?;
+    convo.remove(index);
+    Ok(())
+}
+
+/// Rewind the conversation still being had to before one turn, dropping it
+/// and everything said after it.
+#[tauri::command]
+pub async fn rewind_conversation(state: State<'_, AppState>, index: usize) -> Result<(), String> {
+    let mut guard = state.conversation.lock().await;
+    let convo = guard.as_mut().ok_or("no conversation")?;
+    convo.rewind(index);
+    Ok(())
+}
+
 #[derive(Serialize, Clone)]
 pub struct Archived {
     pub session_id: i64,

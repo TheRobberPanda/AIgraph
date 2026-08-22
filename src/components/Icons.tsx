@@ -101,3 +101,22 @@ export function IconBack(props: SVGProps<SVGSVGElement>) {
     </Base>
   );
 }
+
+/** A trash can — deleting one message. */
+export function IconTrash(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="14" height="14" {...props}>
+      <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
+    </Base>
+  );
+}
+
+/** A counter-clockwise arrow — rewinding the conversation to before a turn. */
+export function IconRewind(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="14" height="14" {...props}>
+      <path d="M4 9a8 8 0 1 1 1.5 8.5" />
+      <path d="M4 4v5h5" />
+    </Base>
+  );
+}

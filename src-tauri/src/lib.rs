@@ -63,6 +63,8 @@ pub fn run() {
             commands::delete_session,
             commands::rename_session,
             commands::set_session_archived,
+            commands::delete_turn,
+            commands::rewind_conversation,
             commands::delete_idea,
             commands::get_settings,
             commands::save_settings,

@@ -70,6 +70,16 @@ export async function sendMessage(
   }
 }
 
+/** Remove one turn from the conversation still being had. */
+export function deleteTurn(index: number): Promise<void> {
+  return invoke("delete_turn", { index });
+}
+
+/** Rewind to before a turn, dropping it and everything said after it. */
+export function rewindConversation(index: number): Promise<void> {
+  return invoke("rewind_conversation", { index });
+}
+
 export type EndReason = "done" | "idle" | "app_closing";
 
 export interface Archived {

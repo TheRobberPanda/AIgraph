@@ -424,8 +424,34 @@ textarea.field { font-family: var(--mono); font-size: 0.76rem; resize: vertical;
 .think.opening { justify-content: center; }
 .think.opening .stream { flex: 0 0 auto; }
 
-.turn { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.9rem; }
+.turn { position: relative; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.9rem; }
 .turn .md { white-space: normal; }
+
+.turn-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+.turn:hover .turn-actions { opacity: 1; }
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--surface-lift); color: var(--fg); }
 
 /* Speaker is marked by a rule and a label rather than a different typeface. */
 .turn.user {
