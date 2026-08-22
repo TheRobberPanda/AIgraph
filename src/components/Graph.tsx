@@ -12,6 +12,7 @@ import {
 import { loadGraph, type GraphNode } from "../lib/graph";
 import { onIdeasChanged } from "../lib/ideas";
 import { categoryColors, UNCATEGORISED } from "../lib/categories";
+import { ConversationFile, IdeaFile } from "./Deep";
 
 /**
  * The map, drawn on a 2D canvas over a live force simulation.
@@ -32,10 +33,26 @@ const IDEA_RADIUS = 7;
 /** Fitts's law: a 7px dot is not a target. */
 const MIN_HIT_RADIUS = 16;
 
+/**
+ * A rough guess at a label's rendered half-width, in the same world units the
+ * force simulation already uses for link distance. Nothing here is drawn with
+ * this number — it only tells the collision force how much room a long title
+ * needs, so nodes spread out enough that every label ends up with space
+ * rather than losing a fight over the same patch of canvas.
+ */
+function estimateLabelHalfWidth(label: string, isConversation: boolean): number {
+  const avgCharPx = isConversation ? 7.6 : 6.6;
+  const cap = isConversation ? 168 : 120;
+  return Math.min(label.length * avgCharPx, cap) / 2;
+}
+
 interface Node extends SimulationNodeDatum {
   data: GraphNode;
   r: number;
   color: string;
+  /** Half the label's estimated rendered width, so nodes with long titles
+   *  push each other further apart instead of drawing over the label. */
+  labelHalf: number;
 }
 
 interface Link extends SimulationLinkDatum<Node> {
@@ -142,13 +159,7 @@ function wrapLines(
   return lines;
 }
 
-export default function Graph({
-  onOpenIdea,
-  onOpenConversation,
-}: {
-  onOpenIdea: (ideaId: number) => void;
-  onOpenConversation: (sessionId: number) => void;
-}) {
+export default function Graph() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const paletteRef = useRef<Palette>(readPalette());
   const nodesRef = useRef<Node[]>([]);
@@ -170,10 +181,16 @@ export default function Graph({
   const [empty, setEmpty] = useState(false);
   const [legend, setLegend] = useState<[string, string][]>([]);
 
-  const openIdea = useRef(onOpenIdea);
-  openIdea.current = onOpenIdea;
-  const openConversation = useRef(onOpenConversation);
-  openConversation.current = onOpenConversation;
+  // Opening a node's file happens over the map, not instead of it — clicking
+  // the same node again closes it, clicking a different one swaps the panel's
+  // content, rather than navigating away and losing the map's state.
+  const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
+  const openIdea = useRef((id: number) =>
+    setPanel((p) => (p?.kind === "idea" && p.id === id ? null : { kind: "idea", id })),
+  );
+  const openConversation = useRef((id: number) =>
+    setPanel((p) => (p?.kind === "conversation" && p.id === id ? null : { kind: "conversation", id })),
+  );
 
   const toScreen = useCallback((n: { x?: number; y?: number }, w: number, h: number) => {
     const v = viewRef.current;
@@ -270,17 +287,11 @@ export default function Graph({
       ctx.fill();
     }
 
-    // Labels last so nothing is drawn over them. A small map has room to name
-    // every idea; a large one would become a wall of text.
-    const roomy = nodesRef.current.length <= 25;
+    // Labels last so nothing is drawn over them. Every node gets one — the
+    // force simulation's collision radius accounts for label size precisely
+    // so that spacing, not skipping, is what keeps them apart.
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    // Bounding boxes already placed this frame, so a later label can be skipped
-    // rather than stamped on top of one that got there first. Conversations and
-    // hover are drawn before ideas so they always win a collision.
-    const placedBoxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
-    const overlaps = (b: { x0: number; y0: number; x1: number; y1: number }) =>
-      placedBoxes.some((p) => b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
 
     const candidates = [...nodesRef.current].sort((a, b) => {
       const rank = (n: Node) => (hover === n ? 0 : n.data.kind === "conversation" ? 1 : n.data.shared ? 2 : 3);
@@ -291,7 +302,6 @@ export default function Graph({
 
     for (const n of candidates) {
       const isConversation = n.data.kind === "conversation";
-      if (!(roomy || isConversation || n.data.shared || hover === n)) continue;
 
       const s = toScreen(n, w, h);
       const r = n.r * Math.max(0.6, Math.min(viewRef.current.scale, 2));
@@ -304,26 +314,10 @@ export default function Graph({
         ? `600 ${labelPx * 1.04}px ui-sans-serif, system-ui, sans-serif`
         : `${labelPx}px ui-sans-serif, system-ui, sans-serif`;
 
-      // Conversation titles get a wider column and an extra line — they're
-      // always shown regardless of crowding, so there's no reason to make
-      // them fight the same narrow width as an idea that might get skipped.
+      // Conversation titles get a wider column and an extra line.
       const maxLabelWidth = isConversation ? baseLabelWidth * 1.4 : baseLabelWidth;
       const lineHeight = labelPx * 1.3;
       const lines = wrapLines(ctx, n.data.label, maxLabelWidth, isConversation ? 5 : 4);
-      const width = Math.max(...lines.map((l) => ctx.measureText(l).width));
-      const box = {
-        x0: s.x - width / 2 - 3,
-        x1: s.x + width / 2 + 3,
-        y0: s.y + r + 5,
-        y1: s.y + r + 9 + lines.length * lineHeight,
-      };
-
-      // A conversation, a shared idea, or whatever is hovered always renders —
-      // losing those would hide the map's most meaningful nodes. A plain idea
-      // steps aside instead of overlapping one of them.
-      const mustShow = isConversation || n.data.shared || hover === n;
-      if (!mustShow && overlaps(box)) continue;
-      placedBoxes.push(box);
 
       ctx.globalAlpha = inFocus(n) ? 1 : 0.2;
       ctx.fillStyle =
@@ -367,16 +361,14 @@ export default function Graph({
     const previous = new Map(nodesRef.current.map((n) => [n.data.id, n]));
     const nodes: Node[] = data.nodes.map((d) => {
       const old = previous.get(d.id);
+      const isConversation = d.kind === "conversation";
       return {
         data: d,
-        r:
-          d.kind === "conversation"
-            ? CONVERSATION_RADIUS + Math.min(12, d.weight * 2)
-            : IDEA_RADIUS + Math.min(8, (d.weight - 1) * 4),
-        color:
-          d.kind === "conversation"
-            ? C.conversation
-            : colors.get(d.category) ?? UNCATEGORISED,
+        r: isConversation
+          ? CONVERSATION_RADIUS + Math.min(12, d.weight * 2)
+          : IDEA_RADIUS + Math.min(8, (d.weight - 1) * 4),
+        color: isConversation ? C.conversation : colors.get(d.category) ?? UNCATEGORISED,
+        labelHalf: estimateLabelHalfWidth(d.label, isConversation),
         x: old?.x ?? (Math.random() - 0.5) * 400,
         y: old?.y ?? (Math.random() - 0.5) * 400,
       };
@@ -424,7 +416,11 @@ export default function Graph({
       )
       // Bigger nodes push harder, so conversations claim their own space.
       .force("charge", forceManyBody<Node>().strength((n) => -40 - n.r * 9))
-      .force("collide", forceCollide<Node>().radius((n) => n.r + 14))
+      // The label hangs below the node rather than around it, so this is an
+      // approximation, not a tight fit — but it is what keeps a node with a
+      // long title from being crowded before its label ever gets a chance to
+      // draw.
+      .force("collide", forceCollide<Node>().radius((n) => n.r + 20 + n.labelHalf))
       // Strong enough to hold the map around the origin, so the initial framing
       // stays valid as the simulation keeps moving. Too weak and it slowly
       // wanders out of view while you watch it.
@@ -712,6 +708,24 @@ export default function Graph({
           </span>
         ))}
       </div>
+
+      {panel && (
+        <div className="graph-panel">
+          {panel.kind === "idea" ? (
+            <IdeaFile
+              ideaId={panel.id}
+              onOpenConversation={(id) => openConversation.current(id)}
+              onClose={() => setPanel(null)}
+            />
+          ) : (
+            <ConversationFile
+              sessionId={panel.id}
+              onOpenIdea={(id) => openIdea.current(id)}
+              onClose={() => setPanel(null)}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

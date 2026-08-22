@@ -398,10 +398,7 @@ export default function App() {
           />
         )
       ) : view === "map" ? (
-        <Graph
-          onOpenIdea={(id) => setDeep({ kind: "idea", id })}
-          onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
-        />
+        <Graph />
       ) : view === "ideas" ? (
         <Ideas onOpen={(id) => setDeep({ kind: "idea", id })} />
       ) : view === "chats" ? (

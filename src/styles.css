@@ -113,7 +113,9 @@ body {
   background: var(--surface);
   border-bottom: 1px solid var(--line);
   overflow-x: auto;
+  scrollbar-width: none;
 }
+.topbar::-webkit-scrollbar { display: none; }
 
 /* The app's own name — brighter than a nav label, so it reads as a mark
    rather than another button. Compact: this is a bar, not a page header. */
@@ -620,6 +622,25 @@ blockquote {
 /* ---- Map ---- */
 
 .graph-wrap { position: relative; flex: 1; min-height: 0; width: 100%; }
+
+/* A node's file, opened over the map rather than instead of it — the map
+   keeps its position and simulation state, since navigating away and back
+   used to reset what you were looking at. */
+.graph-panel {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  bottom: 0.6rem;
+  width: min(26rem, 40%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  overflow-y: auto;
+  z-index: 40;
+}
+.graph-panel .pane-inner { padding: 0.9rem 1rem 1.5rem; }
+.graph-panel .pane-inner > * { max-width: none; }
 .graph { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
 .graph:active { cursor: grabbing; }
 .graph-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
