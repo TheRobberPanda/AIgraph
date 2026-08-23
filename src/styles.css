@@ -1272,15 +1272,24 @@ blockquote {
   max-width: 60%;
   font-family: var(--mono); font-size: 0.6rem; color: var(--faint); pointer-events: none;
 }
-.graph-key span {
+.graph-key button {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   pointer-events: auto;
   padding: 0.1rem 0.3rem;
+  border: 1px solid transparent;
   border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
 }
-.graph-key span.on { background: var(--surface-lift); color: var(--fg); }
+.graph-key button.on { background: var(--surface-lift); color: var(--fg); }
+/* Pinned reads differently from merely pointed at — one of them survives the
+   pointer leaving, and the map behaves differently while it holds. */
+.graph-key button.pinned { border-color: var(--line); }
+.graph-key .conv-key { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.1rem 0.3rem; }
 .graph-key i { width: 7px; height: 7px; border-radius: 50%; }
 
 .nudge-layer { position: absolute; inset: 0; pointer-events: none; }

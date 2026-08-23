@@ -205,8 +205,26 @@ export default function Graph({ folder }: { folder: number | null }) {
   const simRef = useRef<Simulation<Node, Link> | null>(null);
   const viewRef = useRef({ x: 0, y: 0, scale: 1 });
   const hoverRef = useRef<Node | null>(null);
-  const legendFocusRef = useRef<string | null>(null);
+  /** A subject picked out of the legend. Clicking pins it — that is what
+   *  reveals titles; hovering only previews the highlight, because a preview
+   *  that also rearranged the labels would flicker the map on the way past. */
+  const legendPinRef = useRef<string | null>(null);
+  const legendHoverRef = useRef<string | null>(null);
+  const [legendPin, setLegendPin] = useState<string | null>(null);
   const [legendFocus, setLegendFocus] = useState<string | null>(null);
+  /** The node being looked at, and everything it touches: the only ideas
+   *  named on the map when no subject is pinned. */
+  const focusNodeRef = useRef<Node | null>(null);
+  const revealRef = useRef<Set<string>>(new Set());
+  /** A view in flight, stepped by the draw loop. Retargeted every frame from
+   *  the node's live position, so it lands centred even though the layout is
+   *  still moving underneath it. */
+  const travelRef = useRef<
+    { node: Node; fromX: number; fromY: number; fromScale: number; toScale: number; t0: number } | null
+  >(null);
+  /** Whether idea titles currently fit without overlapping. Held in a ref with
+   *  a dead band so it does not blink on and off while the layout settles. */
+  const labelsFitRef = useRef(true);
   const dragNodeRef = useRef<Node | null>(null);
   const panRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const frameRef = useRef(0);
@@ -262,11 +280,26 @@ export default function Graph({ folder }: { folder: number | null }) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
+    // A click on the map travels the view to what was clicked. Retargeted
+    // each frame rather than aimed once, because the node is still drifting.
+    const travel = travelRef.current;
+    if (travel) {
+      const t = Math.min(1, (performance.now() - travel.t0) / 460);
+      const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      const scale = travel.fromScale + (travel.toScale - travel.fromScale) * e;
+      const v = viewRef.current;
+      v.scale = scale;
+      v.x = travel.fromX + (-(travel.node.x ?? 0) * scale - travel.fromX) * e;
+      v.y = travel.fromY + (-(travel.node.y ?? 0) * scale - travel.fromY) * e;
+      if (t >= 1) travelRef.current = null;
+    }
+
     const hover = hoverRef.current;
     // Hovering an idea — or a tag in the legend — lifts everything in the same
     // category and pushes the rest back, so a subject can be picked out of
     // the whole map at once.
-    const focus = legendFocusRef.current || hover?.data.category || null;
+    const focus =
+      legendPinRef.current || legendHoverRef.current || hover?.data.category || null;
     const inFocus = (n: Node) =>
       !focus || (n.data.kind === "idea" && n.data.category === focus) || n === hover;
 
@@ -344,12 +377,15 @@ export default function Graph({ folder }: { folder: number | null }) {
     // named, plus whatever is being pointed at.
     const compact = ruleset(w).tight;
 
-    // Boxes already drawn this frame. Spacing gets it most of the way, but a
-    // drag or a fresh layout can still overlap two labels, and text on text is
-    // unreadable in a way that a hidden label is not.
-    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
-    const collides = (b: { x0: number; y0: number; x1: number; y1: number }) =>
-      placed.some((p) => b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
+    // Ideas are not named by default. A map with every title on it is a wall
+    // of text; the titles are what you ask for, by pointing at a node, opening
+    // one, or pinning a subject in the legend.
+    const pinned = legendPinRef.current;
+    const revealed = (n: Node) =>
+      hover === n ||
+      focusNodeRef.current === n ||
+      revealRef.current.has(n.data.id) ||
+      (pinned !== null && n.data.category === pinned);
 
     const candidates = [...nodesRef.current].sort((a, b) => {
       const rank = (n: Node) => (hover === n ? 0 : n.data.kind === "conversation" ? 1 : n.data.shared ? 2 : 3);
@@ -358,9 +394,23 @@ export default function Graph({ folder }: { folder: number | null }) {
 
     const baseLabelWidth =
       (compact ? 84 : 120) * Math.max(0.6, Math.min(viewRef.current.scale, 2));
+    const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const labelPx = (rootPx / 16) * 13;
 
+    // Lay every label out first, then decide whether the set of them fits.
+    type Placed = {
+      n: Node;
+      lines: string[];
+      x: number;
+      y: number;
+      lineHeight: number;
+      box: { x0: number; y0: number; x1: number; y1: number };
+      isConversation: boolean;
+    };
+    const laid: Placed[] = [];
     for (const n of candidates) {
       const isConversation = n.data.kind === "conversation";
+      if (!isConversation && !revealed(n)) continue;
       if (compact && !isConversation && hover !== n) continue;
 
       const s = toScreen(n, w, h);
@@ -368,8 +418,6 @@ export default function Graph({ folder }: { folder: number | null }) {
       // The map draws to a canvas, which the interface-scale setting cannot
       // reach through CSS — read the root font-size directly so map text grows
       // and shrinks with everything else instead of staying fixed.
-      const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-      const labelPx = (rootPx / 16) * 13;
       ctx.font = isConversation
         ? `600 ${labelPx * 1.04}px ui-sans-serif, system-ui, sans-serif`
         : `${labelPx}px ui-sans-serif, system-ui, sans-serif`;
@@ -378,7 +426,6 @@ export default function Graph({ folder }: { folder: number | null }) {
       const maxLabelWidth = isConversation ? baseLabelWidth * 1.4 : baseLabelWidth;
       const lineHeight = labelPx * 1.3;
       const lines = wrapLines(ctx, n.data.label, maxLabelWidth, isConversation ? 5 : 4);
-
       const widest = Math.max(...lines.map((l) => ctx.measureText(l).width));
       const box = {
         x0: s.x - widest / 2 - 3,
@@ -386,16 +433,63 @@ export default function Graph({ folder }: { folder: number | null }) {
         y0: s.y + r + 5,
         y1: s.y + r + 9 + lines.length * lineHeight,
       };
-      // Conversations and whatever is hovered always draw — losing those hides
-      // the map's landmarks. An ordinary idea steps aside instead.
-      const mustDraw = isConversation || hover === n;
-      if (!mustDraw && collides(box)) continue;
-      placed.push(box);
+      // Only what is on screen counts, for drawing and for the crowding test
+      // below. A title two screens away is not in anyone's way, and letting it
+      // vote meant zooming in never uncrowded the map.
+      if (box.x1 < 0 || box.x0 > w || box.y1 < 0 || box.y0 > h) continue;
+      laid.push({
+        n,
+        lines,
+        x: s.x,
+        y: s.y + r + 7,
+        lineHeight,
+        isConversation,
+        box,
+      });
+    }
 
-      ctx.globalAlpha = inFocus(n) ? 1 : 0.2;
+    // Zoom out far enough and the titles start landing on top of each other.
+    // Rather than dropping whichever one loses — which leaves an arbitrary
+    // half of the map named and reads as a bug — they all go at once, and the
+    // map falls back to its landmarks. The margin widens while they are
+    // hidden, so the two states do not trade places every frame.
+    const margin = labelsFitRef.current ? 0 : labelPx * 0.5;
+    const grew = (b: Placed["box"]) => ({
+      x0: b.x0 - margin,
+      y0: b.y0 - margin,
+      x1: b.x1 + margin,
+      y1: b.y1 + margin,
+    });
+    let clash = false;
+    for (let i = 0; i < laid.length && !clash; i++) {
+      for (let j = i + 1; j < laid.length; j++) {
+        // Only one idea's title covering another counts. An idea sitting over
+        // a conversation's title is fine: whichever of the two is out of focus
+        // is dimmed, so the one being looked at still reads — and conversation
+        // titles are unavoidable, since an idea orbits the conversation whose
+        // name is written directly beneath it.
+        if (laid[i].isConversation || laid[j].isConversation) continue;
+        const a = grew(laid[i].box);
+        const b = grew(laid[j].box);
+        if (a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0) {
+          clash = true;
+          break;
+        }
+      }
+    }
+    labelsFitRef.current = !clash;
+
+    for (const l of laid) {
+      // Conversations are the map's landmarks and always keep their names, as
+      // does whatever is being pointed at directly.
+      if (!l.isConversation && clash && hover !== l.n && focusNodeRef.current !== l.n) continue;
+      ctx.font = l.isConversation
+        ? `600 ${labelPx * 1.04}px ui-sans-serif, system-ui, sans-serif`
+        : `${labelPx}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.globalAlpha = inFocus(l.n) ? 1 : 0.2;
       ctx.fillStyle =
-        hover === n ? C.labelHover : isConversation ? C.labelConversation : C.labelIdea;
-      lines.forEach((l, i) => ctx.fillText(l, s.x, s.y + r + 7 + i * lineHeight));
+        hover === l.n ? C.labelHover : l.isConversation ? C.labelConversation : C.labelIdea;
+      l.lines.forEach((line, i) => ctx.fillText(line, l.x, l.y + i * l.lineHeight));
     }
     ctx.globalAlpha = 1;
   }, [toScreen]);
@@ -622,6 +716,46 @@ export default function Graph({ folder }: { folder: number | null }) {
     };
   }
 
+  /**
+   * Frame a node: travel the view to it, and name it along with everything it
+   * touches.
+   *
+   * The neighbours matter more than the node itself. A conversation is only
+   * worth looking at closely to see what came out of it, and an idea to see
+   * what it sits next to — so pointing at either one names the whole cluster
+   * rather than the single dot you happened to hit.
+   */
+  function focusOn(n: Node) {
+    if (focusNodeRef.current === n) {
+      focusNodeRef.current = null;
+      revealRef.current = new Set();
+      travelRef.current = null;
+      return;
+    }
+    focusNodeRef.current = n;
+    const near = new Set<string>([n.data.id]);
+    for (const l of linksRef.current) {
+      if (l.kind === "category") continue;
+      const a = l.source as Node;
+      const b = l.target as Node;
+      if (a === n) near.add(b.data.id);
+      if (b === n) near.add(a.data.id);
+    }
+    revealRef.current = near;
+
+    const v = viewRef.current;
+    travelRef.current = {
+      node: n,
+      fromX: v.x,
+      fromY: v.y,
+      fromScale: v.scale,
+      // Close enough to read, without throwing away the surroundings. Already
+      // closer than that, and the zoom is left where it was.
+      toScale: Math.min(2.2, Math.max(v.scale, 1.15)),
+      t0: performance.now(),
+    };
+  }
+
   function nodeAt(clientX: number, clientY: number): Node | null {
     const canvas = canvasRef.current;
     if (!canvas) return null;
@@ -712,6 +846,8 @@ export default function Graph({ folder }: { folder: number | null }) {
         ref={canvasRef}
         className="graph"
         onMouseDown={(e) => {
+          // Any deliberate move of the view takes it over from the animation.
+          travelRef.current = null;
           const hit = nodeAt(e.clientX, e.clientY);
           if (hit) {
             // Pinned while held, so the rest of the map reorganises around it.
@@ -818,7 +954,13 @@ export default function Graph({ folder }: { folder: number | null }) {
           if (wasDrag) return;
 
           const hit = nodeAt(e.clientX, e.clientY);
-          if (!hit) return;
+          if (!hit) {
+            // Clicking the bare map puts the titles away again.
+            focusNodeRef.current = null;
+            revealRef.current = new Set();
+            return;
+          }
+          focusOn(hit);
           if (hit.data.kind === "idea" && hit.data.idea_id !== null)
             openIdea.current(hit.data.idea_id);
           if (hit.data.kind === "conversation" && hit.data.session_id !== null)
@@ -827,6 +969,7 @@ export default function Graph({ folder }: { folder: number | null }) {
         onWheel={(e) => {
           const canvas = canvasRef.current;
           if (!canvas) return;
+          travelRef.current = null;
           const rect = canvas.getBoundingClientRect();
           const px = e.clientX - rect.left - rect.width / 2;
           const py = e.clientY - rect.top - rect.height / 2;
@@ -843,6 +986,9 @@ export default function Graph({ folder }: { folder: number | null }) {
         <button
           className="graph-reset"
           onClick={() => {
+            travelRef.current = null;
+            focusNodeRef.current = null;
+            revealRef.current = new Set();
             fitToView();
             simRef.current?.alpha(0.4).restart();
           }}
@@ -878,24 +1024,33 @@ export default function Graph({ folder }: { folder: number | null }) {
       )}
 
       <div className="graph-key">
-        <span>
+        <span className="conv-key">
           <i style={{ background: "var(--accent)" }} /> conversation
         </span>
         {legend.slice(0, 6).map(([name, color]) => (
-          <span
+          <button
+            type="button"
             key={name}
-            className={legendFocus === name ? "on" : undefined}
+            // Hovering previews the highlight; clicking pins it, which is also
+            // what puts that subject's titles on the map.
+            className={legendPin === name ? "on pinned" : legendFocus === name ? "on" : undefined}
+            aria-pressed={legendPin === name}
+            onClick={() => {
+              const next = legendPin === name ? null : name;
+              legendPinRef.current = next;
+              setLegendPin(next);
+            }}
             onMouseEnter={() => {
-              legendFocusRef.current = name;
+              legendHoverRef.current = name;
               setLegendFocus(name);
             }}
             onMouseLeave={() => {
-              legendFocusRef.current = null;
+              legendHoverRef.current = null;
               setLegendFocus(null);
             }}
           >
             <i style={{ background: color }} /> {name}
-          </span>
+          </button>
         ))}
       </div>
 
