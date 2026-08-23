@@ -257,6 +257,83 @@ input, textarea {
 .statusbar .spacer { margin-left: auto; }
 .statusbar .busy-item { color: var(--accent); }
 
+/* ---- The no-model screen ---- */
+
+/* Had no rules at all, which is why it rendered flush against the window
+   edge with no measure. It is the first thing anyone sees. */
+.setup { max-width: 34rem; padding-top: 1.5rem; }
+.setup h1 { margin: 0 0 0.5rem; font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; }
+.setup .blurb { margin: 0 0 1rem; color: var(--muted); }
+.setup section { margin-bottom: 1.2rem; }
+.setup code {
+  padding: 0.08em 0.35em;
+  border-radius: 4px;
+  background: var(--user);
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+.setup .plain-list { margin: 0 0 1.4rem; padding: 0; list-style: none; color: var(--muted); }
+.setup .plain-list li { margin-bottom: 0.5rem; }
+.setup-bar { gap: 0.5rem; margin-top: 1.2rem; }
+/* The variant that sits above a pane of its own rather than inside one. */
+.setup-bar.bordered {
+  flex: none;
+  margin: 0;
+  padding: 0.6rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+/* What happens after Done. */
+.filed { display: flex; flex-direction: column; gap: 0.7rem; align-items: flex-start; }
+.filed-head { margin: 0; font-size: 1rem; font-weight: 600; }
+.filed-status { margin: 0; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: var(--muted); }
+
+/* ---- Folders ---- */
+
+.folder-btn { display: inline-flex; align-items: center; gap: 0.4rem; max-width: 12rem; }
+.folder-btn > :last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.folder-modal { min-width: 24rem; max-width: 30rem; display: flex; flex-direction: column; gap: 0.9rem; }
+.folder-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; max-height: 18rem; overflow-y: auto; }
+.folder-list li { display: flex; align-items: center; gap: 0.3rem; }
+.folder-row {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+.folder-row:hover { background: var(--surface); }
+.folder-row.on { border-color: var(--accent); color: var(--fg); }
+.folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-remove { width: 1.7rem; height: 1.7rem; border: none; font-size: 1rem; line-height: 1; }
+.folder-new { gap: 0.4rem; }
+.folder-new .field { flex: 1; }
+
+/* A folder heading in the Ideas tree — above the conversations it holds. */
+.folder-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 1.4rem 0 0.3rem;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--accent);
+}
+.folder-head:first-child { margin-top: 0; }
+.folder-head .row-meta { color: var(--faint); }
+
 /* ---- Panel headings, shared ---- */
 
 .head {

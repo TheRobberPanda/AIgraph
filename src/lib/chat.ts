@@ -101,6 +101,7 @@ export interface SessionSummary {
   opening: string;
   title: string;
   archived: boolean;
+  folder_id: number;
 }
 
 /** Archive the current session and clear the stream. Returns null if nothing was said. */

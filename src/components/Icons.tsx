@@ -163,3 +163,12 @@ export function IconArchive(props: SVGProps<SVGSVGElement>) {
     </Base>
   );
 }
+
+/** A folder — where a stretch of thinking gets filed. */
+export function IconFolder(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="14" height="14" {...props}>
+      <path d="M3 6h6l2 2h10v11H3z" />
+    </Base>
+  );
+}

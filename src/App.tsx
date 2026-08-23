@@ -12,10 +12,12 @@ import {
   IconMinimize,
   IconMaximize,
   IconClose,
+  IconFolder,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
 import ContextMenu from "./components/ContextMenu";
+import FolderPicker from "./components/FolderPicker";
 import Graph from "./components/Graph";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
@@ -30,6 +32,7 @@ import {
   type ExtractionProgress,
 } from "./lib/ideas";
 import Mic from "./components/Mic";
+import { currentFolder, listFolders, setCurrentFolder, ROOT_FOLDER } from "./lib/folders";
 import {
   deleteTurn,
   endSession,
@@ -99,6 +102,31 @@ function deepFromHash(): Deep {
   return null;
 }
 
+/** Minimise, maximise, close. The window has no frame of its own. */
+function WindowControls() {
+  return (
+    <div className="window-controls">
+      <button className="window-btn" data-tip="Minimize" onClick={() => void getCurrentWindow().minimize()}>
+        <IconMinimize />
+      </button>
+      <button
+        className="window-btn"
+        data-tip="Maximize"
+        onClick={() => void getCurrentWindow().toggleMaximize()}
+      >
+        <IconMaximize />
+      </button>
+      <button
+        className="window-btn close"
+        data-tip="Close"
+        onClick={() => void getCurrentWindow().close()}
+      >
+        <IconClose />
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
@@ -127,6 +155,15 @@ export default function App() {
     null,
   );
   const [turnMenu, setTurnMenu] = useState<{ x: number; y: number; index: number } | null>(null);
+  // Where this stretch of thinking gets filed. The backend is the source of
+  // truth, since an idle timeout can archive without the UI involved.
+  const [folderId, setFolderId] = useState<number>(ROOT_FOLDER);
+  const [folderName, setFolderName] = useState("Root");
+  const [pickingFolder, setPickingFolder] = useState(false);
+  // The no-model screen can drop into the Models tab rather than being a dead
+  // end — someone with an API key or the claude CLI had no way through it.
+  const [setupModels, setSetupModels] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -147,6 +184,16 @@ export default function App() {
     document.addEventListener("contextmenu", onContextMenu);
     return () => document.removeEventListener("contextmenu", onContextMenu);
   }, []);
+
+  useEffect(() => {
+    void currentFolder().then(setFolderId).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    void listFolders()
+      .then((fs) => setFolderName(fs.find((f) => f.id === folderId)?.name ?? "Root"))
+      .catch(() => {});
+  }, [folderId, pickingFolder]);
 
   useEffect(() => {
     startup()
@@ -207,12 +254,10 @@ export default function App() {
     };
   }, []);
 
-  // Let the confirmation fade rather than sit there forever.
-  useEffect(() => {
-    if (!justArchived) return;
-    const t = setTimeout(() => setJustArchived(null), 6000);
-    return () => clearTimeout(t);
-  }, [justArchived]);
+  // Deliberately not auto-dismissed. It used to vanish after six seconds,
+  // which is roughly when extraction is still running and the result the
+  // person is waiting for has not arrived yet. It clears when they start
+  // talking again instead.
 
   async function send() {
     const text = draft.trim();
@@ -252,6 +297,21 @@ export default function App() {
       setStreaming(false);
       setThinking(false);
       inputRef.current?.focus();
+    }
+  }
+
+  /** Ask the backend to look for models again, so nothing needs restarting. */
+  async function recheck() {
+    setRechecking(true);
+    setError(null);
+    try {
+      const s = await startup();
+      setServers(s.servers);
+      setProvider(s.selected);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRechecking(false);
     }
   }
 
@@ -307,74 +367,102 @@ export default function App() {
   const usable = (servers ?? []).filter((s) => chatModels(s).length > 0);
 
   if (servers && !provider) {
+    const idle = servers.some((s) => s.models.length === 0);
     return (
-      <main className="app centered">
+      <main className="app">
         <nav className="topbar" data-tauri-drag-region>
           <div className="brand" data-tauri-drag-region>Idea Graph</div>
-          <div className="topbar-spacer" />
-          <div className="window-controls">
-            <button className="window-btn" data-tip="Minimize" onClick={() => void getCurrentWindow().minimize()}>
-              <IconMinimize />
-            </button>
-            <button
-              className="window-btn"
-              data-tip="Maximize"
-              onClick={() => void getCurrentWindow().toggleMaximize()}
-            >
-              <IconMaximize />
-            </button>
-            <button
-              className="window-btn close"
-              data-tip="Close"
-              onClick={() => void getCurrentWindow().close()}
-            >
-              <IconClose />
-            </button>
-          </div>
+          <div className="topbar-spacer" data-tauri-drag-region />
+          <WindowControls />
         </nav>
-        <div className="setup">
-          <h1>Pick a model</h1>
-          {usable.length === 0 ? (
-            <p className="muted">
-              No local model server found. Start <strong>LM Studio</strong> (and
-              load a model) or run <code>ollama serve</code> after pulling one
-              with <code>ollama pull llama3.2</code>, then reopen this app.
-              {servers.some((s) => s.models.length === 0) && (
-                <>
-                  {" "}A server is running but has no model loaded.
-                </>
-              )}
-            </p>
+
+        <div className="pane">
+          {setupModels ? (
+            <>
+              {/* Outside the pane-inner on purpose: Models brings its own, and
+                  nesting them would double the padding and stack two scroll
+                  containers. */}
+              <div className="row setup-bar bordered">
+                <button className="btn" onClick={() => setSetupModels(false)}>
+                  ← Back
+                </button>
+                <button className="btn on" disabled={rechecking} onClick={() => void recheck()}>
+                  {rechecking ? "Checking…" : "Done — start thinking"}
+                </button>
+              </div>
+              {/* The Models tab already knows how to find local servers, hold an
+                  API key, and detect the claude CLI. No reason to build a
+                  second, worse version of it here. */}
+              <Models />
+            </>
           ) : (
-            usable.map((s) => (
-              <section key={s.kind}>
-                <h2>{s.kind === "lmstudio" ? "LM Studio" : "Ollama"}</h2>
-                <ul>
-                  {chatModels(s)
-                    // Ready models first — those start answering immediately.
-                    .sort((a, b) => Number(b.loaded ?? true) - Number(a.loaded ?? true))
-                    .map((m) => (
-                      <li key={m.id}>
-                        <button
-                          onClick={() =>
-                            selectProvider(s.kind, s.host, m.id)
-                              .then(setProvider)
-                              .catch((e) => setError(String(e)))
-                          }
-                        >
-                          <span>{m.id}</span>
-                          {m.loaded === false && (
-                            <span className="tag">needs loading</span>
-                          )}
-                          {m.loaded === true && <span className="tag ready">ready</span>}
-                        </button>
+            <div className="pane-inner">
+              <div className="setup">
+                <h1>Pick a model</h1>
+
+                {usable.length === 0 ? (
+                  <>
+                    <p className="blurb">
+                      {idle
+                        ? "A model server is running, but nothing is loaded in it. Load a model and look again."
+                        : "Nothing to talk to yet. Idea Graph needs a model — local by default, so your thinking stays on this machine."}
+                    </p>
+                    <ul className="plain-list">
+                      <li>
+                        <strong>LM Studio</strong> — start it and load a model.
                       </li>
-                    ))}
-                </ul>
-              </section>
-            ))
+                      <li>
+                        <strong>Ollama</strong> — <code>ollama pull llama3.2</code>, then{" "}
+                        <code>ollama serve</code>.
+                      </li>
+                      <li>
+                        Prefer a remote model, or already pay for Claude? Set that up in{" "}
+                        <strong>Models</strong>.
+                      </li>
+                    </ul>
+                  </>
+                ) : (
+                  usable.map((s) => (
+                    <section key={s.kind}>
+                      <h2 className="section">{s.kind === "lmstudio" ? "LM Studio" : "Ollama"}</h2>
+                      <ul className="list">
+                        {chatModels(s)
+                          // Ready models first — those start answering immediately.
+                          .sort((a, b) => Number(b.loaded ?? true) - Number(a.loaded ?? true))
+                          .map((m) => (
+                            <li key={m.id}>
+                              <button
+                                className="row-btn"
+                                onClick={() =>
+                                  selectProvider(s.kind, s.host, m.id)
+                                    .then(setProvider)
+                                    .catch((e) => setError(String(e)))
+                                }
+                              >
+                                <span className="row-main">{m.id}</span>
+                                {m.loaded === false && <span className="tag">needs loading</span>}
+                                {m.loaded === true && <span className="tag ready">ready</span>}
+                              </button>
+                            </li>
+                          ))}
+                      </ul>
+                    </section>
+                  ))
+                )}
+
+                <div className="row setup-bar">
+                  <button className="btn" disabled={rechecking} onClick={() => void recheck()}>
+                    {rechecking ? "Looking…" : "Look again"}
+                  </button>
+                  <button className="btn" onClick={() => setSetupModels(true)}>
+                    Models and API keys
+                  </button>
+                </div>
+
+                {error && <p className="error">{error}</p>}
+              </div>
+            </div>
           )}
-          {error && <div className="error">{error}</div>}
         </div>
       </main>
     );
@@ -440,25 +528,7 @@ export default function App() {
           })}
         </div>
 
-        <div className="window-controls">
-          <button className="window-btn" data-tip="Minimize" onClick={() => void getCurrentWindow().minimize()}>
-            <IconMinimize />
-          </button>
-          <button
-            className="window-btn"
-            data-tip="Maximize"
-            onClick={() => void getCurrentWindow().toggleMaximize()}
-          >
-            <IconMaximize />
-          </button>
-          <button
-            className="window-btn close"
-            data-tip="Close"
-            onClick={() => void getCurrentWindow().close()}
-          >
-            <IconClose />
-          </button>
-        </div>
+        <WindowControls />
       </nav>
 
       <div className="pane">
@@ -496,14 +566,45 @@ export default function App() {
         )}
 
         {turns.length === 0 && justArchived && (
-          <p className="empty">
-            {justArchived.reason === "idle"
-              ? "That session went quiet and has been filed."
-              : "Filed."}{" "}
-            {justArchived.turn_count} turns kept.
-            <br />
-            <span className="muted">Start again whenever.</span>
-          </p>
+          // Pressing Done used to end here, with nothing to do and nothing
+          // visibly happening — so the reading-back is now shown as it runs,
+          // and the map is offered the moment there is one to look at.
+          <div className="filed">
+            <p className="filed-head">
+              {justArchived.reason === "idle"
+                ? "That went quiet, so it has been filed."
+                : "Filed."}{" "}
+              <span className="muted">{justArchived.turn_count} turns kept in {folderName}.</span>
+            </p>
+
+            {digesting?.running?.session_id === justArchived.session_id ? (
+              <p className="filed-status">
+                <span className="spinner" aria-hidden="true" />
+                Reading it back for ideas. This can take a minute on a local model.
+              </p>
+            ) : digesting?.last?.session_id === justArchived.session_id &&
+              !digesting.last.error ? (
+              <>
+                <p className="filed-status">
+                  {digesting.last.ideas > 0
+                    ? `${digesting.last.ideas} idea${digesting.last.ideas === 1 ? "" : "s"} found.`
+                    : "Nothing substantive came out of that one."}
+                </p>
+                {digesting.last.ideas > 0 && (
+                  <div className="row">
+                    <button className="btn on" onClick={() => setView("map")}>
+                      See it on the map
+                    </button>
+                    <button className="btn" onClick={() => setView("ideas")}>
+                      Read the ideas
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="filed-status muted">Queued to be read back.</p>
+            )}
+          </div>
         )}
 
         {turns.map((t, i) => (
@@ -598,6 +699,14 @@ export default function App() {
             }
             disabled={streaming}
           />
+          <button
+            className="btn folder-btn"
+            onClick={() => setPickingFolder(true)}
+            data-tip="Choose which folder this conversation is filed in"
+          >
+            <IconFolder />
+            {folderName}
+          </button>
           <span className="spacer" />
           <button
             className="btn btn-send"
@@ -625,6 +734,17 @@ export default function App() {
       </div>
       )}
       </div>
+
+      {pickingFolder && (
+        <FolderPicker
+          current={folderId}
+          onPick={(id) => {
+            setFolderId(id);
+            void setCurrentFolder(id);
+          }}
+          onClose={() => setPickingFolder(false)}
+        />
+      )}
 
       <div className="statusbar">
         {provider ? `${provider.label} · ${provider.model}` : "no model"}

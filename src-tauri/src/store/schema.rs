@@ -9,6 +9,15 @@
 pub const VERSION: i32 = 1;
 
 pub const SCHEMA: &str = r#"
+-- Somewhere to keep one line of thinking apart from another. A conversation
+-- belongs to exactly one folder; the ideas it produced follow it there.
+-- Folder 1 is "Root" and always exists — anything unsorted lands in it.
+CREATE TABLE IF NOT EXISTS folders (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id            INTEGER PRIMARY KEY,
     started_at    TEXT NOT NULL,
@@ -25,7 +34,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- Set once a person renames the session by hand, so a later re-extraction
     -- never overwrites their own choice.
     title_locked  INTEGER NOT NULL DEFAULT 0,
-    archived      INTEGER NOT NULL DEFAULT 0
+    archived      INTEGER NOT NULL DEFAULT 0,
+    folder_id     INTEGER NOT NULL DEFAULT 1 REFERENCES folders(id)
 );
 
 -- `start_byte`/`end_byte` locate this turn's CONTENT inside sessions.transcript.
@@ -227,5 +237,17 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     if !session_cols.iter().any(|c| c == "archived") {
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;")?;
     }
+    if !session_cols.iter().any(|c| c == "folder_id") {
+        // No REFERENCES here: SQLite cannot add a column with a foreign key
+        // that has a non-constant default. The constraint holds on new
+        // databases, and every write goes through set_session_folder anyway.
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN folder_id INTEGER NOT NULL DEFAULT 1;")?;
+    }
+
+    // Root always exists, on a fresh database and on one made before folders.
+    conn.execute(
+        "INSERT OR IGNORE INTO folders (id, name, created_at) VALUES (1, 'Root', ?1)",
+        [chrono::Utc::now().to_rfc3339()],
+    )?;
     Ok(())
 }

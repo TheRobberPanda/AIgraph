@@ -44,6 +44,15 @@ Substance:
 - Vary sentence length. Three sentences of the same shape in a row reads as
   generated.
 
+Language:
+- Write in the language of the transcript, not in English. If the USER lines
+  are in Polish, then every claim, title, category, reasoning and note is in
+  Polish. The same for any other language.
+- Never translate a quote. The quote is located by searching the transcript
+  for it character for character, so a translated quote is not found and the
+  idea is thrown away.
+- Where a transcript mixes languages, follow the language of the USER lines.
+
 Who is speaking:
 - Never write "the user" or "the speaker", in any field, anywhere. State what
   the words do, not who did it: not "The user argues that X" but "Argues X."
@@ -70,6 +79,12 @@ mod tests {
             assert!(
                 body.contains("Never write \"the user\""),
                 "{name} lost the rule against naming who is speaking"
+            );
+            // Without this the model answers in English whatever was spoken,
+            // and a translated quote fails verification outright.
+            assert!(
+                body.contains("Write in the language of the transcript"),
+                "{name} lost the rule about matching the transcript's language"
             );
         }
     }

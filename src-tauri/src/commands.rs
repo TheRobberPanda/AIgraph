@@ -51,6 +51,11 @@ pub struct AppState {
     embed_cache_dir: PathBuf,
     extractor: Mutex<Option<Extractor>>,
     settings: Mutex<Settings>,
+    /// Where the conversation being had now will be filed once it ends.
+    ///
+    /// Backend state rather than frontend, because a session can be archived
+    /// by the idle timer or by the app closing, with no UI involved.
+    current_folder: Mutex<i64>,
     data_dir: PathBuf,
     /// Held for the duration of a drain. Extraction is serialized deliberately:
     /// two sessions decoding at once on one local model is slower than doing
@@ -91,6 +96,7 @@ impl AppState {
                 .parent()
                 .unwrap_or(std::path::Path::new("."))
                 .join("embeddings"),
+            current_folder: Mutex::new(crate::store::ROOT_FOLDER),
             drain_lock: tokio::sync::Mutex::new(()),
             retry_after: Mutex::new(Default::default()),
             md_dir,
@@ -364,6 +370,12 @@ pub async fn end_session_inner(
             .archive_session(&rendered, &model, started_at, Some(&state.md_dir))
             .map_err(|e| e.to_string())?
     };
+
+    {
+        let folder = *state.current_folder.lock().await;
+        let mut store = state.store.lock().await;
+        let _ = store.set_session_folder(session_id, folder);
+    }
 
     let turn_count = rendered.spans.len();
 
@@ -1078,6 +1090,78 @@ pub async fn delete_session(
         .lock()
         .await
         .delete_session(session_id)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn folders(state: State<'_, AppState>) -> Result<Vec<crate::store::Folder>, String> {
+    state.store.lock().await.folders().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_folder(state: State<'_, AppState>, name: String) -> Result<i64, String> {
+    if name.trim().is_empty() {
+        return Err("a folder needs a name".into());
+    }
+    state.store.lock().await.create_folder(&name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn rename_folder(
+    state: State<'_, AppState>,
+    folder_id: i64,
+    name: String,
+) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("a folder needs a name".into());
+    }
+    state.store.lock().await.rename_folder(folder_id, &name).map_err(|e| e.to_string())
+}
+
+/// Remove a folder. Whatever was filed in it goes back to Root.
+#[tauri::command]
+pub async fn delete_folder(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    folder_id: i64,
+) -> Result<(), String> {
+    state.store.lock().await.delete_folder(folder_id).map_err(|e| e.to_string())?;
+    let mut current = state.current_folder.lock().await;
+    if *current == folder_id {
+        *current = crate::store::ROOT_FOLDER;
+    }
+    drop(current);
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+/// Which folder the conversation being had now will be filed into.
+#[tauri::command]
+pub async fn current_folder(state: State<'_, AppState>) -> Result<i64, String> {
+    Ok(*state.current_folder.lock().await)
+}
+
+#[tauri::command]
+pub async fn set_current_folder(state: State<'_, AppState>, folder_id: i64) -> Result<(), String> {
+    *state.current_folder.lock().await = folder_id;
+    Ok(())
+}
+
+/// Move a conversation, and the ideas it produced, to another folder.
+#[tauri::command]
+pub async fn move_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: i64,
+    folder_id: i64,
+) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .await
+        .set_session_folder(session_id, folder_id)
         .map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
     Ok(())

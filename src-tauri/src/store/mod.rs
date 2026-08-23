@@ -38,6 +38,18 @@ pub struct Store {
     conn: Connection,
 }
 
+/// A place to keep one line of thinking apart from another.
+#[derive(Debug, Clone, Serialize)]
+pub struct Folder {
+    pub id: i64,
+    pub name: String,
+    /// How many conversations are filed here.
+    pub session_count: i64,
+}
+
+/// Root always exists and cannot be removed — unsorted thinking lands here.
+pub const ROOT_FOLDER: i64 = 1;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionSummary {
     pub id: i64,
@@ -60,6 +72,7 @@ pub struct SessionSummary {
     /// extraction has run once, or set by hand.
     pub title: String,
     pub archived: bool,
+    pub folder_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -353,7 +366,7 @@ impl Store {
                     COALESCE((SELECT t.text FROM turns t
                               WHERE t.session_id = s.id AND t.role = 'user'
                               ORDER BY t.ord LIMIT 1), ''),
-                    s.title, s.archived
+                    s.title, s.archived, s.folder_id
              FROM sessions s
              ORDER BY s.started_at DESC
              LIMIT ?1",
@@ -372,6 +385,7 @@ impl Store {
                 opening: r.get(8)?,
                 title: r.get(9)?,
                 archived: r.get::<_, i64>(10)? != 0,
+                folder_id: r.get(11)?,
             })
         })?;
 
@@ -1350,6 +1364,71 @@ impl Store {
         self.conn.execute(
             "UPDATE sessions SET title = ?2, title_locked = 1 WHERE id = ?1",
             params![session_id, title.trim()],
+        )?;
+        Ok(())
+    }
+
+    /// Every folder, Root first, then by name.
+    pub fn folders(&self) -> Result<Vec<Folder>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.id, f.name,
+                    (SELECT COUNT(*) FROM sessions s WHERE s.folder_id = f.id)
+             FROM folders f
+             ORDER BY (f.id <> 1), f.name",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Folder { id: r.get(0)?, name: r.get(1)?, session_count: r.get(2)? })
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    /// Make a folder, or return the one already using that name.
+    pub fn create_folder(&mut self, name: &str) -> Result<i64> {
+        let name = name.trim();
+        if let Some(id) = self
+            .conn
+            .query_row("SELECT id FROM folders WHERE name = ?1", [name], |r| r.get::<_, i64>(0))
+            .optional()?
+        {
+            return Ok(id);
+        }
+        self.conn.execute(
+            "INSERT INTO folders (name, created_at) VALUES (?1, ?2)",
+            params![name, Utc::now().to_rfc3339()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn rename_folder(&mut self, folder_id: i64, name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE folders SET name = ?2 WHERE id = ?1",
+            params![folder_id, name.trim()],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a folder, moving whatever was in it back to Root.
+    ///
+    /// Deleting the conversations too would make a tidy-up destructive, which
+    /// is never what moving things between folders should mean.
+    pub fn delete_folder(&mut self, folder_id: i64) -> Result<()> {
+        if folder_id == ROOT_FOLDER {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE sessions SET folder_id = ?2 WHERE folder_id = ?1",
+            params![folder_id, ROOT_FOLDER],
+        )?;
+        tx.execute("DELETE FROM folders WHERE id = ?1", [folder_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn set_session_folder(&mut self, session_id: i64, folder_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET folder_id = ?2 WHERE id = ?1",
+            params![session_id, folder_id],
         )?;
         Ok(())
     }

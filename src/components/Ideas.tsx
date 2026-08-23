@@ -11,6 +11,7 @@ import Confirm from "./Confirm";
 import FilePanel from "./FilePanel";
 import { ConversationFile, IdeaFile } from "./Deep";
 import { categoryColor } from "../lib/categories";
+import { listFolders, moveSession, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 import {
   extractionProgress,
@@ -76,6 +77,7 @@ export default function Ideas() {
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
+  const [folders, setFolders] = useState<Folder[]>([]);
   // Re-renders once a second purely so the elapsed counter advances between
   // phase events — which can be minutes apart on a local model.
   const [, tick] = useState(0);
@@ -84,6 +86,7 @@ export default function Ideas() {
     void listIdeas().then(setIdeas);
     void listSessions().then(setSessions);
     void getDiagnostics().then(setDiag);
+    void listFolders().then(setFolders);
   }, []);
 
   /**
@@ -134,13 +137,34 @@ export default function Ideas() {
             opening: "",
             title: "",
             archived: false,
+            folder_id: ROOT_FOLDER,
           },
           ideas: list,
         });
       }
     }
-    return { rows, orphaned };
-  }, [ideas, sessions]);
+    // Then gather those conversations under the folder each is filed in, so
+    // one line of thinking can be kept apart from another.
+    const byFolder = new Map<number, typeof rows>();
+    for (const row of rows) {
+      const fid = row.session.folder_id ?? ROOT_FOLDER;
+      const list = byFolder.get(fid) ?? [];
+      list.push(row);
+      byFolder.set(fid, list);
+    }
+    const foldered = [...byFolder.entries()]
+      .map(([id, list]) => ({
+        id,
+        name: folders.find((f) => f.id === id)?.name ?? "Root",
+        rows: list,
+      }))
+      // Root first, then alphabetically — the same order the picker uses.
+      .sort((a, b) =>
+        a.id === ROOT_FOLDER ? -1 : b.id === ROOT_FOLDER ? 1 : a.name.localeCompare(b.name),
+      );
+
+    return { foldered, orphaned };
+  }, [ideas, sessions, folders]);
 
   function toggle(sessionId: number) {
     setCollapsed((prev) => {
@@ -227,7 +251,19 @@ export default function Ideas() {
         <p className="empty">No ideas yet.</p>
       ) : (
         <div className="tree">
-          {groups.rows.map(({ session, ideas: sessionIdeas }) => {
+          {groups.foldered.map((folder) => (
+          <div key={folder.id} className="folder-group">
+            {/* Only worth a heading once there is more than one folder — a
+                lone "ROOT" label above everything is noise. */}
+            {groups.foldered.length > 1 && (
+              <div className="folder-head">
+                <span>{folder.name}</span>
+                <span className="row-meta">
+                  {folder.rows.length} {folder.rows.length === 1 ? "conversation" : "conversations"}
+                </span>
+              </div>
+            )}
+          {folder.rows.map(({ session, ideas: sessionIdeas }) => {
             const isCollapsed = collapsed.has(session.id);
             const label = session.title || session.opening || `Conversation ${session.id}`;
             return (
@@ -308,6 +344,8 @@ export default function Ideas() {
               </div>
             );
           })}
+          </div>
+          ))}
 
           {groups.orphaned.length > 0 && (
             <div className="tree-group">
@@ -349,6 +387,12 @@ export default function Ideas() {
               onSelect: () =>
                 setSessionArchived(menu.session.id, !menu.session.archived).then(refresh),
             },
+            ...folders
+              .filter((f) => f.id !== menu.session.folder_id)
+              .map((f) => ({
+                label: `Move to ${f.name}`,
+                onSelect: () => void moveSession(menu.session.id, f.id).then(refresh),
+              })),
             {
               label: "Delete",
               danger: true,

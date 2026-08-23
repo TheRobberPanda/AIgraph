@@ -143,11 +143,14 @@ export default function Mic({
     );
   }
 
+  // The button says what the app is doing; the dot says what it is hearing
+  // right now. Saying "Paused" during a silence read as "the mic stopped",
+  // when dictation was still very much on and still recording.
   const label = {
     idle: "Speak",
     starting: "Starting…",
     stopping: "Stopping…",
-    listening: speaking ? "Listening" : "Paused",
+    listening: "Listening",
   }[phase];
 
   return (
@@ -157,7 +160,13 @@ export default function Mic({
         className={`btn mic${active ? " on" : ""}${busy ? " busy" : ""}`}
         onClick={toggle}
         disabled={disabled}
-        data-tip={active ? "Stop dictation" : "Dictate"}
+        data-tip={
+          active
+            ? speaking
+              ? "Hearing you — click to stop"
+              : "Listening. Speak, or click to stop"
+            : "Dictate"
+        }
         aria-pressed={active}
         aria-busy={busy}
       >
