@@ -69,7 +69,10 @@ export default function Ideas() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  // Which conversations are open. Was the inverse — a set of closed ones —
+  // which meant anything newly extracted arrived expanded and the list grew
+  // unreadable on its own.
+  const [opened, setOpened] = useState<Set<number>>(new Set());
   const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
   const [panelSide, setPanelSide] = useState<"left" | "right">("right");
   const [panelWidth, setPanelWidth] = useState<number | null>(null);
@@ -167,7 +170,7 @@ export default function Ideas() {
   }, [ideas, sessions, folders]);
 
   function toggle(sessionId: number) {
-    setCollapsed((prev) => {
+    setOpened((prev) => {
       const next = new Set(prev);
       if (next.has(sessionId)) next.delete(sessionId);
       else next.add(sessionId);
@@ -264,7 +267,7 @@ export default function Ideas() {
               </div>
             )}
           {folder.rows.map(({ session, ideas: sessionIdeas }) => {
-            const isCollapsed = collapsed.has(session.id);
+            const isCollapsed = !opened.has(session.id);
             const label = session.title || session.opening || `Conversation ${session.id}`;
             return (
               <div key={session.id} className="tree-group">
@@ -300,10 +303,15 @@ export default function Ideas() {
                   >
                     <span className={`tree-caret${isCollapsed ? " closed" : ""}`} aria-hidden="true" />
                     <span className="tree-title">{label}</span>
-                    <span className="row-meta">
-                      {session.started_at && longDate(session.started_at)}
-                      {" · "}
-                      {sessionIdeas.length} idea{sessionIdeas.length === 1 ? "" : "s"}
+                    {/* Date and count on hover rather than in the row: they are
+                        the same length as the title and were taking half of it. */}
+                    <span
+                      className="tree-meta"
+                      data-tip={`${
+                        session.started_at ? longDate(session.started_at) + " · " : ""
+                      }${sessionIdeas.length} idea${sessionIdeas.length === 1 ? "" : "s"}`}
+                    >
+                      {sessionIdeas.length}
                     </span>
                   </button>
                 )}

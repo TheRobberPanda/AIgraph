@@ -168,6 +168,37 @@ input, textarea {
 }
 .topbar-spacer { flex: 1; }
 
+/* Where this conversation is filed, given its own weight in the bar rather
+   than sitting among the composer's controls. */
+.folder-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 12rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.folder-chip:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--fg); }
+.folder-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Named rather than drawn: "Simplified" and "Advanced" say what they are, and
+   two abstract rectangles did not. */
+.layout-mode {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  margin-right: 0.2rem;
+}
+
 /* When there is somewhere to come back from, the app's own name becomes the
    way back — in the all-at-once layout it is the only thing always on screen.
    It has to look like it does something, or nobody will try it. */
@@ -396,6 +427,12 @@ input, textarea {
 .runtime-row label { min-width: 8rem; font-size: 0.86rem; color: var(--muted); }
 .runtime-row select.field { width: auto; }
 
+/* A download that takes minutes needs to look like it is happening. */
+.pulling { display: flex; flex-direction: column; gap: 0.5rem; max-width: 30rem; margin-bottom: 0.9rem; }
+.pulling-head { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+.pulling-bar { height: 4px; border-radius: 999px; background: var(--surface-lift); overflow: hidden; }
+.pulling-fill { height: 100%; background: var(--accent); transition: width 300ms ease; }
+
 /* The three places a model can come from. */
 .source-tabs { margin-bottom: 0.4rem; }
 .bundled-facts { margin: 0 0 0.9rem; }
@@ -406,7 +443,15 @@ input, textarea {
 .folder-btn { display: inline-flex; align-items: center; gap: 0.4rem; max-width: 12rem; }
 .folder-btn > :last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.folder-modal { min-width: 24rem; max-width: 30rem; display: flex; flex-direction: column; gap: 0.9rem; }
+.folder-modal {
+  min-width: 26rem;
+  max-width: 32rem;
+  max-height: 78vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
 .folder-list {
   list-style: none;
   margin: 0;
@@ -414,13 +459,8 @@ input, textarea {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
-  max-height: 18rem;
-  overflow-y: auto;
-  /* Only ever scrolls downward. A sideways bar was appearing under the list
-     and the vertical one was sitting on top of the delete button, because
-     the rows could overflow and the gutter was not reserved. */
-  overflow-x: hidden;
-  scrollbar-gutter: stable;
+  /* No scroll area of its own. Reserving a gutter drew a track even with two
+     folders in the list; the dialog scrolls as a whole if it ever needs to. */
 }
 .folder-list li { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
 .folder-row { min-width: 0; }
@@ -587,41 +627,27 @@ button { font-family: inherit; }
 /* An in-app tooltip, replacing the browser's own — which renders as an
    unstyled OS popup (famously a jarring yellow box on Linux) instead of
    something that looks like part of this app. */
-[data-tip] { position: relative; }
-[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute;
-  top: calc(100% + 7px);
-  /* Left-anchored rather than centered — centering pushed a tooltip on a
-     left-edge trigger halfway off the window, clipping its start. Elements
-     near the right edge (the topbar's own icons) override this below. */
-  left: 0;
-  width: max-content;
+/* One tooltip element for the whole app, placed against the viewport by
+   components/Tooltip.tsx. As a pseudo-element it was clipped by every
+   `overflow: hidden` ancestor — which in the all-at-once layout is every
+   panel — and looked like it rendered behind the app. */
+.tip {
+  position: fixed;
+  z-index: 200;
   max-width: min(22rem, 80vw);
-  white-space: normal;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
   background: var(--surface-lift);
   color: var(--fg);
-  border: 1px solid var(--line);
-  padding: 0.35rem 0.55rem;
-  border-radius: 6px;
-  font-size: 0.72rem;
-  line-height: 1.35;
   font-family: var(--sans);
+  font-size: 0.72rem;
   font-weight: 400;
+  line-height: 1.35;
   text-align: left;
-  /* Below the topbar and any real UI layer — a hint must never sit on top of
-     something clickable. */
-  z-index: 25;
-  opacity: 0;
   pointer-events: none;
-  transition: opacity 100ms ease;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
-[data-tip]:hover::after,
-[data-tip]:focus-visible::after { opacity: 1; }
-
-/* Near the window's right edge, extend the tooltip leftward instead. */
-.topbar [data-tip]::after { left: auto; right: 0; }
 
 .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 
@@ -1104,6 +1130,8 @@ blockquote {
   flex: none;
 }
 .tag-btn.on { color: var(--fg); border-color: var(--tag-color, var(--accent)); }
+.select-sm { width: auto; padding: 0.22rem 0.45rem; font-size: 0.78rem; }
+.tag-swatch.big { width: 0.7rem; height: 0.7rem; align-self: center; }
 
 .chat-row { align-items: flex-start; padding: 0.6rem 0.35rem; }
 .chat-open {
@@ -1223,6 +1251,19 @@ blockquote {
 }
 .tree-head:hover { background: var(--surface); }
 .tree-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Just the count in the row; the date comes with the hint. */
+.tree-meta {
+  flex: none;
+  min-width: 1.4rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--surface-lift);
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  font-weight: 400;
+  color: var(--faint);
+  text-align: center;
+}
 
 .tree-caret {
   flex: none;

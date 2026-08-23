@@ -14,12 +14,11 @@ import {
   IconMaximize,
   IconClose,
   IconFolder,
-  IconOnePane,
-  IconPanes,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
 import ContextMenu from "./components/ContextMenu";
+import Tooltip from "./components/Tooltip";
 import FolderPicker from "./components/FolderPicker";
 import Graph from "./components/Graph";
 import Ideas from "./components/Ideas";
@@ -589,22 +588,31 @@ export default function App() {
           </button>
         )}
 
+        {/* Where this conversation is filed. In the bar rather than tucked in
+            the composer, because it is the thing that organises everything
+            else. */}
+        <button
+          className="folder-chip"
+          onClick={() => setPickingFolder(true)}
+          data-tip="Where this conversation is filed"
+        >
+          <IconFolder />
+          <span className="folder-chip-name">{folderName}</span>
+        </button>
+
+        <button
+          className="nav layout-mode"
+          onClick={() => void setLayoutMode(layout === "simple" ? "advanced" : "simple")}
+          data-tip={
+            layout === "simple"
+              ? "Showing one place at a time. Switch to all at once."
+              : "Showing everything at once. Switch to one place at a time."
+          }
+        >
+          {layout === "simple" ? "Simplified" : "Advanced"}
+        </button>
+
         <div className="topbar-tabs topbar-setup">
-          <button
-            className="nav"
-            onClick={() => void setLayoutMode(layout === "simple" ? "advanced" : "simple")}
-            data-tip={
-              layout === "simple"
-                ? "Showing one place at a time. Switch to all at once."
-                : "Showing everything at once. Switch to one place at a time."
-            }
-          >
-            {layout === "simple" ? (
-              <IconOnePane className="nav-icon" />
-            ) : (
-              <IconPanes className="nav-icon" />
-            )}
-          </button>
           {SETUP.map((t) => {
             const Icon = TAB_ICONS[t];
             return (
@@ -840,14 +848,6 @@ export default function App() {
             }
             disabled={streaming}
           />
-          <button
-            className="btn folder-btn"
-            onClick={() => setPickingFolder(true)}
-            data-tip="Choose which folder this conversation is filed in"
-          >
-            <IconFolder />
-            {folderName}
-          </button>
           <span className="spacer" />
           <button
             className="btn btn-send"
@@ -902,6 +902,8 @@ export default function App() {
           onClose={() => setPickingFolder(false)}
         />
       )}
+
+      <Tooltip />
 
       <div className="statusbar">
         {provider ? `${provider.label} · ${provider.model}` : "no model"}

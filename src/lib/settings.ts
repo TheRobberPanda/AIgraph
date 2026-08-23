@@ -143,3 +143,17 @@ export function startEmbedded(): Promise<string> {
 export function stopEmbedded(): Promise<void> {
   return invoke("stop_embedded");
 }
+
+/**
+ * Progress while the bundled model downloads.
+ *
+ * Its own channel rather than the speech model's — they are different
+ * downloads, they can overlap, and crossing them showed neither.
+ */
+export function onModelDownload(
+  cb: (p: { what: string; received: number; total: number }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ what: string; received: number; total: number }>("model:download", (e) =>
+    cb(e.payload),
+  );
+}

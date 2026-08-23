@@ -15,9 +15,9 @@ import {
   embeddedStatus,
   startEmbedded,
   stopEmbedded,
+  onModelDownload,
   type EmbeddedStatus,
 } from "../lib/settings";
-import { onDownloadProgress, type DownloadProgress } from "../lib/dictation";
 
 type Role = "chat" | "extraction";
 
@@ -86,7 +86,7 @@ export default function Models() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [embedded, setEmbedded] = useState<EmbeddedStatus | null>(null);
-  const [pulling, setPulling] = useState<DownloadProgress | null>(null);
+  const [pulling, setPulling] = useState<{ received: number; total: number } | null>(null);
   const [starting, setStarting] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -109,9 +109,8 @@ export default function Models() {
     void refresh();
   }, [refresh]);
 
-  // The weights come down on the same channel the speech model uses.
   useEffect(() => {
-    const p = onDownloadProgress(setPulling);
+    const p = onModelDownload((x) => setPulling({ received: x.received, total: x.total }));
     return () => {
       void p.then((un) => un());
     };
@@ -119,6 +118,9 @@ export default function Models() {
 
   async function pullModel() {
     setError(null);
+    // Set before awaiting: the first progress event is a long way off on a
+    // 3.8 GB file, and until now the button simply sat there looking ignored.
+    setPulling({ received: 0, total: 0 });
     try {
       await downloadEmbeddedModel();
       setEmbedded(await embeddedStatus());
@@ -372,10 +374,27 @@ export default function Models() {
               </li>
             </ul>
             {pulling ? (
-              <p className="blurb">
-                Downloading — {(pulling.received / 1e9).toFixed(2)} GB
-                {pulling.total > 0 && ` of ${(pulling.total / 1e9).toFixed(2)} GB`}
-              </p>
+              <div className="pulling">
+                <div className="pulling-head">
+                  <span className="spinner" aria-hidden="true" />
+                  {pulling.received === 0
+                    ? "Starting the download…"
+                    : `${(pulling.received / 1e9).toFixed(2)} GB${
+                        pulling.total > 0 ? ` of ${(pulling.total / 1e9).toFixed(2)} GB` : ""
+                      }`}
+                </div>
+                {pulling.total > 0 && (
+                  <div className="pulling-bar">
+                    <div
+                      className="pulling-fill"
+                      style={{ width: `${Math.min(100, (pulling.received / pulling.total) * 100)}%` }}
+                    />
+                  </div>
+                )}
+                <p className="blurb">
+                  Keep the app open. It carries on if you go elsewhere in it.
+                </p>
+              </div>
             ) : !embedded?.model_ready ? (
               <div className="row">
                 <button className="btn on" onClick={() => void pullModel()}>

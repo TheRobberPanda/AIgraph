@@ -11,6 +11,7 @@ import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
 import { IconArchive, IconPlus } from "./Icons";
 import { categoryColor } from "../lib/categories";
+import { listFolders, moveSession, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 
 /**
@@ -28,10 +29,13 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
   const [showArchived, setShowArchived] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [folder, setFolder] = useState<number | "all">("all");
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
 
   const refresh = useCallback(() => {
     listSessions().then(setSessions).catch((e) => setError(String(e)));
+    listFolders().then(setFolders).catch(() => {});
   }, []);
 
   useEffect(refresh, [refresh]);
@@ -48,6 +52,7 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
     const q = query.trim().toLowerCase();
     return sessions.filter((s) => {
       if (s.archived !== showArchived) return false;
+      if (folder !== "all" && s.folder_id !== folder) return false;
       if (tag && !s.tags.includes(tag)) return false;
       if (!q) return true;
       return (
@@ -57,7 +62,7 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
         longDate(s.started_at).toLowerCase().includes(q)
       );
     });
-  }, [sessions, query, tag, showArchived]);
+  }, [sessions, query, tag, showArchived, folder]);
 
   return (
     <div className="pane-inner">
@@ -86,30 +91,49 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
         </button>
       </div>
 
-      {tags.length > 0 && (
-        <div className="row tag-row">
-          <button
-            className={tag === null ? "btn on" : "btn"}
-            onClick={() => setTag(null)}
-          >
-            All
-          </button>
-          {tags.map(([name, count]) => (
-            <button
-              key={name}
-              className={tag === name ? "btn tag-btn on" : "btn tag-btn"}
-              // Same colour the subject has on the map, so a filter here and a
-              // cluster there are recognisably the same thing.
-              style={{ "--tag-color": categoryColor(name) } as React.CSSProperties}
-              onClick={() => setTag(tag === name ? null : name)}
-            >
-              <i className="tag-swatch" aria-hidden="true" />
-              {name}
-              <span className="row-meta">{count}</span>
-            </button>
+      <div className="row tag-row">
+        <select
+          className="field select-sm"
+          value={folder}
+          onChange={(e) =>
+            setFolder(e.target.value === "all" ? "all" : Number(e.target.value))
+          }
+        >
+          <option value="all">Every folder</option>
+          {folders.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name}
+            </option>
           ))}
-        </div>
-      )}
+        </select>
+
+        {tags.length > 0 && (
+          <>
+            {/* A dropdown rather than a row of buttons: with more than a few
+                subjects the row wrapped over several lines and pushed the
+                conversations themselves off the top. */}
+            <select
+              className="field select-sm"
+              value={tag ?? ""}
+              onChange={(e) => setTag(e.target.value || null)}
+            >
+              <option value="">Every subject</option>
+              {tags.map(([name, count]) => (
+                <option key={name} value={name}>
+                  {name} ({count})
+                </option>
+              ))}
+            </select>
+            {tag && (
+              <span
+                className="tag-swatch big"
+                style={{ "--tag-color": categoryColor(tag) } as React.CSSProperties}
+                aria-hidden="true"
+              />
+            )}
+          </>
+        )}
+      </div>
 
       {adding && (
         <ImportChat
@@ -201,6 +225,12 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
               onSelect: () =>
                 setSessionArchived(menu.session.id, !menu.session.archived).then(refresh),
             },
+            ...folders
+              .filter((f) => f.id !== menu.session.folder_id)
+              .map((f) => ({
+                label: `Move to ${f.name}`,
+                onSelect: () => void moveSession(menu.session.id, f.id).then(refresh),
+              })),
             {
               label: "Delete",
               danger: true,

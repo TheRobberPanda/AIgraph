@@ -31,8 +31,6 @@ import FilePanel from "./FilePanel";
 
 const CONVERSATION_RADIUS = 15;
 const IDEA_RADIUS = 7;
-/** Fitts's law: a 7px dot is not a target. */
-const MIN_HIT_RADIUS = 16;
 
 /**
  * A rough guess at a label's rendered half-width, in the same world units the
@@ -162,6 +160,34 @@ function wrapLines(
   const last = lines.length - 1;
   if (last >= 0) lines[last] = fitWidth(ctx, lines[last], maxPx);
   return lines;
+}
+
+/**
+ * How much room the map has, which changes what it should do.
+ *
+ * In a side panel the spacing that makes a full-pane map readable pushes
+ * everything off-screen and leaves nodes too close together to hit. Rather
+ * than scaling one set of numbers, the two sizes get their own.
+ */
+function ruleset(width: number) {
+  const tight = width < 560;
+  return {
+    tight,
+    /** Orbit radius around a conversation. */
+    orbit: tight ? 46 : 90,
+    orbitGrowth: tight ? 5 : 14,
+    /** How far a merely related pair sits apart. */
+    related: tight ? 90 : 190,
+    /** Space reserved around a node, label included. */
+    padding: tight ? 6 : 20,
+    /** A label's share of that space. Almost none when labels are hidden. */
+    labelShare: tight ? 0.15 : 1,
+    /** Fitts's law, but a crowded panel needs a smaller target or every
+     *  click lands on a neighbour. */
+    hitRadius: tight ? 11 : 16,
+    charge: tight ? -14 : -40,
+    chargeByRadius: tight ? 3 : 9,
+  };
 }
 
 export default function Graph() {
@@ -309,7 +335,7 @@ export default function Graph() {
     // In a side panel there is no room to name every idea — the labels stack
     // into an unreadable pile. Below a threshold only the conversations are
     // named, plus whatever is being pointed at.
-    const compact = w < 560;
+    const compact = ruleset(w).tight;
 
     const candidates = [...nodesRef.current].sort((a, b) => {
       const rank = (n: Node) => (hover === n ? 0 : n.data.kind === "conversation" ? 1 : n.data.shared ? 2 : 3);
@@ -428,19 +454,34 @@ export default function Graph() {
           // radius grows with how many ideas share that hub, so each one still
           // gets enough arc length for its label.
           .distance((l) => {
-            if (l.kind !== "from") return 190;
+            const rules = ruleset(canvasRef.current?.clientWidth ?? 900);
+            if (l.kind !== "from") return rules.related;
             const n = orbitCount.get((l.source as Node).data.id) ?? 1;
-            return 90 + Math.max(0, n - 4) * 14;
+            return rules.orbit + Math.max(0, n - 4) * rules.orbitGrowth;
           })
           .strength((l) => (l.kind === "from" ? 0.7 : 0.15)),
       )
       // Bigger nodes push harder, so conversations claim their own space.
-      .force("charge", forceManyBody<Node>().strength((n) => -40 - n.r * 9))
+      .force(
+        "charge",
+        forceManyBody<Node>().strength((n) => {
+          const rules = ruleset(canvasRef.current?.clientWidth ?? 900);
+          return rules.charge - n.r * rules.chargeByRadius;
+        }),
+      )
       // The label hangs below the node rather than around it, so this is an
       // approximation, not a tight fit — but it is what keeps a node with a
       // long title from being crowded before its label ever gets a chance to
       // draw.
-      .force("collide", forceCollide<Node>().radius((n) => n.r + 20 + n.labelHalf))
+      .force(
+        "collide",
+        forceCollide<Node>().radius((n) => {
+          const rules = ruleset(canvasRef.current?.clientWidth ?? 900);
+          // Labels are not drawn in a panel, so reserving room for them there
+          // only pushes everything apart for nothing.
+          return n.r + rules.padding + n.labelHalf * rules.labelShare;
+        }),
+      )
       // Strong enough to hold the map around the origin, so the initial framing
       // stays valid as the simulation keeps moving. Too weak and it slowly
       // wanders out of view while you watch it.
@@ -515,9 +556,21 @@ export default function Graph() {
       // Debounced: the expand is animated, so this fires every frame of it and
       // refitting mid-transition would fight the animation.
       window.clearTimeout(settle);
+      // Crossing between panel and full pane changes the rules, and the
+      // forces read them once when they are set — so nudge the simulation
+      // hard enough to settle into the new spacing.
       settle = window.setTimeout(() => {
+        // d3 caches each force's initialisation, so re-seeding the links
+        // makes the distance accessor read the new rules.
+        const sim = simRef.current;
+        if (sim) {
+          const link = sim.force("link") as
+            | { links: (l: Link[]) => unknown; initialize?: unknown }
+            | undefined;
+          if (link && typeof link.links === "function") link.links(linksRef.current);
+          sim.alpha(0.8).restart();
+        }
         fitToView();
-        simRef.current?.alpha(0.3).restart();
       }, 180);
     });
     ro.observe(canvas);
@@ -552,7 +605,7 @@ export default function Graph() {
     for (const n of nodesRef.current) {
       const s = toScreen(n, rect.width, rect.height);
       const drawn = n.r * Math.max(0.6, Math.min(viewRef.current.scale, 2));
-      const r = Math.max(drawn + 6, MIN_HIT_RADIUS);
+      const r = Math.max(drawn + 6, ruleset(canvas.clientWidth).hitRadius);
       const d = Math.hypot(px - s.x, py - s.y);
       if (d <= r && d < bestDist) {
         best = n;
