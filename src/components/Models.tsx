@@ -4,13 +4,54 @@ import {
   activeModels,
   chooseModel,
   clearAnthropicKey,
+  getSettings,
   keyStatus,
+  saveSettings,
   setAnthropicKey,
   type ActiveModels,
   type KeyStatus,
+  type Settings,
 } from "../lib/settings";
 
 type Role = "chat" | "extraction";
+
+/** Where a model comes from. One tab each, because the setup is different. */
+type Source = "local" | "cloud" | "inapp";
+
+const SOURCES: { id: Source; label: string; blurb: string }[] = [
+  {
+    id: "local",
+    label: "On this machine",
+    blurb:
+      "LM Studio or Ollama, running alongside the app. Whatever they have loaded is used automatically; nothing leaves this machine.",
+  },
+  {
+    id: "cloud",
+    label: "Cloud",
+    blurb:
+      "Anthropic's API, or a Claude subscription through the claude command. Transcripts leave this machine.",
+  },
+  {
+    id: "inapp",
+    label: "In the app",
+    blurb:
+      "A model the app downloads and runs itself, with nothing else to install.",
+  },
+];
+
+/** The model the app will run itself. Apache 2.0, so it can be built on. */
+/** The context sizes offered, as slider stops. */
+const CONTEXTS = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+
+const BUNDLED = {
+  name: "Bonsai 27B",
+  repo: "prism-ml/Bonsai-27B-gguf",
+  file: "Bonsai-27B-Q1_0.gguf",
+  size: "3.8 GB",
+  licence: "Apache 2.0",
+  context: "262K tokens",
+  note: "A 1-bit build of Qwen3.6-27B. Reasoning and coding at 27B class, in under four gigabytes.",
+};
 
 const ROLES: { role: Role; title: string; blurb: string }[] = [
   {
@@ -35,6 +76,9 @@ export default function Models() {
   const [keys, setKeys] = useState<KeyStatus | null>(null);
   const [keyInput, setKeyInput] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
+  const [source, setSource] = useState<Source>("local");
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -45,6 +89,7 @@ export default function Models() {
       setServers(s.servers);
       setActive(await activeModels());
       setKeys(await keyStatus());
+      setSettings(await getSettings());
     } catch (e) {
       setError(String(e));
     }
@@ -68,6 +113,9 @@ export default function Models() {
   }
 
   const chatModels = (s: Detected) => s.models.filter((m) => m.kind === "chat");
+  /** What a server actually has in memory right now. */
+  const loadedModels = (s: Detected) => chatModels(s).filter((m) => m.loaded === true);
+  const loadedCount = servers.reduce((n, s) => n + loadedModels(s).length, 0);
   const usable = servers.filter((s) => chatModels(s).length > 0);
 
   const serverName = (kind: string) =>
@@ -79,6 +127,18 @@ export default function Models() {
     })[kind] ?? kind;
 
   const isRemote = (kind: string) => kind === "anthropic" || kind === "claudecli";
+
+  /** Runtime knobs for the bundled model. Saved as they are changed. */
+  async function patchRuntime(patch: Partial<Settings["runtime"]>) {
+    if (!settings) return;
+    const next = { ...settings, runtime: { ...settings.runtime, ...patch } };
+    setSettings(next);
+    try {
+      await saveSettings(next);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   async function saveKey() {
     setKeyBusy(true);
@@ -98,6 +158,20 @@ export default function Models() {
     <div className="pane-inner">
       {error && <p className="error">{error}</p>}
 
+      <div className="row source-tabs">
+        {SOURCES.map((t) => (
+          <button
+            key={t.id}
+            className={source === t.id ? "btn on" : "btn"}
+            onClick={() => setSource(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <p className="blurb">{SOURCES.find((t) => t.id === source)!.blurb}</p>
+
+      {source === "cloud" && (
       <section className="model-role">
         <h2 className="section">Anthropic</h2>
         <p className="blurb">
@@ -146,8 +220,20 @@ export default function Models() {
           </p>
         )}
       </section>
+      )}
 
-      {usable.length === 0 ? (
+      {source === "local" && loadedCount > 0 && (
+        <div className="row">
+          <button className={showAll ? "btn on" : "btn"} onClick={() => setShowAll((v) => !v)}>
+            {showAll ? "Showing every model" : "Show models that aren't loaded"}
+          </button>
+          <button className="btn" onClick={() => void refresh()}>
+            Look again
+          </button>
+        </div>
+      )}
+
+      {source === "local" && (usable.length === 0 ? (
         <p className="empty">
           <strong>No model server found.</strong>
           Start <b>LM Studio</b> and load a model, or run <code>ollama serve</code>{" "}
@@ -167,6 +253,7 @@ export default function Models() {
                 {chosen ? (
                   <>
                     Using <b>{chosen.model}</b> on {chosen.label}
+                    {loadedCount === 1 && " — the only one loaded, so it was picked for you"}
                   </>
                 ) : (
                   "Nothing chosen yet"
@@ -180,7 +267,11 @@ export default function Models() {
                     {isRemote(s.kind) && <span className="tag remote">leaves this machine</span>}
                   </h3>
                   <ul className="model-list">
-                    {chatModels(s)
+                    {/* What is loaded comes first, and when only one thing is
+                        loaded anywhere it has already been adopted — there is
+                        nothing to choose. The rest stay listed, marked, since
+                        LM Studio will load one on demand. */}
+                    {(showAll ? chatModels(s) : loadedModels(s).length ? loadedModels(s) : chatModels(s))
                       .slice()
                       .sort(
                         (a, b) =>
@@ -212,6 +303,119 @@ export default function Models() {
             </section>
           );
         })
+      ))}
+
+      {source === "inapp" && (
+        <>
+          <section className="model-role">
+            <h2 className="section">{BUNDLED.name}</h2>
+            <p className="blurb">{BUNDLED.note}</p>
+            <ul className="plain-list bundled-facts">
+              <li>
+                <b>{BUNDLED.size}</b> — downloaded once, on first use
+              </li>
+              <li>
+                <b>{BUNDLED.licence}</b> — open weights, free to build on
+              </li>
+              <li>
+                <b>{BUNDLED.context}</b> of context
+              </li>
+              <li>
+                <code>
+                  {BUNDLED.repo}/{BUNDLED.file}
+                </code>
+              </li>
+            </ul>
+            {/* Said plainly rather than shown as a button that does nothing.
+                The settings below are real and are kept. */}
+            <p className="blurb">
+              <span className="tag">not ready yet</span> The engine that runs this
+              inside the app is still being built. Until then, the same model can
+              be loaded in LM Studio and used from <b>On this machine</b>.
+            </p>
+          </section>
+
+          {settings && (
+            <section className="model-role">
+              <h2 className="section">How it runs</h2>
+              <p className="blurb">
+                These decide whether a 27B model is pleasant or painful on a given
+                machine. They are kept now and apply once the engine lands.
+              </p>
+
+              <div className="row runtime-row">
+                <label htmlFor="ctx">Context length</label>
+                <input
+                  id="ctx"
+                  type="range"
+                  className="scale-slider"
+                  min={0}
+                  max={CONTEXTS.length - 1}
+                  step={1}
+                  value={Math.max(0, CONTEXTS.indexOf(settings.runtime.context_length))}
+                  onChange={(e) =>
+                    void patchRuntime({ context_length: CONTEXTS[Number(e.target.value)] })
+                  }
+                />
+                <span className="scale-value">
+                  {settings.runtime.context_length >= 1024
+                    ? `${settings.runtime.context_length / 1024}K`
+                    : settings.runtime.context_length}
+                </span>
+              </div>
+
+              <div className="row runtime-row">
+                <label htmlFor="gpu">GPU offload</label>
+                <input
+                  id="gpu"
+                  type="range"
+                  className="scale-slider"
+                  min={0}
+                  max={64}
+                  step={1}
+                  value={settings.runtime.gpu_layers}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      runtime: { ...settings.runtime, gpu_layers: Number(e.target.value) },
+                    })
+                  }
+                  onMouseUp={() => void patchRuntime({})}
+                  onKeyUp={() => void patchRuntime({})}
+                />
+                <span className="scale-value">
+                  {settings.runtime.gpu_layers === 0
+                    ? "CPU only"
+                    : `${settings.runtime.gpu_layers} layers`}
+                </span>
+              </div>
+
+              <div className="row">
+                <button
+                  className={settings.runtime.kv_cache_on_gpu ? "btn on" : "btn"}
+                  onClick={() =>
+                    void patchRuntime({ kv_cache_on_gpu: !settings.runtime.kv_cache_on_gpu })
+                  }
+                >
+                  KV cache in GPU memory
+                </button>
+                <button
+                  className={settings.runtime.keep_in_memory ? "btn on" : "btn"}
+                  onClick={() =>
+                    void patchRuntime({ keep_in_memory: !settings.runtime.keep_in_memory })
+                  }
+                >
+                  Keep model loaded
+                </button>
+              </div>
+              <p className="blurb">
+                The KV cache is faster on the GPU but takes memory the conversation
+                model may want. Keeping the model loaded avoids a reload each
+                session and holds the memory meanwhile.
+              </p>
+            </section>
+          )}
+        </>
       )}
     </div>
   );

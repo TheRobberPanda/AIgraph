@@ -56,6 +56,20 @@ pub struct Settings {
     pub voice: Voice,
     /// How the model bundled with the app is run, when that is the one in use.
     pub runtime: Runtime,
+    /// Whether the map, ideas and conversations sit around the conversation
+    /// or are visited one at a time.
+    pub layout: Layout,
+}
+
+/// How much of the app is on screen at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Layout {
+    /// One place at a time, reached from tabs. Less on screen, less to read.
+    #[default]
+    Simple,
+    /// The map, the conversations and the ideas all around the talking.
+    Advanced,
 }
 
 /// How a reply gets read out.
@@ -114,6 +128,7 @@ impl Default for Settings {
             call_mode: false,
             voice: Voice::Off,
             runtime: Runtime::default(),
+            layout: Layout::default(),
         }
     }
 }

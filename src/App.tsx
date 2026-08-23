@@ -75,6 +75,7 @@ const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>>
   settings: IconSettings,
 };
 
+const MAIN: Tab[] = ["chat", "map", "ideas", "chats"];
 const SETUP: Tab[] = ["models", "settings"];
 
 type Deep = { kind: "idea"; id: number } | { kind: "conversation"; id: number } | null;
@@ -165,6 +166,8 @@ export default function App() {
   const [voiceOn, setVoiceOn] = useState(false);
   /** Which workspace panel is filling the pane, if any. */
   const [expanded, setExpanded] = useState<"map" | "ideas" | "conversations" | null>(null);
+  /** Simple visits one place at a time; advanced puts them all on screen. */
+  const [layout, setLayout] = useState<"simple" | "advanced">("simple");
   // The no-model screen can drop into the Models tab rather than being a dead
   // end — someone with an API key or the claude CLI had no way through it.
   const [setupModels, setSetupModels] = useState(false);
@@ -179,10 +182,15 @@ export default function App() {
       applyTheme(s.theme);
       applyUiScale(s.ui_scale);
       setVoiceOn(s.voice === "system" || s.call_mode);
+      setLayout(s.layout);
     });
-    const un = listen<{ voice?: string; call_mode?: boolean }>("settings:changed", (e) => {
-      setVoiceOn(e.payload.voice === "system" || !!e.payload.call_mode);
-    });
+    const un = listen<{ voice?: string; call_mode?: boolean; layout?: "simple" | "advanced" }>(
+      "settings:changed",
+      (e) => {
+        setVoiceOn(e.payload.voice === "system" || !!e.payload.call_mode);
+        if (e.payload.layout) setLayout(e.payload.layout);
+      },
+    );
     return () => {
       void un.then((f: () => void) => f());
     };
@@ -313,7 +321,11 @@ export default function App() {
           return next;
         });
       }
-      if (open) setExpanded(open);
+      if (open) {
+        // In simple mode there is nothing to expand — it is a different page.
+        if (layout === "simple") setView(open === "conversations" ? "chats" : open);
+        else setExpanded(open);
+      }
       if (voiceOn) speak(clean);
     } catch (e) {
       setError(String(e));
@@ -505,8 +517,28 @@ export default function App() {
       <nav className="topbar" data-tauri-drag-region>
         <div className="brand" data-tauri-drag-region>Idea Graph</div>
 
-        {/* No tabs for the workspace any more — the map, the ideas and the
-            conversations are all on screen at once. Only setup is elsewhere. */}
+        {/* Tabs only in simple mode. In advanced there is nothing for them to
+            switch between — it is all on screen at once. */}
+        {layout === "simple" && (
+          <div className="topbar-tabs">
+            {MAIN.map((t) => {
+              const Icon = TAB_ICONS[t];
+              return (
+                <button
+                  key={t}
+                  className={view === t && !deep ? "nav on" : "nav"}
+                  onClick={() => {
+                    setDeep(null);
+                    setView(t);
+                  }}
+                >
+                  <Icon className="nav-icon" />
+                  {TAB_NAMES[t]}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="topbar-spacer" />
 
         {pending > 0 && (
@@ -567,11 +599,19 @@ export default function App() {
       // Everything at once rather than one tab at a time: the map and the
       // conversations to the left, the ideas they produced to the right, and
       // the talking in the middle where the attention is.
-      <div className={`workspace${expanded ? ` expanded expanded-${expanded}` : ""}`}>
+      <div
+        className={
+          layout === "simple"
+            ? `workspace expanded expanded-${
+                view === "map" ? "map" : view === "ideas" ? "ideas" : view === "chats" ? "conversations" : "chat"
+              }`
+            : `workspace${expanded ? ` expanded expanded-${expanded}` : ""}`
+        }
+      >
 
         <div className="ws-left">
           <section className="ws-panel ws-map">
-            <button className="ws-head" onClick={() => toggleExpand("map")}>
+            <button className="ws-head" onClick={() => toggleExpand("map")} hidden={layout === "simple"}>
               <IconMap className="nav-icon" />
               Map
               <span className="ws-grow" aria-hidden="true">
@@ -584,7 +624,11 @@ export default function App() {
           </section>
 
           <section className="ws-panel ws-convos">
-            <button className="ws-head" onClick={() => toggleExpand("conversations")}>
+            <button
+              className="ws-head"
+              onClick={() => toggleExpand("conversations")}
+              hidden={layout === "simple"}
+            >
               <IconChats className="nav-icon" />
               Conversations
               <span className="ws-grow" aria-hidden="true">
@@ -633,10 +677,16 @@ export default function App() {
                 </p>
                 {digesting.last.ideas > 0 && (
                   <div className="row">
-                    <button className="btn on" onClick={() => setExpanded("map")}>
+                    <button
+                      className="btn on"
+                      onClick={() => (layout === "simple" ? setView("map") : setExpanded("map"))}
+                    >
                       See it on the map
                     </button>
-                    <button className="btn" onClick={() => setExpanded("ideas")}>
+                    <button
+                      className="btn"
+                      onClick={() => (layout === "simple" ? setView("ideas") : setExpanded("ideas"))}
+                    >
                       Read the ideas
                     </button>
                   </div>
@@ -777,7 +827,7 @@ export default function App() {
         </div>
 
         <aside className="ws-panel ws-right">
-          <button className="ws-head" onClick={() => toggleExpand("ideas")}>
+          <button className="ws-head" onClick={() => toggleExpand("ideas")} hidden={layout === "simple"}>
             <IconIdeas className="nav-icon" />
             Ideas
             <span className="ws-grow" aria-hidden="true">

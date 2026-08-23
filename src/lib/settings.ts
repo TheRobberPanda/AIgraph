@@ -21,7 +21,11 @@ export interface Settings {
   call_mode: boolean;
   voice: Voice;
   runtime: Runtime;
+  layout: Layout;
 }
+
+/** One place at a time, or everything around the conversation at once. */
+export type Layout = "simple" | "advanced";
 
 export type Voice = "off" | "system";
 

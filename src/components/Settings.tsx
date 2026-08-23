@@ -78,6 +78,29 @@ export default function Settings() {
       </section>
 
       <section>
+        <h2 className="section">How much is on screen</h2>
+        <div className="row">
+          <button
+            className={s.layout === "simple" ? "btn on" : "btn"}
+            onClick={() => void update({ layout: "simple" })}
+          >
+            One place at a time
+          </button>
+          <button
+            className={s.layout === "advanced" ? "btn on" : "btn"}
+            onClick={() => void update({ layout: "advanced" })}
+          >
+            All at once
+          </button>
+        </div>
+        <p className="blurb">
+          {s.layout === "simple"
+            ? "The map, the ideas and the conversations are each their own page, reached from the tabs."
+            : "The map and the conversations sit to the left of the talking, the ideas to the right. Any of them can be opened full width."}
+        </p>
+      </section>
+
+      <section>
         <h2 className="section">Interface size</h2>
         <div className="row scale-row">
           <input
@@ -133,83 +156,6 @@ export default function Settings() {
           Uses the voice this machine is already set up with, so nothing is
           downloaded and whatever rate and voice you have configured is what you
           get.
-        </p>
-      </section>
-
-      <section>
-        <h2 className="section">The model that runs in the app</h2>
-        <p className="blurb">
-          Only applies to the bundled model. These are the settings that decide
-          whether it is pleasant or painful on a given machine.
-        </p>
-
-        <div className="row runtime-row">
-          <label htmlFor="ctx">Context length</label>
-          <select
-            id="ctx"
-            className="field"
-            value={s.runtime.context_length}
-            onChange={(e) =>
-              void update({
-                runtime: { ...s.runtime, context_length: Number(e.target.value) },
-              })
-            }
-          >
-            {[4096, 8192, 16384, 32768, 65536, 131072, 262144].map((n) => (
-              <option key={n} value={n}>
-                {n >= 1024 ? `${n / 1024}K tokens` : `${n} tokens`}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="row runtime-row">
-          <label htmlFor="gpu">GPU offload</label>
-          <input
-            id="gpu"
-            type="range"
-            className="scale-slider"
-            min={0}
-            max={64}
-            step={1}
-            value={s.runtime.gpu_layers}
-            onChange={(e) =>
-              setS({ ...s, runtime: { ...s.runtime, gpu_layers: Number(e.target.value) } })
-            }
-            onMouseUp={() => void update({ runtime: s.runtime })}
-            onKeyUp={() => void update({ runtime: s.runtime })}
-          />
-          <span className="scale-value">
-            {s.runtime.gpu_layers === 0 ? "CPU only" : `${s.runtime.gpu_layers} layers`}
-          </span>
-        </div>
-
-        <div className="row">
-          <button
-            className={s.runtime.kv_cache_on_gpu ? "btn on" : "btn"}
-            onClick={() =>
-              void update({
-                runtime: { ...s.runtime, kv_cache_on_gpu: !s.runtime.kv_cache_on_gpu },
-              })
-            }
-          >
-            KV cache in GPU memory
-          </button>
-          <button
-            className={s.runtime.keep_in_memory ? "btn on" : "btn"}
-            onClick={() =>
-              void update({
-                runtime: { ...s.runtime, keep_in_memory: !s.runtime.keep_in_memory },
-              })
-            }
-          >
-            Keep model loaded
-          </button>
-        </div>
-        <p className="blurb">
-          The KV cache is faster on the GPU but takes memory the chat model may
-          want. Keeping the model loaded avoids a reload each session and holds
-          the memory meanwhile.
         </p>
       </section>
 
