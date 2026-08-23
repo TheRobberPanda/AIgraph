@@ -14,7 +14,8 @@ import { IconArchive, IconPlus, IconTrash, IconRewind } from "./Icons";
 import Select from "./Select";
 import { categoryColor } from "../lib/categories";
 import { reextractSession } from "../lib/ideas";
-import { folderColor, folderMark, listFolders, type Folder } from "../lib/folders";
+import { listFolders, type Folder } from "../lib/folders";
+import FolderMark from "./FolderMark";
 import { longDate } from "../lib/format";
 
 /**
@@ -186,13 +187,8 @@ export default function Chats({
                           (() => {
                             const f = folders.find((x) => x.id === s.folder_id);
                             return f ? (
-                              <span
-                                className="folder-mark row-mark"
-                                style={{ "--folder-color": folderColor(f.name) } as React.CSSProperties}
-                                data-tip={f.name}
-                                aria-hidden="true"
-                              >
-                                {folderMark(f.name)}
+                              <span className="row-mark" data-tip={f.name}>
+                                <FolderMark name={f.name} id={f.id} size={12} />
                               </span>
                             ) : null;
                           })()}

@@ -3,12 +3,12 @@ import {
   createFolder,
   deleteFolder,
   folderColor,
-  folderMark,
   listFolders,
   moveSession,
   ROOT_FOLDER,
   type Folder,
 } from "../lib/folders";
+import FolderMark from "./FolderMark";
 
 /**
  * Choose where this stretch of thinking gets filed, or start a new folder.
@@ -29,6 +29,9 @@ export default function FolderPicker({
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [dropOn, setDropOn] = useState<number | null>(null);
+  /** Deleting takes two clicks: the first arms it, the second does it. A
+   *  folder is easy to hit by accident and there is no undo. */
+  const [arming, setArming] = useState<number | null>(null);
 
   const refresh = () => listFolders().then(setFolders).catch((e) => setError(String(e)));
 
@@ -89,23 +92,33 @@ export default function FolderPicker({
                   if (Number.isFinite(id) && id > 0) void moveSession(id, f.id).then(refresh);
                 }}
               >
-                <span className="folder-mark" aria-hidden="true">
-                  {folderMark(f.name)}
-                </span>
+                <FolderMark name={f.name} id={f.id} />
                 <span className="folder-name">{f.name}</span>
                 <span className="row-meta">
                   {f.session_count} {f.session_count === 1 ? "conversation" : "conversations"}
                 </span>
               </button>
-              {f.id !== ROOT_FOLDER && (
-                <button
-                  className="icon-btn folder-remove"
-                  data-tip="Delete folder — its conversations go back to Root"
-                  onClick={() => void deleteFolder(f.id).then(refresh)}
-                >
-                  ×
-                </button>
-              )}
+              {f.id !== ROOT_FOLDER &&
+                (arming === f.id ? (
+                  <button
+                    className="btn folder-remove armed"
+                    onClick={() => {
+                      setArming(null);
+                      void deleteFolder(f.id).then(refresh);
+                    }}
+                    onMouseLeave={() => setArming(null)}
+                  >
+                    Delete
+                  </button>
+                ) : (
+                  <button
+                    className="icon-btn folder-remove"
+                    data-tip="Delete folder — its conversations go back to Root"
+                    onClick={() => setArming(f.id)}
+                  >
+                    ×
+                  </button>
+                ))}
             </li>
           ))}
         </ul>

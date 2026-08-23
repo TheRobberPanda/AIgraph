@@ -19,6 +19,7 @@ import {
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
+import FolderMark from "./components/FolderMark";
 import ContextMenu from "./components/ContextMenu";
 import Tooltip from "./components/Tooltip";
 import FolderPicker from "./components/FolderPicker";
@@ -39,7 +40,6 @@ import Mic from "./components/Mic";
 import {
   currentFolder,
   folderColor,
-  folderMark,
   listFolders,
   setCurrentFolder,
   ROOT_FOLDER,
@@ -822,9 +822,7 @@ export default function App() {
             style={{ "--folder-color": folderColor(folderName) } as React.CSSProperties}
             onClick={() => setPickingFolder(true)}
           >
-            <span className="folder-mark big" aria-hidden="true">
-              {folderMark(folderName)}
-            </span>
+            <FolderMark name={folderName} id={folderId} size={20} />
             <span className="folder-banner-text">
               <span className="folder-banner-label">This conversation goes in</span>
               <span className="folder-banner-name">{folderName}</span>
@@ -890,9 +888,7 @@ export default function App() {
               onClick={() => setPickingFolder(true)}
               data-tip="Where this conversation is filed"
             >
-              <span className="folder-mark" aria-hidden="true">
-                {folderMark(folderName)}
-              </span>
+              <FolderMark name={folderName} id={folderId} />
               {folderName}
             </button>
           )}

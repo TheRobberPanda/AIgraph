@@ -511,9 +511,8 @@ input, textarea {
 
 /* Folders carry a colour and a mark, derived from the name so nothing extra
    has to be stored and a folder looks the same everywhere. */
-.folder-mark { flex: none; color: var(--folder-color, var(--accent)); font-size: 0.8rem; }
-.folder-mark.big { font-size: 1.2rem; }
-.folder-mark.row-mark { margin-right: 0.4rem; font-size: 0.7rem; }
+.folder-glyph { flex: none; display: block; }
+.row-mark { display: inline-flex; align-items: center; margin-right: 0.35rem; vertical-align: -0.15em; }
 .folder-row.on { border-color: var(--folder-color, var(--accent)); }
 .folder-row.drop {
   border-color: var(--folder-color, var(--accent));
@@ -691,9 +690,8 @@ input, textarea {
 .folder-row {
   flex: 1;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.8rem;
+  align-items: center;
+  gap: 0.55rem;
   padding: 0.45rem 0.6rem;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -707,7 +705,18 @@ input, textarea {
 .folder-row:hover { background: var(--surface); }
 .folder-row.on { border-color: var(--accent); color: var(--fg); }
 .folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The count is the only thing that belongs on the right; the name stays beside
+   its mark rather than drifting into the middle of the row. */
+.folder-row .row-meta { margin-left: auto; flex: none; }
 .folder-remove { width: 1.7rem; height: 1.7rem; border: none; font-size: 1rem; line-height: 1; }
+.folder-remove.armed {
+  width: auto;
+  height: 1.7rem;
+  padding: 0 0.55rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
 .folder-new { gap: 0.4rem; }
 .folder-new .field { flex: 1; }
 
