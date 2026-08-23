@@ -123,6 +123,8 @@ export interface EmbeddedStatus {
   server_ready: boolean;
   server_path: string | null;
   running: boolean;
+  /** Every GGUF already on disk. */
+  downloaded: string[];
   download_gb: number;
   host: string;
 }
@@ -136,8 +138,8 @@ export function downloadEmbeddedModel(): Promise<void> {
 }
 
 /** Start it and wait until it answers. Returns the host it is on. */
-export function startEmbedded(): Promise<string> {
-  return invoke<string>("start_embedded");
+export function startEmbedded(file?: string | null): Promise<string> {
+  return invoke<string>("start_embedded", { file: file ?? null });
 }
 
 export function stopEmbedded(): Promise<void> {
@@ -156,4 +158,28 @@ export function onModelDownload(
   return listen<{ what: string; received: number; total: number }>("model:download", (e) =>
     cb(e.payload),
   );
+}
+
+export interface RemoteModel {
+  id: string;
+  downloads: number;
+  likes: number;
+}
+
+export interface RemoteFile {
+  path: string;
+  size: number;
+}
+
+/** Search Hugging Face for GGUF models. Live, so it never goes stale. */
+export function searchModels(query: string): Promise<RemoteModel[]> {
+  return invoke<RemoteModel[]>("search_models", { query });
+}
+
+export function modelFiles(repo: string): Promise<RemoteFile[]> {
+  return invoke<RemoteFile[]>("model_files", { repo });
+}
+
+export function downloadModelFile(repo: string, file: string, size: number): Promise<void> {
+  return invoke("download_model_file", { repo, file, size });
 }

@@ -16,7 +16,12 @@ import {
   startEmbedded,
   stopEmbedded,
   onModelDownload,
+  searchModels,
+  modelFiles,
+  downloadModelFile,
   type EmbeddedStatus,
+  type RemoteModel,
+  type RemoteFile,
 } from "../lib/settings";
 
 type Role = "chat" | "extraction";
@@ -88,6 +93,13 @@ export default function Models() {
   const [embedded, setEmbedded] = useState<EmbeddedStatus | null>(null);
   const [pulling, setPulling] = useState<{ received: number; total: number } | null>(null);
   const [starting, setStarting] = useState(false);
+  const [browse, setBrowse] = useState(false);
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<RemoteModel[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [openRepo, setOpenRepo] = useState<string | null>(null);
+  const [repoFiles, setRepoFiles] = useState<RemoteFile[] | null>(null);
+  const [chosenFile, setChosenFile] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -131,12 +143,54 @@ export default function Models() {
     }
   }
 
+  async function runSearch() {
+    setSearching(true);
+    setError(null);
+    setOpenRepo(null);
+    setRepoFiles(null);
+    try {
+      setFound(await searchModels(query));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function openFiles(repo: string) {
+    if (openRepo === repo) {
+      setOpenRepo(null);
+      return;
+    }
+    setOpenRepo(repo);
+    setRepoFiles(null);
+    try {
+      setRepoFiles(await modelFiles(repo));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function pullFile(repo: string, f: RemoteFile) {
+    setError(null);
+    setPulling({ received: 0, total: f.size });
+    try {
+      await downloadModelFile(repo, f.path, f.size);
+      setEmbedded(await embeddedStatus());
+      setBrowse(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPulling(null);
+    }
+  }
+
   async function runEmbedded() {
     setStarting(true);
     setError(null);
     try {
       if (embedded?.running) await stopEmbedded();
-      else await startEmbedded();
+      else await startEmbedded(chosenFile);
       setEmbedded(await embeddedStatus());
       await refresh();
     } catch (e) {
@@ -395,13 +449,102 @@ export default function Models() {
                   Keep the app open. It carries on if you go elsewhere in it.
                 </p>
               </div>
-            ) : !embedded?.model_ready ? (
+            ) : (
               <div className="row">
-                <button className="btn on" onClick={() => void pullModel()}>
-                  Download the model ({embedded?.download_gb.toFixed(1) ?? "3.8"} GB)
+                {!embedded?.model_ready && (
+                  <button className="btn on" onClick={() => void pullModel()}>
+                    Download Bonsai ({embedded?.download_gb.toFixed(1) ?? "3.8"} GB)
+                  </button>
+                )}
+                <button className={browse ? "btn on" : "btn"} onClick={() => setBrowse((b) => !b)}>
+                  {browse ? "Close the browser" : "Browse Hugging Face"}
                 </button>
               </div>
-            ) : !embedded.server_ready ? (
+            )}
+
+            {browse && (
+              <div className="hf">
+                {/* Searched live rather than a list baked into the app: a
+                    hardcoded catalogue is stale the week after it ships. */}
+                <form
+                  className="row"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void runSearch();
+                  }}
+                >
+                  <input
+                    className="field"
+                    placeholder="Search GGUF models — qwen, gemma, phi…"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                  <button className="btn" type="submit" disabled={searching || !query.trim()}>
+                    {searching ? "Searching…" : "Search"}
+                  </button>
+                </form>
+
+                {found && found.length === 0 && <p className="blurb">Nothing matched that.</p>}
+
+                <ul className="hf-list">
+                  {found?.map((m) => (
+                    <li key={m.id}>
+                      <button className="hf-repo" onClick={() => void openFiles(m.id)}>
+                        <span className="hf-id">{m.id}</span>
+                        <span className="row-meta">
+                          {m.downloads > 1e6
+                            ? `${(m.downloads / 1e6).toFixed(1)}M`
+                            : `${Math.round(m.downloads / 1000)}k`}{" "}
+                          downloads
+                        </span>
+                      </button>
+
+                      {openRepo === m.id && (
+                        <div className="hf-files">
+                          {!repoFiles ? (
+                            <p className="blurb">Reading the files…</p>
+                          ) : repoFiles.length === 0 ? (
+                            <p className="blurb">No GGUF files in that one.</p>
+                          ) : (
+                            repoFiles.map((f) => (
+                              <button
+                                key={f.path}
+                                className="hf-file"
+                                onClick={() => void pullFile(m.id, f)}
+                              >
+                                <span className="hf-quant">{f.path}</span>
+                                <span className="row-meta">
+                                  {f.size > 0 ? `${(f.size / 1e9).toFixed(2)} GB` : "—"}
+                                </span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {embedded && embedded.downloaded.length > 0 && (
+              <div className="downloaded">
+                <h3 className="section">On this machine</h3>
+                <div className="row">
+                  {embedded.downloaded.map((f) => (
+                    <button
+                      key={f}
+                      className={chosenFile === f ? "btn on" : "btn"}
+                      onClick={() => setChosenFile(chosenFile === f ? null : f)}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {embedded?.model_ready && !embedded.server_ready ? (
               <>
                 <p className="blurb">
                   <span className="tag ready">weights ready</span> Still needs
@@ -415,7 +558,7 @@ export default function Models() {
                   prebuilt upstream.
                 </p>
               </>
-            ) : (
+            ) : embedded?.server_ready ? (
               <div className="row">
                 <button
                   className={embedded.running ? "btn on" : "btn"}
@@ -426,11 +569,13 @@ export default function Models() {
                     ? "Starting…"
                     : embedded.running
                       ? "Running — stop it"
-                      : "Start it"}
+                      : chosenFile
+                        ? `Start ${chosenFile}`
+                        : "Start it"}
                 </button>
                 <span className="row-meta">{embedded.host}</span>
               </div>
-            )}
+            ) : null}
           </section>
 
           {settings && (

@@ -478,6 +478,30 @@ input, textarea {
 .runtime-row label { min-width: 8rem; font-size: 0.86rem; color: var(--muted); }
 .runtime-row select.field { width: auto; }
 
+/* Browsing Hugging Face for something to run. */
+.hf { display: flex; flex-direction: column; gap: 0.6rem; max-width: 40rem; margin: 0.6rem 0 1rem; }
+.hf-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; max-height: 22rem; overflow-y: auto; }
+.hf-repo {
+  display: flex; align-items: baseline; gap: 0.8rem; width: 100%;
+  padding: 0.4rem 0.55rem; border: none; border-radius: 6px;
+  background: transparent; color: var(--fg); font: inherit; font-size: 0.84rem;
+  text-align: left; cursor: pointer;
+}
+.hf-repo:hover { background: var(--surface); }
+.hf-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 0.78rem; }
+.hf-repo .row-meta { margin-left: auto; white-space: nowrap; }
+.hf-files { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.2rem 0 0.4rem 0.9rem; border-left: 1px solid var(--line); margin-left: 0.55rem; }
+.hf-file {
+  display: flex; align-items: baseline; gap: 0.8rem;
+  padding: 0.3rem 0.5rem; border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--muted); font: inherit; font-size: 0.78rem;
+  text-align: left; cursor: pointer;
+}
+.hf-file:hover { border-color: var(--accent); color: var(--fg); }
+.hf-quant { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hf-file .row-meta { margin-left: auto; }
+.downloaded { margin-bottom: 1rem; }
+
 /* A download that takes minutes needs to look like it is happening. */
 .pulling { display: flex; flex-direction: column; gap: 0.5rem; max-width: 30rem; margin-bottom: 0.9rem; }
 .pulling-head { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }

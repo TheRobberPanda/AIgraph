@@ -45,8 +45,86 @@ const APPROX_BYTES: u64 = 3_800_000_000;
 const HOST: &str = "127.0.0.1";
 const PORT: u16 = 8127;
 
-fn url() -> String {
-    format!("https://huggingface.co/{REPO}/resolve/main/{FILE}?download=true")
+fn url_for(repo: &str, file: &str) -> String {
+    format!("https://huggingface.co/{repo}/resolve/main/{file}?download=true")
+}
+
+/// One model on Hugging Face, as the search returns it.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct RemoteModel {
+    pub id: String,
+    #[serde(default)]
+    pub downloads: u64,
+    #[serde(default)]
+    pub likes: u64,
+}
+
+/// One GGUF inside a repository.
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoteFile {
+    pub path: String,
+    pub size: u64,
+}
+
+/// Search Hugging Face for GGUF repositories.
+///
+/// Live rather than a list baked into the app: a hardcoded catalogue is out of
+/// date the week after it ships, and this is a field that moves monthly.
+pub async fn search(query: &str) -> Result<Vec<RemoteModel>, String> {
+    let url = format!(
+        "https://huggingface.co/api/models?filter=gguf&search={}&sort=downloads&direction=-1&limit=25",
+        urlencode(query)
+    );
+    reqwest::get(&url)
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Vec<RemoteModel>>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The GGUF files in one repository, largest last.
+///
+/// Quantisations are what actually differ here, and the size is the number
+/// that decides whether a machine can run it — so both are surfaced rather
+/// than making someone guess from the filename.
+pub async fn files(repo: &str) -> Result<Vec<RemoteFile>, String> {
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        path: String,
+        #[serde(default)]
+        size: u64,
+    }
+    let url = format!("https://huggingface.co/api/models/{repo}/tree/main?recursive=true");
+    let entries: Vec<Entry> = reqwest::get(&url)
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut out: Vec<RemoteFile> = entries
+        .into_iter()
+        .filter(|e| e.path.to_lowercase().ends_with(".gguf"))
+        // The vision tower and the speculative drafter ship alongside the
+        // weights and are not themselves runnable, so they are not offered.
+        .filter(|e| !e.path.to_lowercase().contains("mmproj"))
+        .map(|e| RemoteFile { path: e.path, size: e.size })
+        .collect();
+    out.sort_by_key(|f| f.size);
+    Ok(out)
+}
+
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "+".to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +137,8 @@ pub struct EmbeddedStatus {
     pub server_path: Option<String>,
     /// It is running now and answering.
     pub running: bool,
+    /// Every GGUF already on disk, so one of several can be chosen.
+    pub downloaded: Vec<String>,
     pub download_gb: f32,
     pub host: String,
 }
@@ -81,6 +161,44 @@ impl Embedded {
 
     pub fn model_path(&self) -> PathBuf {
         self.root.join(FILE)
+    }
+
+    /// Where a chosen file lands. Flattened to the basename: a repo path with
+    /// directories in it would otherwise put weights in surprising places.
+    pub fn path_for(&self, file: &str) -> PathBuf {
+        let name = file.rsplit('/').next().unwrap_or(file);
+        self.root.join(name)
+    }
+
+    /// Every GGUF already downloaded, so more than one can be kept.
+    pub fn downloaded(&self) -> Vec<String> {
+        let Ok(dir) = std::fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = dir
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.to_lowercase().ends_with(".gguf"))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Fetch any GGUF, not only the one the app suggests.
+    pub fn download_file(
+        &self,
+        repo: &str,
+        file: &str,
+        approx: u64,
+        on_progress: &(dyn Fn(DownloadProgress) + Send + Sync),
+    ) -> Result<(), String> {
+        let dest = self.path_for(file);
+        if dest.is_file() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
+        crate::stt::model::download_to(&url_for(repo, file), &dest, file, approx, on_progress)
+            .map_err(|e| e.to_string())
     }
 
     pub fn host(&self) -> String {
@@ -106,6 +224,7 @@ impl Embedded {
             server_ready: server.is_some(),
             server_path: server.map(|p| p.display().to_string()),
             running: self.is_running(),
+            downloaded: self.downloaded(),
             download_gb: APPROX_BYTES as f32 / 1e9,
             host: self.host(),
         }
@@ -131,7 +250,7 @@ impl Embedded {
             return Ok(());
         }
         std::fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
-        crate::stt::model::download_to(&url(), &dest, FILE, APPROX_BYTES, on_progress)
+        crate::stt::model::download_to(&url_for(REPO, FILE), &dest, FILE, APPROX_BYTES, on_progress)
             .map_err(|e| e.to_string())
     }
 
@@ -140,11 +259,14 @@ impl Embedded {
     /// The runtime settings become flags here. That is the whole reason they
     /// are settings: they are the ones that decide whether a 27B model is
     /// pleasant or painful on a given machine.
-    pub fn start(&mut self, rt: &Runtime) -> Result<(), String> {
+    pub fn start(&mut self, rt: &Runtime, file: Option<&str>) -> Result<(), String> {
         if self.is_running() {
             return Ok(());
         }
-        let model = self.model_path();
+        let model = match file {
+            Some(f) => self.path_for(f),
+            None => self.model_path(),
+        };
         if !model.is_file() {
             return Err("the model has not been downloaded yet".into());
         }

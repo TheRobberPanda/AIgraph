@@ -1147,11 +1147,14 @@ pub async fn download_embedded_model(
 
 /// Start the bundled model and point both roles at it.
 #[tauri::command]
-pub async fn start_embedded(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn start_embedded(
+    state: State<'_, AppState>,
+    file: Option<String>,
+) -> Result<String, String> {
     let rt = state.settings.lock().await.runtime;
     let host = {
         let mut e = state.embedded.lock().await;
-        e.start(&rt)?;
+        e.start(&rt, file.as_deref())?;
         e.host()
     };
 
@@ -1168,6 +1171,43 @@ pub async fn start_embedded(state: State<'_, AppState>) -> Result<String, String
     }
     state.embedded.lock().await.stop();
     Err("llama-server did not come up in time".into())
+}
+
+/// Search Hugging Face for GGUF models.
+#[tauri::command]
+pub async fn search_models(
+    query: String,
+) -> Result<Vec<crate::llm::embedded::RemoteModel>, String> {
+    crate::llm::embedded::search(&query).await
+}
+
+/// The GGUF files inside one repository, with their sizes.
+#[tauri::command]
+pub async fn model_files(repo: String) -> Result<Vec<crate::llm::embedded::RemoteFile>, String> {
+    crate::llm::embedded::files(&repo).await
+}
+
+/// Fetch a chosen GGUF rather than only the one the app suggests.
+#[tauri::command]
+pub async fn download_model_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    repo: String,
+    file: String,
+    size: u64,
+) -> Result<(), String> {
+    let data_dir = state.data_dir.clone();
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let embedded = crate::llm::embedded::Embedded::new(&data_dir);
+        embedded.download_file(&repo, &file, size, &move |p| {
+            let _ = handle.emit("model:download", p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let _ = app.emit("model:download:done", ());
+    Ok(())
 }
 
 #[tauri::command]
