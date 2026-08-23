@@ -540,7 +540,17 @@ impl Store {
     pub fn ideas(&self) -> Result<Vec<StoredIdea>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, claim, title, category FROM ideas ORDER BY updated_at DESC, id DESC")?;
+            // Archiving a conversation archives what came out of it. An idea
+            // still supported by a conversation that is not archived stays,
+            // since it is that other conversation's idea too.
+            .prepare(
+                "SELECT i.id, i.claim, i.title, i.category FROM ideas i
+                 WHERE EXISTS (
+                   SELECT 1 FROM evidence e JOIN sessions s ON s.id = e.session_id
+                   WHERE e.idea_id = i.id AND s.archived = 0
+                 )
+                 ORDER BY i.updated_at DESC, i.id DESC",
+            )?;
         let rows: Vec<(i64, String, String, String)> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<rusqlite::Result<_>>()?;
@@ -873,7 +883,8 @@ impl Store {
                     (SELECT COUNT(DISTINCT e.idea_id) FROM evidence e WHERE e.session_id = s.id),
                     s.title
              FROM sessions s
-             WHERE EXISTS (SELECT 1 FROM evidence e WHERE e.session_id = s.id)",
+             WHERE s.archived = 0
+               AND EXISTS (SELECT 1 FROM evidence e WHERE e.session_id = s.id)",
         )?;
         for row in sessions.query_map([], |r| {
             let id: i64 = r.get(0)?;
@@ -905,7 +916,11 @@ impl Store {
                     i.category,
                     (i.revision > 0 AND i.updated_at > datetime('now', '-10 minutes')),
                     i.title
-             FROM ideas i",
+             FROM ideas i
+             WHERE EXISTS (
+               SELECT 1 FROM evidence e JOIN sessions s ON s.id = e.session_id
+               WHERE e.idea_id = i.id AND s.archived = 0
+             )",
         )?;
         for row in ideas.query_map([], |r| {
             let id: i64 = r.get(0)?;

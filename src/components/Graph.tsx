@@ -306,15 +306,22 @@ export default function Graph() {
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
 
+    // In a side panel there is no room to name every idea — the labels stack
+    // into an unreadable pile. Below a threshold only the conversations are
+    // named, plus whatever is being pointed at.
+    const compact = w < 560;
+
     const candidates = [...nodesRef.current].sort((a, b) => {
       const rank = (n: Node) => (hover === n ? 0 : n.data.kind === "conversation" ? 1 : n.data.shared ? 2 : 3);
       return rank(a) - rank(b);
     });
 
-    const baseLabelWidth = 120 * Math.max(0.6, Math.min(viewRef.current.scale, 2));
+    const baseLabelWidth =
+      (compact ? 84 : 120) * Math.max(0.6, Math.min(viewRef.current.scale, 2));
 
     for (const n of candidates) {
       const isConversation = n.data.kind === "conversation";
+      if (compact && !isConversation && hover !== n) continue;
 
       const s = toScreen(n, w, h);
       const r = n.r * Math.max(0.6, Math.min(viewRef.current.scale, 2));
@@ -491,15 +498,33 @@ export default function Graph() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    let first = true;
+    // Refit whenever the canvas changes size by a meaningful amount, not just
+    // once. The map lives in a side panel that can be expanded to fill the
+    // pane, and keeping the old framing across that leaves everything in a
+    // knot in the middle of a mostly empty canvas.
+    let lastW = 0;
+    let lastH = 0;
+    let settle: number | undefined;
     const ro = new ResizeObserver(() => {
-      if (first) {
-        first = false;
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      if (!w || !h) return;
+      if (Math.abs(w - lastW) < 24 && Math.abs(h - lastH) < 24) return;
+      lastW = w;
+      lastH = h;
+      // Debounced: the expand is animated, so this fires every frame of it and
+      // refitting mid-transition would fight the animation.
+      window.clearTimeout(settle);
+      settle = window.setTimeout(() => {
         fitToView();
-      }
+        simRef.current?.alpha(0.3).restart();
+      }, 180);
     });
     ro.observe(canvas);
-    return () => ro.disconnect();
+    return () => {
+      window.clearTimeout(settle);
+      ro.disconnect();
+    };
   }, [fitToView]);
 
   function screenPos(n: Node) {

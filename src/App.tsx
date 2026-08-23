@@ -75,7 +75,6 @@ const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>>
   settings: IconSettings,
 };
 
-const MAIN: Tab[] = ["chat", "map", "ideas", "chats"];
 const SETUP: Tab[] = ["models", "settings"];
 
 type Deep = { kind: "idea"; id: number } | { kind: "conversation"; id: number } | null;
@@ -164,6 +163,8 @@ export default function App() {
   const [pickingFolder, setPickingFolder] = useState(false);
   /** Read replies out as they finish. Always on in call mode. */
   const [voiceOn, setVoiceOn] = useState(false);
+  /** Which workspace panel is filling the pane, if any. */
+  const [expanded, setExpanded] = useState<"map" | "ideas" | "conversations" | null>(null);
   // The no-model screen can drop into the Models tab rather than being a dead
   // end — someone with an API key or the claude CLI had no way through it.
   const [setupModels, setSetupModels] = useState(false);
@@ -312,7 +313,7 @@ export default function App() {
           return next;
         });
       }
-      if (open) setView(open === "conversations" ? "chats" : open);
+      if (open) setExpanded(open);
       if (voiceOn) speak(clean);
     } catch (e) {
       setError(String(e));
@@ -322,6 +323,10 @@ export default function App() {
       setThinking(false);
       inputRef.current?.focus();
     }
+  }
+
+  function toggleExpand(which: "map" | "ideas" | "conversations") {
+    setExpanded((e) => (e === which ? null : which));
   }
 
   /** Ask the backend to look for models again, so nothing needs restarting. */
@@ -500,25 +505,8 @@ export default function App() {
       <nav className="topbar" data-tauri-drag-region>
         <div className="brand" data-tauri-drag-region>Idea Graph</div>
 
-        <div className="topbar-tabs">
-          {MAIN.map((t) => {
-            const Icon = TAB_ICONS[t];
-            return (
-              <button
-                key={t}
-                className={view === t && !deep ? "nav on" : "nav"}
-                onClick={() => {
-                  setDeep(null);
-                  setView(t);
-                }}
-              >
-                <Icon className="nav-icon" />
-                {TAB_NAMES[t]}
-              </button>
-            );
-          })}
-        </div>
-
+        {/* No tabs for the workspace any more — the map, the ideas and the
+            conversations are all on screen at once. Only setup is elsewhere. */}
         <div className="topbar-spacer" />
 
         {pending > 0 && (
@@ -571,17 +559,45 @@ export default function App() {
             onClose={() => setDeep(null)}
           />
         )
-      ) : view === "map" ? (
-        <Graph />
-      ) : view === "ideas" ? (
-        <Ideas />
-      ) : view === "chats" ? (
-        <Chats onOpen={(id) => setDeep({ kind: "conversation", id })} />
       ) : view === "models" ? (
         <Models />
       ) : view === "settings" ? (
         <SettingsPanel />
       ) : (
+      // Everything at once rather than one tab at a time: the map and the
+      // conversations to the left, the ideas they produced to the right, and
+      // the talking in the middle where the attention is.
+      <div className={`workspace${expanded ? ` expanded expanded-${expanded}` : ""}`}>
+
+        <div className="ws-left">
+          <section className="ws-panel ws-map">
+            <button className="ws-head" onClick={() => toggleExpand("map")}>
+              <IconMap className="nav-icon" />
+              Map
+              <span className="ws-grow" aria-hidden="true">
+                {expanded === "map" ? "Close" : "Open"}
+              </span>
+            </button>
+            <div className="ws-body">
+              <Graph />
+            </div>
+          </section>
+
+          <section className="ws-panel ws-convos">
+            <button className="ws-head" onClick={() => toggleExpand("conversations")}>
+              <IconChats className="nav-icon" />
+              Conversations
+              <span className="ws-grow" aria-hidden="true">
+                {expanded === "conversations" ? "Close" : "Open"}
+              </span>
+            </button>
+            <div className="ws-body">
+              <Chats onOpen={(id) => setDeep({ kind: "conversation", id })} />
+            </div>
+          </section>
+        </div>
+
+        <div className="ws-center">
       <div className={turns.length === 0 && !justArchived ? "think opening" : "think"}>
       <div className="stream">
         {turns.length === 0 && !justArchived && (
@@ -617,10 +633,10 @@ export default function App() {
                 </p>
                 {digesting.last.ideas > 0 && (
                   <div className="row">
-                    <button className="btn on" onClick={() => setView("map")}>
+                    <button className="btn on" onClick={() => setExpanded("map")}>
                       See it on the map
                     </button>
-                    <button className="btn" onClick={() => setView("ideas")}>
+                    <button className="btn" onClick={() => setExpanded("ideas")}>
                       Read the ideas
                     </button>
                   </div>
@@ -756,6 +772,22 @@ export default function App() {
         </div>
         </div>
       </div>
+      </div>
+
+        </div>
+
+        <aside className="ws-panel ws-right">
+          <button className="ws-head" onClick={() => toggleExpand("ideas")}>
+            <IconIdeas className="nav-icon" />
+            Ideas
+            <span className="ws-grow" aria-hidden="true">
+              {expanded === "ideas" ? "Close" : "Open"}
+            </span>
+          </button>
+          <div className="ws-body">
+            <Ideas />
+          </div>
+        </aside>
       </div>
       )}
       </div>
