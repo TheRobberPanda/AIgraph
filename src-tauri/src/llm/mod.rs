@@ -10,6 +10,7 @@
 pub mod anthropic;
 pub mod claude_cli;
 pub mod detect;
+pub mod embedded;
 pub mod ollama;
 pub mod openai_compat;
 pub mod types;

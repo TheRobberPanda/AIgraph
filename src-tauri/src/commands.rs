@@ -56,6 +56,8 @@ pub struct AppState {
     /// Backend state rather than frontend, because a session can be archived
     /// by the idle timer or by the app closing, with no UI involved.
     current_folder: Mutex<i64>,
+    /// The model the app runs itself, when that is the one in use.
+    embedded: Mutex<crate::llm::embedded::Embedded>,
     data_dir: PathBuf,
     /// Held for the duration of a drain. Extraction is serialized deliberately:
     /// two sessions decoding at once on one local model is slower than doing
@@ -97,6 +99,9 @@ impl AppState {
                 .unwrap_or(std::path::Path::new("."))
                 .join("embeddings"),
             current_folder: Mutex::new(crate::store::ROOT_FOLDER),
+            embedded: Mutex::new(crate::llm::embedded::Embedded::new(
+                db_path.parent().unwrap_or(std::path::Path::new(".")),
+            )),
             drain_lock: tokio::sync::Mutex::new(()),
             retry_after: Mutex::new(Default::default()),
             md_dir,
@@ -1094,6 +1099,74 @@ pub async fn delete_session(
         .delete_session(session_id)
         .map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn embedded_status(
+    state: State<'_, AppState>,
+) -> Result<crate::llm::embedded::EmbeddedStatus, String> {
+    Ok(state.embedded.lock().await.status())
+}
+
+/// Fetch the weights, reporting progress on the same channel dictation uses.
+#[tauri::command]
+pub async fn download_embedded_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // A few gigabytes over a blocking reader has no business on the async
+    // runtime, so it goes to a blocking thread like the speech model does.
+    let root = {
+        let mut e = state.embedded.lock().await;
+        e.status();
+        e.model_path()
+    };
+    if root.is_file() {
+        return Ok(());
+    }
+    let data_dir = state.data_dir.clone();
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let embedded = crate::llm::embedded::Embedded::new(&data_dir);
+        embedded.download(&move |p| {
+            let _ = handle.emit("model:download", p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let _ = app.emit("model:download:done", ());
+    Ok(())
+}
+
+/// Start the bundled model and point both roles at it.
+#[tauri::command]
+pub async fn start_embedded(state: State<'_, AppState>) -> Result<String, String> {
+    let rt = state.settings.lock().await.runtime;
+    let host = {
+        let mut e = state.embedded.lock().await;
+        e.start(&rt)?;
+        e.host()
+    };
+
+    // llama-server takes a moment to map the weights before it answers. Poll
+    // rather than sleeping a guessed amount — a cold 3.8 GB read off a slow
+    // disk is much longer than a warm one.
+    let url = format!("{host}/v1/models");
+    let client = reqwest::Client::new();
+    for _ in 0..120 {
+        if client.get(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false) {
+            return Ok(host);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    state.embedded.lock().await.stop();
+    Err("llama-server did not come up in time".into())
+}
+
+#[tauri::command]
+pub async fn stop_embedded(state: State<'_, AppState>) -> Result<(), String> {
+    state.embedded.lock().await.stop();
     Ok(())
 }
 

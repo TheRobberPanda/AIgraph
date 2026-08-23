@@ -115,6 +115,18 @@ impl Models {
     }
 }
 
+/// Fetch one file with progress. Public so the embedded model can reuse it
+/// rather than growing a second, subtly different downloader.
+pub fn download_to(
+    url: &str,
+    dest: &Path,
+    what: &str,
+    approx_total: u64,
+    on_progress: &(dyn Fn(DownloadProgress) + Send + Sync),
+) -> Result<()> {
+    download(url, dest, what, approx_total, on_progress)
+}
+
 fn download(
     url: &str,
     dest: &Path,

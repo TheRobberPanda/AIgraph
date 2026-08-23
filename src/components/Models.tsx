@@ -11,7 +11,13 @@ import {
   type ActiveModels,
   type KeyStatus,
   type Settings,
+  downloadEmbeddedModel,
+  embeddedStatus,
+  startEmbedded,
+  stopEmbedded,
+  type EmbeddedStatus,
 } from "../lib/settings";
+import { onDownloadProgress, type DownloadProgress } from "../lib/dictation";
 
 type Role = "chat" | "extraction";
 
@@ -79,6 +85,9 @@ export default function Models() {
   const [source, setSource] = useState<Source>("local");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [embedded, setEmbedded] = useState<EmbeddedStatus | null>(null);
+  const [pulling, setPulling] = useState<DownloadProgress | null>(null);
+  const [starting, setStarting] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -90,6 +99,7 @@ export default function Models() {
       setActive(await activeModels());
       setKeys(await keyStatus());
       setSettings(await getSettings());
+      setEmbedded(await embeddedStatus());
     } catch (e) {
       setError(String(e));
     }
@@ -98,6 +108,41 @@ export default function Models() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // The weights come down on the same channel the speech model uses.
+  useEffect(() => {
+    const p = onDownloadProgress(setPulling);
+    return () => {
+      void p.then((un) => un());
+    };
+  }, []);
+
+  async function pullModel() {
+    setError(null);
+    try {
+      await downloadEmbeddedModel();
+      setEmbedded(await embeddedStatus());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPulling(null);
+    }
+  }
+
+  async function runEmbedded() {
+    setStarting(true);
+    setError(null);
+    try {
+      if (embedded?.running) await stopEmbedded();
+      else await startEmbedded();
+      setEmbedded(await embeddedStatus());
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setStarting(false);
+    }
+  }
 
   async function pick(role: Role, s: Detected, m: ModelInfo) {
     setBusy(`${role}:${m.id}`);
@@ -326,21 +371,56 @@ export default function Models() {
                 </code>
               </li>
             </ul>
-            {/* Said plainly rather than shown as a button that does nothing.
-                The settings below are real and are kept. */}
-            <p className="blurb">
-              <span className="tag">not ready yet</span> The engine that runs this
-              inside the app is still being built. Until then, the same model can
-              be loaded in LM Studio and used from <b>On this machine</b>.
-            </p>
+            {pulling ? (
+              <p className="blurb">
+                Downloading — {(pulling.received / 1e9).toFixed(2)} GB
+                {pulling.total > 0 && ` of ${(pulling.total / 1e9).toFixed(2)} GB`}
+              </p>
+            ) : !embedded?.model_ready ? (
+              <div className="row">
+                <button className="btn on" onClick={() => void pullModel()}>
+                  Download the model ({embedded?.download_gb.toFixed(1) ?? "3.8"} GB)
+                </button>
+              </div>
+            ) : !embedded.server_ready ? (
+              <>
+                <p className="blurb">
+                  <span className="tag ready">weights ready</span> Still needs
+                  llama.cpp&apos;s <code>llama-server</code> to run them.
+                </p>
+                <p className="blurb">
+                  Put <code>llama-server</code> on your PATH, or drop the binary in{" "}
+                  <code>llm/</code> beside the model. It is run as a separate
+                  process on purpose — a model that fails to load takes itself
+                  down rather than the app, and the GPU builds already exist
+                  prebuilt upstream.
+                </p>
+              </>
+            ) : (
+              <div className="row">
+                <button
+                  className={embedded.running ? "btn on" : "btn"}
+                  disabled={starting}
+                  onClick={() => void runEmbedded()}
+                >
+                  {starting
+                    ? "Starting…"
+                    : embedded.running
+                      ? "Running — stop it"
+                      : "Start it"}
+                </button>
+                <span className="row-meta">{embedded.host}</span>
+              </div>
+            )}
           </section>
 
           {settings && (
             <section className="model-role">
               <h2 className="section">How it runs</h2>
               <p className="blurb">
-                These decide whether a 27B model is pleasant or painful on a given
-                machine. They are kept now and apply once the engine lands.
+                These decide whether a 27B model is pleasant or painful on a
+                given machine. They are read when the model is started, so
+                change them before starting it rather than during.
               </p>
 
               <div className="row runtime-row">
@@ -354,8 +434,16 @@ export default function Models() {
                   step={1}
                   value={Math.max(0, CONTEXTS.indexOf(settings.runtime.context_length))}
                   onChange={(e) =>
-                    void patchRuntime({ context_length: CONTEXTS[Number(e.target.value)] })
+                    setSettings({
+                      ...settings,
+                      runtime: {
+                        ...settings.runtime,
+                        context_length: CONTEXTS[Number(e.target.value)],
+                      },
+                    })
                   }
+                  onMouseUp={() => void patchRuntime({})}
+                  onKeyUp={() => void patchRuntime({})}
                 />
                 <span className="scale-value">
                   {settings.runtime.context_length >= 1024

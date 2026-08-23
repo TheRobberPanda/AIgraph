@@ -61,6 +61,44 @@ The current behaviour is arguably better — nothing is rebuilt, and the map nev
 covers what you're typing. Worth looking at together before building the
 alternative.
 
+## 5. `keep_in_memory` does nothing yet
+
+The setting exists, persists, and has a control. What it should do is decide
+whether `llama-server` stays up between sessions or is stopped when one ends —
+a reload of 3.8 GB against holding the memory.
+
+Right now the server is started and stopped by hand from the Models tab and the
+setting is never consulted. Needs a hook where a session ends.
+
+## 6. Why two ideas relate
+
+The map draws correlations in green and contradictions in red, and hovering one
+names the two ideas and which it is. What it cannot say is **why** — the
+`relations` table holds `idea_a`, `idea_b`, `kind` and `confidence`, and no text.
+
+Reconciliation is the only thing that ever knows the reason, and it is already
+asking a model to adjudicate the pair. Capturing one sentence at that moment is
+cheap; reconstructing it later means a second, worse-informed call. Same
+argument as `evidence.reasoning`, which exists for exactly this reason.
+
+Needs a column, a field on the verdict, and the hover card to show it.
+
+---
+
+## Decided against, so they stop coming back
+
+- **Ideas moving between folders on their own.** A folder holds conversations;
+  ideas follow the conversation they came from. An idea can be supported by
+  several conversations, so "which folder is it in" has no single answer.
+- **Ideas appearing live during a conversation.** Extraction runs once over the
+  whole session, which is what lets it see the arc of a thought rather than a
+  turn at a time, and costs one call per session instead of one per message.
+  Live would mean per-turn extraction: a different pipeline and a different
+  cost model, for a worse reading of the material.
+- **Intercepting "show me the map" before it is sent.** Swallowing the message
+  would mean the thought was never recorded. The model emits a marker instead,
+  so the app responds *and* the turn is kept.
+
 ---
 
 ## From the original plan's own backlog

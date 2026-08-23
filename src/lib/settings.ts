@@ -116,3 +116,30 @@ export function setAnthropicKey(key: string): Promise<string[]> {
 export function clearAnthropicKey(): Promise<void> {
   return invoke("clear_anthropic_key");
 }
+
+/** The model the app runs itself. */
+export interface EmbeddedStatus {
+  model_ready: boolean;
+  server_ready: boolean;
+  server_path: string | null;
+  running: boolean;
+  download_gb: number;
+  host: string;
+}
+
+export function embeddedStatus(): Promise<EmbeddedStatus> {
+  return invoke<EmbeddedStatus>("embedded_status");
+}
+
+export function downloadEmbeddedModel(): Promise<void> {
+  return invoke("download_embedded_model");
+}
+
+/** Start it and wait until it answers. Returns the host it is on. */
+export function startEmbedded(): Promise<string> {
+  return invoke<string>("start_embedded");
+}
+
+export function stopEmbedded(): Promise<void> {
+  return invoke("stop_embedded");
+}
