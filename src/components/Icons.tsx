@@ -191,3 +191,32 @@ export function IconFolder(props: SVGProps<SVGSVGElement>) {
     </Base>
   );
 }
+
+/** A handset — call mode, where replies are short and spoken. */
+export function IconCall(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="14" height="14" {...props}>
+      <path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-4-2-2 2a15 15 0 0 1-6-6l2-2z" />
+    </Base>
+  );
+}
+
+/** A speaker — replies read out loud. */
+export function IconSpeaker(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="14" height="14" {...props}>
+      <path d="M4 9v6h4l5 4V5L8 9H4z" />
+      <path d="M17 9a4 4 0 0 1 0 6" />
+    </Base>
+  );
+}
+
+/** A clock — how long a session may sit quiet before it is filed. */
+export function IconClock(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="14" height="14" {...props}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7v5l3.5 2" />
+    </Base>
+  );
+}

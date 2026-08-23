@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import {
   createFolder,
   deleteFolder,
+  folderColor,
+  folderMark,
   listFolders,
+  moveSession,
   ROOT_FOLDER,
   type Folder,
 } from "../lib/folders";
@@ -25,6 +28,7 @@ export default function FolderPicker({
   const [folders, setFolders] = useState<Folder[]>([]);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [dropOn, setDropOn] = useState<number | null>(null);
 
   const refresh = () => listFolders().then(setFolders).catch((e) => setError(String(e)));
 
@@ -63,12 +67,31 @@ export default function FolderPicker({
           {folders.map((f) => (
             <li key={f.id}>
               <button
-                className={f.id === current ? "folder-row on" : "folder-row"}
+                className={
+                  (f.id === current ? "folder-row on" : "folder-row") +
+                  (dropOn === f.id ? " drop" : "")
+                }
+                style={{ "--folder-color": folderColor(f.name) } as React.CSSProperties}
                 onClick={() => {
                   onPick(f.id);
                   onClose();
                 }}
+                // Conversations can be dragged here from the list.
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDropOn(f.id);
+                }}
+                onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDropOn(null);
+                  const id = Number(e.dataTransfer.getData("text/session"));
+                  if (Number.isFinite(id) && id > 0) void moveSession(id, f.id).then(refresh);
+                }}
               >
+                <span className="folder-mark" aria-hidden="true">
+                  {folderMark(f.name)}
+                </span>
                 <span className="folder-name">{f.name}</span>
                 <span className="row-meta">
                   {f.session_count} {f.session_count === 1 ? "conversation" : "conversations"}

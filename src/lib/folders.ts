@@ -10,6 +10,28 @@ export interface Folder {
   session_count: number;
 }
 
+/** A folder's colour and mark, from its name — same trick the subjects use,
+ *  so a folder looks the same everywhere without storing anything extra. */
+const FOLDER_COLORS = [
+  "#e08659", "#7ead6f", "#9fb8d4", "#dba53f",
+  "#c9899f", "#8fbfae", "#a396c4", "#c98d6b",
+];
+const FOLDER_MARKS = ["◆", "●", "▲", "■", "★", "✦", "◇", "▬"];
+
+function hash(name: string): number {
+  let h = 5381;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) + h + name.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+export function folderColor(name: string): string {
+  return FOLDER_COLORS[hash(name) % FOLDER_COLORS.length];
+}
+
+export function folderMark(name: string): string {
+  return FOLDER_MARKS[hash(name) % FOLDER_MARKS.length];
+}
+
 export function listFolders(): Promise<Folder[]> {
   return invoke<Folder[]>("folders");
 }

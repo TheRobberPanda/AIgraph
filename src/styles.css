@@ -478,6 +478,87 @@ input, textarea {
 .runtime-row label { min-width: 8rem; font-size: 0.86rem; color: var(--muted); }
 .runtime-row select.field { width: auto; }
 
+/* A conversation's file: the transcript on the left, what came out of it on
+   the right, where it can be read against the words that produced it. */
+.deep-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(16rem, 24rem); gap: 1.6rem; align-items: start; }
+.deep-main { min-width: 0; }
+.deep-aside { min-width: 0; position: sticky; top: 0; }
+.taken-head {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  padding-bottom: 0.35rem;
+  border-bottom: 2px solid var(--accent);
+}
+.trace { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.35rem; }
+.trace-why { font-style: normal; font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+.trace-quote { font-size: 0.78rem; color: var(--faint); border-left: 2px solid var(--gold); padding-left: 0.5rem; }
+@media (max-width: 68rem) {
+  .deep-split { grid-template-columns: 1fr; }
+  .deep-aside { position: static; }
+}
+
+/* A conversation row: the row itself, its subjects, and its actions. */
+.chat-line { display: flex; align-items: center; gap: 0.3rem; }
+.chat-line .row-btn { flex: 1; min-width: 0; cursor: grab; }
+.chat-line .row-btn:active { cursor: grabbing; }
+.chat-tags { display: inline-flex; gap: 0.25rem; flex: none; align-items: center; }
+.chat-actions { display: flex; gap: 0.2rem; flex: none; opacity: 0; transition: opacity 100ms ease; }
+.chat-line:hover .chat-actions, .chat-line:focus-within .chat-actions { opacity: 1; }
+.chat-actions .icon-btn { width: 1.7rem; height: 1.7rem; border-color: transparent; }
+
+/* Folders carry a colour and a mark, derived from the name so nothing extra
+   has to be stored and a folder looks the same everywhere. */
+.folder-mark { flex: none; color: var(--folder-color, var(--accent)); font-size: 0.8rem; }
+.folder-row.on { border-color: var(--folder-color, var(--accent)); }
+.folder-row.drop {
+  border-color: var(--folder-color, var(--accent));
+  background: color-mix(in srgb, var(--folder-color, var(--accent)) 18%, transparent);
+}
+
+/* A conversation opens over what you were doing rather than replacing it —
+   large enough to read, small enough to see you have not left. */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3vh 3vw;
+  background: rgba(0, 0, 0, 0.55);
+}
+.sheet {
+  width: min(72rem, 92vw);
+  height: min(88vh, 60rem);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.sheet .pane-inner { flex: 1; min-height: 0; }
+
+/* Opens upward — it sits at the bottom of the window. */
+.idle-pick { position: relative; display: inline-flex; }
+.idle-list {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 90;
+  min-width: 7rem;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: var(--surface-lift);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 -8px 26px rgba(0, 0, 0, 0.35);
+}
+
 /* Browsing Hugging Face for something to run. */
 .hf { display: flex; flex-direction: column; gap: 0.6rem; max-width: 40rem; margin: 0.6rem 0 1rem; }
 .hf-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; max-height: 22rem; overflow-y: auto; }

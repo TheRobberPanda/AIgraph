@@ -140,8 +140,17 @@ For each idea return:
   exact span supports the claim, omit the idea entirely.
 - "category": two or three words for the subject. Lowercase. Prefer a category
   already in use over coining a near-synonym.
-- "reasoning": at most one sentence on what in those words carries this idea.
-  Brief — it sits beside the sentence it describes.
+- "reasoning": two or three sentences that make the idea stand on its own.
+
+  A quote is rarely enough on its own to know what was meant. "It basically
+  socializes the losses of the American empire" is a sentence someone can read
+  back a month later without recovering the thought behind it. So: say what is
+  being claimed, what it is a claim *about*, and what makes it worth recording
+  — the thing that would otherwise have to be reconstructed by rereading the
+  whole conversation.
+
+  Draw on the surrounding transcript, not only on the quoted words. The point
+  is to crystallise the thought, not to paraphrase the sentence.
 
   Do not write "the user" or "the speaker" anywhere, in this field or any other.
   State what the words do, not who did it: not "The user characterizes this as a

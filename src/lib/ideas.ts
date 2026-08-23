@@ -112,3 +112,8 @@ export interface SourceView {
 export function sourceView(evidenceId: number): Promise<SourceView> {
   return invoke<SourceView>("source_view", { evidenceId });
 }
+
+/** Throw away one conversation's ideas and read it again. */
+export function reextractSession(sessionId: number): Promise<unknown> {
+  return invoke("reextract_session", { sessionId });
+}

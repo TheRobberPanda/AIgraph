@@ -77,9 +77,14 @@ export function ConversationFile({
   const taken = (view?.turns ?? [])
     .flatMap((t) => t.segments)
     .filter((s) => s.idea_id !== null)
-    .reduce<{ ideaId: number; title: string; quote: string }[]>((acc, s) => {
+    .reduce<{ ideaId: number; title: string; quote: string; reasoning: string }[]>((acc, s) => {
       if (acc.some((a) => a.ideaId === s.idea_id)) return acc;
-      acc.push({ ideaId: s.idea_id!, title: s.title || s.claim || "", quote: s.text });
+      acc.push({
+        ideaId: s.idea_id!,
+        title: s.title || s.claim || "",
+        quote: s.text,
+        reasoning: s.reasoning ?? "",
+      });
       return acc;
     }, []);
 
@@ -107,6 +112,8 @@ export function ConversationFile({
           {/* The conversation first, as it happened. What was taken from it sits
               underneath — the record is the thing, and the notes are notes on
               it, not a replacement for it. */}
+          <div className="deep-split">
+          <div className="deep-main">
           <h3 className="section">The conversation</h3>
           <div className="deep-transcript">
             {view.turns.map((turn) =>
@@ -142,7 +149,10 @@ export function ConversationFile({
             )}
           </div>
 
-          <h3 className="section">Taken from it</h3>
+          </div>
+
+          <aside className="deep-aside">
+          <h2 className="taken-head">Taken from it</h2>
           {taken.length === 0 ? (
             <p className="blurb">Nothing was recorded from this one.</p>
           ) : (
@@ -159,7 +169,12 @@ export function ConversationFile({
                     <span className="row-main">
                       {t.title}
                       {trace === t.ideaId && (
-                        <span className="trace">“{t.quote}”</span>
+                        <span className="trace">
+                          {/* The quote alone rarely says why it was recorded —
+                              the crystallisation is the part that does. */}
+                          {t.reasoning && <em className="trace-why">{t.reasoning}</em>}
+                          <span className="trace-quote">“{t.quote}”</span>
+                        </span>
                       )}
                     </span>
                   </button>
@@ -169,6 +184,8 @@ export function ConversationFile({
           )}
 
           <Nudges strong={view.strong} weak={view.weak} />
+          </aside>
+          </div>
         </>
       )}
     </div>
@@ -286,7 +303,7 @@ export function IdeaFile({
                   disabled={diving}
                   onClick={() => void think(true)}
                 >
-                  {diving ? "Thinking…" : "Again"}
+                  {diving ? "Thinking…" : "Read it again"}
                 </button>
               </>
             ) : (

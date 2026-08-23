@@ -1447,12 +1447,15 @@ pub async fn transcripts_dir(state: State<'_, AppState>) -> Result<String, Strin
 pub async fn reextract_all(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    folder: Option<i64>,
 ) -> Result<usize, String> {
+    // Scoped to a folder when one is given: re-reading everything to fix one
+    // line of thinking means paying for every other one too.
     let sessions: Vec<i64> = state
         .store
         .lock()
         .await
-        .list_sessions(1000, None)
+        .list_sessions(1000, folder)
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|s| s.id)

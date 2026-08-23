@@ -14,6 +14,9 @@ import {
   IconMaximize,
   IconClose,
   IconFolder,
+  IconCall,
+  IconSpeaker,
+  IconClock,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
@@ -165,6 +168,9 @@ export default function App() {
   const [pickingFolder, setPickingFolder] = useState(false);
   /** Read replies out as they finish. Always on in call mode. */
   const [voiceOn, setVoiceOn] = useState(false);
+  const [callMode, setCallMode] = useState(false);
+  const [idleMinutes, setIdleMinutes] = useState(30);
+  const [idleOpen, setIdleOpen] = useState(false);
   /** Which workspace panel is filling the pane, if any. */
   const [expanded, setExpanded] = useState<"map" | "ideas" | "conversations" | null>(null);
   /** Simple visits one place at a time; advanced puts them all on screen. */
@@ -183,6 +189,8 @@ export default function App() {
       applyTheme(s.theme);
       applyUiScale(s.ui_scale);
       setVoiceOn(s.voice === "system" || s.call_mode);
+      setCallMode(s.call_mode);
+      setIdleMinutes(s.idle_minutes);
       setLayout(s.layout);
     });
     const un = listen<{ voice?: string; call_mode?: boolean; layout?: "simple" | "advanced" }>(
@@ -354,6 +362,16 @@ export default function App() {
     if (deep) setDeep(null);
     else if (expanded) setExpanded(null);
     else setView("chat");
+  }
+
+  /** Flip one setting from the composer, without leaving the conversation. */
+  async function patchSetting(patch: Record<string, unknown>) {
+    try {
+      const current = await getSettings();
+      await saveSettings({ ...current, ...patch });
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function setLayoutMode(next: "simple" | "advanced") {
@@ -611,21 +629,7 @@ export default function App() {
       </nav>
 
       <div className="pane">
-      {deep ? (
-        deep.kind === "idea" ? (
-          <IdeaFile
-            ideaId={deep.id}
-            onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
-            onClose={() => setDeep(null)}
-          />
-        ) : (
-          <ConversationFile
-            sessionId={deep.id}
-            onOpenIdea={(id) => setDeep({ kind: "idea", id })}
-            onClose={() => setDeep(null)}
-          />
-        )
-      ) : view === "models" ? (
+      {view === "models" ? (
         <Models />
       ) : view === "settings" ? (
         <SettingsPanel />
@@ -837,6 +841,36 @@ export default function App() {
             }
             disabled={streaming}
           />
+          <button
+            className={callMode ? "icon-btn on" : "icon-btn"}
+            data-tip={
+              callMode
+                ? "Call mode on — short answers, read aloud"
+                : "Call mode — short answers, read aloud"
+            }
+            onClick={() => {
+              const next = !callMode;
+              setCallMode(next);
+              setVoiceOn(next || voiceOn);
+              void patchSetting({ call_mode: next });
+            }}
+          >
+            <IconCall />
+          </button>
+
+          <button
+            className={voiceOn ? "icon-btn on" : "icon-btn"}
+            data-tip={voiceOn ? "Reading replies aloud" : "Read replies aloud"}
+            onClick={() => {
+              const next = !voiceOn;
+              setVoiceOn(next);
+              if (!next) stopSpeaking();
+              void patchSetting({ voice: next ? "system" : "off" });
+            }}
+          >
+            <IconSpeaker />
+          </button>
+
           {turns.length > 0 && (
             <button
               className="btn folder-btn"
@@ -848,6 +882,36 @@ export default function App() {
             </button>
           )}
           <span className="spacer" />
+
+          {/* Opens upward: it lives at the bottom of the window, and a menu
+              that drops off the screen is no menu at all. */}
+          <div className="idle-pick">
+            <button
+              className="icon-btn"
+              data-tip={`Filed after ${idleMinutes} minutes of quiet`}
+              onClick={() => setIdleOpen((o) => !o)}
+            >
+              <IconClock />
+            </button>
+            {idleOpen && (
+              <ul className="idle-list">
+                {[10, 30, 60, 120].map((m) => (
+                  <li key={m}>
+                    <button
+                      className={idleMinutes === m ? "pick-option on" : "pick-option"}
+                      onClick={() => {
+                        setIdleMinutes(m);
+                        setIdleOpen(false);
+                        void patchSetting({ idle_minutes: m });
+                      }}
+                    >
+                      {m < 60 ? `${m} min` : `${m / 60} hr`}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <button
             className="btn btn-send"
             onClick={() => void send()}
@@ -900,6 +964,26 @@ export default function App() {
           }}
           onClose={() => setPickingFolder(false)}
         />
+      )}
+
+      {deep && (
+        <div className="sheet-overlay" onClick={() => setDeep(null)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            {deep.kind === "idea" ? (
+              <IdeaFile
+                ideaId={deep.id}
+                onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
+                onClose={() => setDeep(null)}
+              />
+            ) : (
+              <ConversationFile
+                sessionId={deep.id}
+                onOpenIdea={(id) => setDeep({ kind: "idea", id })}
+                onClose={() => setDeep(null)}
+              />
+            )}
+          </div>
+        </div>
       )}
 
       <Tooltip />

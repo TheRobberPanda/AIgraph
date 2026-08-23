@@ -10,9 +10,10 @@ import ImportChat from "./ImportChat";
 import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
 import MoveTo from "./MoveTo";
-import { IconArchive, IconPlus } from "./Icons";
+import { IconArchive, IconPlus, IconTrash, IconRewind } from "./Icons";
 import Select from "./Select";
 import { categoryColor } from "../lib/categories";
+import { reextractSession } from "../lib/ideas";
 import { longDate } from "../lib/format";
 
 /**
@@ -161,29 +162,75 @@ export default function Chats({
                   />
                 </form>
               ) : (
-                <button
-                  onClick={() => onOpen?.(s.id)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setMenu({ x: e.clientX, y: e.clientY, session: s });
-                  }}
-                  className="row-btn chat-row"
-                >
-                  <span className="row-main">
-                    <span className="chat-open">
-                      {s.title || s.opening || "(nothing was said)"}
+                <div className="chat-line">
+                  <button
+                    // Draggable onto a folder in the picker, which is quicker
+                    // than a menu once there are more than a few folders.
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData("text/session", String(s.id))}
+                    onClick={() => onOpen?.(s.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({ x: e.clientX, y: e.clientY, session: s });
+                    }}
+                    className="row-btn chat-row"
+                  >
+                    <span className="row-main">
+                      <span className="chat-open">
+                        {s.title || s.opening || "(nothing was said)"}
+                      </span>
+                      <span className="chat-sub">
+                        {longDate(s.started_at)} · {s.turn_count} turns ·{" "}
+                        {s.idea_count > 0
+                          ? `${s.idea_count} idea${s.idea_count === 1 ? "" : "s"}`
+                          : s.extract_state === "done"
+                            ? "no ideas"
+                            : s.extract_state}
+                      </span>
                     </span>
-                    <span className="chat-sub">
-                      {longDate(s.started_at)} · {s.turn_count} turns ·{" "}
-                      {s.idea_count > 0
-                        ? `${s.idea_count} idea${s.idea_count === 1 ? "" : "s"}`
-                        : s.extract_state === "done"
-                          ? "no ideas"
-                          : s.extract_state}
-                      {s.tags.length > 0 && ` · ${s.tags.join(", ")}`}
-                    </span>
+
+                    {/* Subjects as their own colours rather than a comma list —
+                        the same colours they have on the map. */}
+                    {s.tags.length > 0 && (
+                      <span className="chat-tags">
+                        {s.tags.map((t) => (
+                          <i
+                            key={t}
+                            className="tag-swatch"
+                            style={{ "--tag-color": categoryColor(t) } as React.CSSProperties}
+                            data-tip={t}
+                          />
+                        ))}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* On the row rather than behind a right-click, which is not
+                      a thing anyone finds without being told. */}
+                  <span className="chat-actions">
+                    <button
+                      className="icon-btn"
+                      data-tip="Re-read this conversation for ideas"
+                      onClick={() => void reextractSession(s.id).then(refresh)}
+                    >
+                      <IconRewind />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      data-tip={s.archived ? "Unarchive" : "Archive"}
+                      onClick={() => void setSessionArchived(s.id, !s.archived).then(refresh)}
+                    >
+                      <IconArchive />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      data-tip="Delete"
+                      onClick={() => setDeleting(s.id)}
+                    >
+                      <IconTrash />
+                    </button>
                   </span>
-                </button>
+                </div>
               )}
             </li>
           ))}

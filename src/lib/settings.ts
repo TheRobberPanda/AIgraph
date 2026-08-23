@@ -68,8 +68,9 @@ export function transcriptsDir(): Promise<string> {
   return invoke<string>("transcripts_dir");
 }
 
-export function reextractAll(): Promise<number> {
-  return invoke<number>("reextract_all");
+/** Re-read every conversation, or only those in one folder. */
+export function reextractAll(folder?: number | null): Promise<number> {
+  return invoke<number>("reextract_all", { folder: folder ?? null });
 }
 
 export function onSettingsChanged(cb: (s: Settings) => void): Promise<UnlistenFn> {
