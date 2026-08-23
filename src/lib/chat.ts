@@ -109,8 +109,9 @@ export function endSession(reason: EndReason = "done"): Promise<Archived | null>
   return invoke<Archived | null>("end_session", { reason });
 }
 
-export function listSessions(): Promise<SessionSummary[]> {
-  return invoke<SessionSummary[]>("list_sessions");
+/** Conversations in one folder, or every folder when null. */
+export function listSessions(folder?: number | null): Promise<SessionSummary[]> {
+  return invoke<SessionSummary[]>("list_sessions", { folder: folder ?? null });
 }
 
 export function renameSession(sessionId: number, title: string): Promise<void> {

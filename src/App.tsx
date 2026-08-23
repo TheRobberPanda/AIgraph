@@ -588,30 +588,6 @@ export default function App() {
           </button>
         )}
 
-        {/* Where this conversation is filed. In the bar rather than tucked in
-            the composer, because it is the thing that organises everything
-            else. */}
-        <button
-          className="folder-chip"
-          onClick={() => setPickingFolder(true)}
-          data-tip="Where this conversation is filed"
-        >
-          <IconFolder />
-          <span className="folder-chip-name">{folderName}</span>
-        </button>
-
-        <button
-          className="nav layout-mode"
-          onClick={() => void setLayoutMode(layout === "simple" ? "advanced" : "simple")}
-          data-tip={
-            layout === "simple"
-              ? "Showing one place at a time. Switch to all at once."
-              : "Showing everything at once. Switch to one place at a time."
-          }
-        >
-          {layout === "simple" ? "Simplified" : "Advanced"}
-        </button>
-
         <div className="topbar-tabs topbar-setup">
           {SETUP.map((t) => {
             const Icon = TAB_ICONS[t];
@@ -677,7 +653,7 @@ export default function App() {
               </span>
             </button>
             <div className="ws-body">
-              <Graph />
+              <Graph folder={folderId} />
             </div>
           </section>
 
@@ -694,7 +670,7 @@ export default function App() {
               </span>
             </button>
             <div className="ws-body">
-              <Chats onOpen={(id) => setDeep({ kind: "conversation", id })} />
+              <Chats folder={folderId} onOpen={(id) => setDeep({ kind: "conversation", id })} />
             </div>
           </section>
         </div>
@@ -827,6 +803,19 @@ export default function App() {
       </div>
 
       <div className="composer">
+        {turns.length === 0 && (
+          // Before anything is said, the folder is the decision — shown large,
+          // above the box. Once the conversation is under way it steps aside
+          // to the bar below, next to Speak.
+          <button className="folder-banner" onClick={() => setPickingFolder(true)}>
+            <IconFolder />
+            <span className="folder-banner-text">
+              <span className="folder-banner-label">This conversation goes in</span>
+              <span className="folder-banner-name">{folderName}</span>
+            </span>
+            <span className="folder-banner-change">Change</span>
+          </button>
+        )}
         <div className="composer-box">
         <textarea
           ref={inputRef}
@@ -848,6 +837,16 @@ export default function App() {
             }
             disabled={streaming}
           />
+          {turns.length > 0 && (
+            <button
+              className="btn folder-btn"
+              onClick={() => setPickingFolder(true)}
+              data-tip="Where this conversation is filed"
+            >
+              <IconFolder />
+              {folderName}
+            </button>
+          )}
           <span className="spacer" />
           <button
             className="btn btn-send"
@@ -885,7 +884,7 @@ export default function App() {
             </span>
           </button>
           <div className="ws-body">
-            <Ideas />
+            <Ideas folder={folderId} />
           </div>
         </aside>
       </div>
@@ -907,6 +906,17 @@ export default function App() {
 
       <div className="statusbar">
         {provider ? `${provider.label} · ${provider.model}` : "no model"}
+        <button
+          className="status-toggle"
+          onClick={() => void setLayoutMode(layout === "simple" ? "advanced" : "simple")}
+          data-tip={
+            layout === "simple"
+              ? "One place at a time. Switch to everything at once."
+              : "Everything at once. Switch to one place at a time."
+          }
+        >
+          {layout === "simple" ? "Simplified" : "Advanced"}
+        </button>
         {digesting?.running && (
           <span className="busy-item">
             reading back session {digesting.running.session_id}

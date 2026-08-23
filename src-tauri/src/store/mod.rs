@@ -358,7 +358,13 @@ impl Store {
         Ok(session_id)
     }
 
-    pub fn list_sessions(&self, limit: i64) -> Result<Vec<SessionSummary>> {
+    /// Conversations, optionally only those in one folder.
+    ///
+    /// `None` means every folder. A folder exists to keep one line of thinking
+    /// apart from another, so when one is chosen everything derived from a
+    /// conversation outside it is out of view as well — otherwise the folders
+    /// are labels rather than separations.
+    pub fn list_sessions(&self, limit: i64, folder: Option<i64>) -> Result<Vec<SessionSummary>> {
         let mut stmt = self.conn.prepare(
             "SELECT s.id, s.started_at, s.ended_at, s.md_path, s.model, s.extract_state,
                     (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id),
@@ -368,10 +374,11 @@ impl Store {
                               ORDER BY t.ord LIMIT 1), ''),
                     s.title, s.archived, s.folder_id
              FROM sessions s
+             WHERE (?2 IS NULL OR s.folder_id = ?2)
              ORDER BY s.started_at DESC
              LIMIT ?1",
         )?;
-        let rows = stmt.query_map([limit], |r| {
+        let rows = stmt.query_map(params![limit, folder], |r| {
             Ok(SessionSummary {
                 id: r.get(0)?,
                 started_at: r.get(1)?,
@@ -537,7 +544,7 @@ impl Store {
         Ok(ids)
     }
 
-    pub fn ideas(&self) -> Result<Vec<StoredIdea>> {
+    pub fn ideas(&self, folder: Option<i64>) -> Result<Vec<StoredIdea>> {
         let mut stmt = self
             .conn
             // Archiving a conversation archives what came out of it. An idea
@@ -548,11 +555,12 @@ impl Store {
                  WHERE EXISTS (
                    SELECT 1 FROM evidence e JOIN sessions s ON s.id = e.session_id
                    WHERE e.idea_id = i.id AND s.archived = 0
+                     AND (?1 IS NULL OR s.folder_id = ?1)
                  )
                  ORDER BY i.updated_at DESC, i.id DESC",
             )?;
         let rows: Vec<(i64, String, String, String)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .query_map([folder], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<rusqlite::Result<_>>()?;
 
         let mut out = Vec::with_capacity(rows.len());
@@ -867,7 +875,7 @@ impl Store {
     /// Small enough to send in one go — a few thousand nodes is a few hundred
     /// kilobytes of JSON, and paging it would complicate the layout for no
     /// benefit at the scale a person's own thinking reaches.
-    pub fn graph(&self) -> Result<Graph> {
+    pub fn graph(&self, folder: Option<i64>) -> Result<Graph> {
         let mut g = Graph::default();
 
         // Fetched in two queries rather than per node, so a map with hundreds of
@@ -884,9 +892,10 @@ impl Store {
                     s.title
              FROM sessions s
              WHERE s.archived = 0
+               AND (?1 IS NULL OR s.folder_id = ?1)
                AND EXISTS (SELECT 1 FROM evidence e WHERE e.session_id = s.id)",
         )?;
-        for row in sessions.query_map([], |r| {
+        for row in sessions.query_map([folder], |r| {
             let id: i64 = r.get(0)?;
             let started: String = r.get(1)?;
             let opening: String = r.get(2)?;
@@ -920,9 +929,10 @@ impl Store {
              WHERE EXISTS (
                SELECT 1 FROM evidence e JOIN sessions s ON s.id = e.session_id
                WHERE e.idea_id = i.id AND s.archived = 0
+                 AND (?1 IS NULL OR s.folder_id = ?1)
              )",
         )?;
-        for row in ideas.query_map([], |r| {
+        for row in ideas.query_map([folder], |r| {
             let id: i64 = r.get(0)?;
             let claim: String = r.get(1)?;
             let sessions: i64 = r.get(2)?;
@@ -1600,7 +1610,7 @@ mod tests {
         let rendered = transcript::render(&convo());
         let id = store.archive_session(&rendered, "m", Utc::now(), Some(&dir)).unwrap();
 
-        let summary = &store.list_sessions(10).unwrap()[0];
+        let summary = &store.list_sessions(10, None).unwrap()[0];
         assert_eq!(summary.id, id);
         let path = summary.md_path.clone().expect("markdown path recorded");
         let body = std::fs::read_to_string(&path).unwrap();
@@ -1614,7 +1624,7 @@ mod tests {
     fn summary_shows_the_opening_user_line() {
         let mut store = Store::open_in_memory().unwrap();
         store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
-        let s = &store.list_sessions(10).unwrap()[0];
+        let s = &store.list_sessions(10, None).unwrap()[0];
         assert_eq!(s.opening, "latency is the problem");
         assert_eq!(s.turn_count, 3);
         assert_eq!(s.extract_state, "pending");
@@ -1674,7 +1684,7 @@ mod tests {
         };
         store.save_extraction(session_id, &extraction, "test", "m").unwrap();
 
-        let idea = &store.ideas().unwrap()[0];
+        let idea = &store.ideas(None).unwrap()[0];
         let view = store.source_view(idea.evidence[0].id).unwrap();
 
         assert_eq!(view.highlight, "latency is the real problem");
@@ -1730,7 +1740,7 @@ mod tests {
             .execute("UPDATE evidence SET start_byte = start_byte + 3", [])
             .unwrap();
 
-        let id = store.ideas().unwrap()[0].evidence[0].id;
+        let id = store.ideas(None).unwrap()[0].evidence[0].id;
         assert!(
             matches!(store.source_view(id), Err(StoreError::Provenance { .. })),
             "a drifted highlight must error, never render"
@@ -1794,7 +1804,7 @@ mod tests {
 
         assert_eq!(same, idea_id, "a refinement must not create a second bubble");
 
-        let ideas = store.ideas().unwrap();
+        let ideas = store.ideas(None).unwrap();
         assert_eq!(ideas.len(), 1, "one idea, not two");
         assert_eq!(ideas[0].claim, "He acts badly in certain circumstances");
         assert_eq!(ideas[0].evidence.len(), 2, "both moments support it");
@@ -1831,7 +1841,7 @@ mod tests {
             .unwrap();
         store.revert_revision(revision).unwrap();
 
-        assert_eq!(store.ideas().unwrap()[0].claim, "Trump is a bad man");
+        assert_eq!(store.ideas(None).unwrap()[0].claim, "Trump is a bad man");
         // Reverting twice must not silently re-apply anything.
         assert!(store.revert_revision(revision).is_err());
     }
@@ -1851,7 +1861,7 @@ mod tests {
             .apply_decision(s2, &again, &Decision::Attach { idea_id, confidence: 0.9 }, "t", "m")
             .unwrap();
 
-        let ideas = store.ideas().unwrap();
+        let ideas = store.ideas(None).unwrap();
         assert_eq!(ideas.len(), 1);
         assert_eq!(ideas[0].evidence.len(), 2);
         assert_eq!(ideas[0].strong.len(), 1, "notes belong to the bubble, not each quote");
@@ -1897,7 +1907,7 @@ mod tests {
             .apply_decision(s2, &b, &Decision::Attach { idea_id, confidence: 0.9 }, "t", "m")
             .unwrap();
 
-        let g = store.graph().unwrap();
+        let g = store.graph(None).unwrap();
 
         let idea = g.nodes.iter().find(|n| n.idea_id == Some(idea_id)).unwrap();
         assert!(idea.shared, "an idea in two conversations is shared");
@@ -1922,7 +1932,7 @@ mod tests {
         // nothing about the person's thinking.
         let mut store = Store::open_in_memory().unwrap();
         session_with(&mut store, "just saying hello");
-        assert!(store.graph().unwrap().nodes.is_empty());
+        assert!(store.graph(None).unwrap().nodes.is_empty());
     }
 
     #[test]
@@ -1941,7 +1951,7 @@ mod tests {
             .unwrap();
 
         assert_ne!(a, b, "related is not the same as merged");
-        let g = store.graph().unwrap();
+        let g = store.graph(None).unwrap();
         assert_eq!(
             g.edges.iter().filter(|e| e.kind == "related").count(),
             1,
@@ -1962,6 +1972,49 @@ mod tests {
             conversation_label("", &long, "2026-08-22").ends_with('…'),
             "long openings are truncated"
         );
+    }
+
+    #[test]
+    fn a_folder_hides_everything_outside_it() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (kept, turns_a) = session_with(&mut store, "latency is the real problem");
+        let (other, turns_b) = session_with(&mut store, "the garden needs weeding");
+
+        store
+            .apply_decision(
+                kept,
+                &verified("Latency is the problem", "latency is the real problem", &turns_a),
+                &Decision::New { related: vec![] },
+                "t",
+                "m",
+            )
+            .unwrap();
+        store
+            .apply_decision(
+                other,
+                &verified("The garden needs weeding", "the garden needs weeding", &turns_b),
+                &Decision::New { related: vec![] },
+                "t",
+                "m",
+            )
+            .unwrap();
+
+        let work = store.create_folder("Work").unwrap();
+        store.set_session_folder(kept, work).unwrap();
+
+        // Unscoped sees both; scoped to Work sees only what was said there.
+        assert_eq!(store.ideas(None).unwrap().len(), 2);
+        assert_eq!(store.list_sessions(10, None).unwrap().len(), 2);
+
+        let scoped = store.ideas(Some(work)).unwrap();
+        assert_eq!(scoped.len(), 1, "a folder must hide ideas from outside it");
+        assert!(scoped[0].claim.contains("Latency"));
+        assert_eq!(store.list_sessions(10, Some(work)).unwrap().len(), 1);
+
+        // And the map, or the folders are labels rather than separations.
+        let g = store.graph(Some(work)).unwrap();
+        assert_eq!(g.nodes.iter().filter(|n| n.kind == "conversation").count(), 1);
+        assert_eq!(g.nodes.iter().filter(|n| n.kind == "idea").count(), 1);
     }
 
     #[test]

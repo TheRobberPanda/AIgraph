@@ -32,6 +32,7 @@ export interface GraphData {
   edges: GraphEdge[];
 }
 
-export function loadGraph(): Promise<GraphData> {
-  return invoke<GraphData>("graph");
+/** The map for one folder, or every folder when null. */
+export function loadGraph(folder?: number | null): Promise<GraphData> {
+  return invoke<GraphData>("graph", { folder: folder ?? null });
 }

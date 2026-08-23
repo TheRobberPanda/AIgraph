@@ -435,8 +435,11 @@ pub async fn session_idle(state: State<'_, AppState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionSummary>, String> {
-    state.store.lock().await.list_sessions(100).map_err(|e| e.to_string())
+pub async fn list_sessions(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+) -> Result<Vec<SessionSummary>, String> {
+    state.store.lock().await.list_sessions(100, folder).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -744,8 +747,11 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
 }
 
 #[tauri::command]
-pub async fn ideas(state: State<'_, AppState>) -> Result<Vec<StoredIdea>, String> {
-    state.store.lock().await.ideas().map_err(|e| e.to_string())
+pub async fn ideas(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+) -> Result<Vec<StoredIdea>, String> {
+    state.store.lock().await.ideas(folder).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1029,8 +1035,8 @@ pub async fn revert_revision(
 }
 
 #[tauri::command]
-pub async fn graph(state: State<'_, AppState>) -> Result<Graph, String> {
-    state.store.lock().await.graph().map_err(|e| e.to_string())
+pub async fn graph(state: State<'_, AppState>, folder: Option<i64>) -> Result<Graph, String> {
+    state.store.lock().await.graph(folder).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1406,7 +1412,7 @@ pub async fn reextract_all(
         .store
         .lock()
         .await
-        .list_sessions(1000)
+        .list_sessions(1000, None)
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|s| s.id)

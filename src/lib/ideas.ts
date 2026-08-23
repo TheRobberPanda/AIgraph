@@ -36,8 +36,9 @@ export interface Diagnostics {
   by_reason: [string, number][];
 }
 
-export function listIdeas(): Promise<Idea[]> {
-  return invoke<Idea[]>("ideas");
+/** Ideas from conversations in one folder, or every folder when null. */
+export function listIdeas(folder?: number | null): Promise<Idea[]> {
+  return invoke<Idea[]>("ideas", { folder: folder ?? null });
 }
 
 export function getDiagnostics(): Promise<Diagnostics> {

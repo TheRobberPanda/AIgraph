@@ -8,10 +8,11 @@ import {
 } from "../lib/chat";
 import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
+import MoveTo from "./MoveTo";
 import FilePanel from "./FilePanel";
 import { ConversationFile, IdeaFile } from "./Deep";
 import { categoryColor } from "../lib/categories";
-import { listFolders, moveSession, ROOT_FOLDER, type Folder } from "../lib/folders";
+import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 import {
   extractionProgress,
@@ -65,7 +66,7 @@ const REASON_LABELS: Record<string, string> = {
  * graph will need to be trustworthy. Getting this right first means the graph
  * is a rendering problem rather than a correctness one.
  */
-export default function Ideas() {
+export default function Ideas({ folder }: { folder: number | null }) {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
@@ -79,6 +80,7 @@ export default function Ideas() {
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [moving, setMoving] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
   // Re-renders once a second purely so the elapsed counter advances between
@@ -86,11 +88,11 @@ export default function Ideas() {
   const [, tick] = useState(0);
 
   const refresh = useCallback(() => {
-    void listIdeas().then(setIdeas);
-    void listSessions().then(setSessions);
+    void listIdeas(folder).then(setIdeas);
+    void listSessions(folder).then(setSessions);
     void getDiagnostics().then(setDiag);
     void listFolders().then(setFolders);
-  }, []);
+  }, [folder]);
 
   /**
    * Group ideas under the conversation that first produced them.
@@ -229,8 +231,11 @@ export default function Ideas() {
 
       {diag && (
         <div className="diag">
+          {/* What is on screen, not what is in the database — the two differ
+              as soon as a folder is chosen, and showing the global count
+              beside an empty list reads as a bug. */}
           <span>
-            <strong>{diag.ideas}</strong> ideas
+            <strong>{ideas.length}</strong> ideas
           </span>
           {/* The honesty metric. Shown rather than logged, because a drop rate
               nobody looks at is a drop rate nobody fixes. */}
@@ -395,12 +400,12 @@ export default function Ideas() {
               onSelect: () =>
                 setSessionArchived(menu.session.id, !menu.session.archived).then(refresh),
             },
-            ...folders
-              .filter((f) => f.id !== menu.session.folder_id)
-              .map((f) => ({
-                label: `Move to ${f.name}`,
-                onSelect: () => void moveSession(menu.session.id, f.id).then(refresh),
-              })),
+            {
+              // One entry rather than one per folder. With fifty folders the
+              // menu was taller than the window.
+              label: "Move to folder…",
+              onSelect: () => setMoving(menu.session.id),
+            },
             {
               label: "Delete",
               danger: true,
@@ -408,6 +413,10 @@ export default function Ideas() {
             },
           ]}
         />
+      )}
+
+      {moving !== null && (
+        <MoveTo sessionId={moving} onDone={refresh} onClose={() => setMoving(null)} />
       )}
 
       {deleting !== null && (

@@ -169,6 +169,11 @@ function wrapLines(
  * everything off-screen and leaves nodes too close together to hit. Rather
  * than scaling one set of numbers, the two sizes get their own.
  */
+/** A node's drawn radius: zoom, clamped, times the size the map is at. */
+function drawnRadius(base: number, scale: number, width: number): number {
+  return base * Math.max(0.6, Math.min(scale, 2)) * ruleset(width).nodeScale;
+}
+
 function ruleset(width: number) {
   const tight = width < 560;
   return {
@@ -185,12 +190,14 @@ function ruleset(width: number) {
     /** Fitts's law, but a crowded panel needs a smaller target or every
      *  click lands on a neighbour. */
     hitRadius: tight ? 11 : 16,
+    /** Nodes are drawn smaller in a panel; at full size they crowd it out. */
+    nodeScale: tight ? 0.62 : 1,
     charge: tight ? -14 : -40,
     chargeByRadius: tight ? 3 : 9,
   };
 }
 
-export default function Graph() {
+export default function Graph({ folder }: { folder: number | null }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const paletteRef = useRef<Palette>(readPalette());
   const nodesRef = useRef<Node[]>([]);
@@ -291,7 +298,7 @@ export default function Graph() {
 
     for (const n of nodesRef.current) {
       const s = toScreen(n, w, h);
-      const r = n.r * Math.max(0.6, Math.min(viewRef.current.scale, 2));
+      const r = drawnRadius(n.r, viewRef.current.scale, w);
       ctx.globalAlpha = inFocus(n) ? 1 : 0.22;
 
       if (hover === n) {
@@ -337,6 +344,13 @@ export default function Graph() {
     // named, plus whatever is being pointed at.
     const compact = ruleset(w).tight;
 
+    // Boxes already drawn this frame. Spacing gets it most of the way, but a
+    // drag or a fresh layout can still overlap two labels, and text on text is
+    // unreadable in a way that a hidden label is not.
+    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    const collides = (b: { x0: number; y0: number; x1: number; y1: number }) =>
+      placed.some((p) => b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
+
     const candidates = [...nodesRef.current].sort((a, b) => {
       const rank = (n: Node) => (hover === n ? 0 : n.data.kind === "conversation" ? 1 : n.data.shared ? 2 : 3);
       return rank(a) - rank(b);
@@ -350,7 +364,7 @@ export default function Graph() {
       if (compact && !isConversation && hover !== n) continue;
 
       const s = toScreen(n, w, h);
-      const r = n.r * Math.max(0.6, Math.min(viewRef.current.scale, 2));
+      const r = drawnRadius(n.r, viewRef.current.scale, w);
       // The map draws to a canvas, which the interface-scale setting cannot
       // reach through CSS — read the root font-size directly so map text grows
       // and shrinks with everything else instead of staying fixed.
@@ -364,6 +378,19 @@ export default function Graph() {
       const maxLabelWidth = isConversation ? baseLabelWidth * 1.4 : baseLabelWidth;
       const lineHeight = labelPx * 1.3;
       const lines = wrapLines(ctx, n.data.label, maxLabelWidth, isConversation ? 5 : 4);
+
+      const widest = Math.max(...lines.map((l) => ctx.measureText(l).width));
+      const box = {
+        x0: s.x - widest / 2 - 3,
+        x1: s.x + widest / 2 + 3,
+        y0: s.y + r + 5,
+        y1: s.y + r + 9 + lines.length * lineHeight,
+      };
+      // Conversations and whatever is hovered always draw — losing those hides
+      // the map's landmarks. An ordinary idea steps aside instead.
+      const mustDraw = isConversation || hover === n;
+      if (!mustDraw && collides(box)) continue;
+      placed.push(box);
 
       ctx.globalAlpha = inFocus(n) ? 1 : 0.2;
       ctx.fillStyle =
@@ -395,7 +422,7 @@ export default function Graph() {
   }, []);
 
   const build = useCallback(async () => {
-    const data = await loadGraph();
+    const data = await loadGraph(folder);
     setEmpty(data.nodes.length === 0);
 
     const colors = categoryColors(data.nodes.map((n) => n.category));
@@ -499,7 +526,9 @@ export default function Graph() {
     // scatter and everything drifts out of view afterwards.
     for (let i = 0; i < 120; i++) sim.tick();
     fitToView();
-  }, [fitToView]);
+    // Rebuilds when the folder changes: a folder is a separate tree, so the
+    // map has to be a different map, not the same one filtered on screen.
+  }, [fitToView, folder]);
 
   useEffect(() => {
     void build();
@@ -587,7 +616,7 @@ export default function Graph() {
     return {
       x: s.x,
       y: s.y,
-      r: n.r * Math.max(0.6, Math.min(viewRef.current.scale, 2)),
+      r: drawnRadius(n.r, viewRef.current.scale, canvas.clientWidth),
       color: n.color,
       below: s.y > canvas.clientHeight / 2,
     };
@@ -604,7 +633,7 @@ export default function Graph() {
     let bestDist = Infinity;
     for (const n of nodesRef.current) {
       const s = toScreen(n, rect.width, rect.height);
-      const drawn = n.r * Math.max(0.6, Math.min(viewRef.current.scale, 2));
+      const drawn = drawnRadius(n.r, viewRef.current.scale, canvas.clientWidth);
       const r = Math.max(drawn + 6, ruleset(canvas.clientWidth).hitRadius);
       const d = Math.hypot(px - s.x, py - s.y);
       if (d <= r && d < bestDist) {

@@ -9,9 +9,10 @@ import {
 import ImportChat from "./ImportChat";
 import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
+import MoveTo from "./MoveTo";
 import { IconArchive, IconPlus } from "./Icons";
+import Select from "./Select";
 import { categoryColor } from "../lib/categories";
-import { listFolders, moveSession, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 
 /**
@@ -20,7 +21,13 @@ import { longDate } from "../lib/format";
  * Filterable by subject and by text, because a list you can only scroll stops
  * being useful at about thirty entries and the whole point is to come back.
  */
-export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void }) {
+export default function Chats({
+  onOpen,
+  folder,
+}: {
+  onOpen?: (sessionId: number) => void;
+  folder: number | null;
+}) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -29,14 +36,12 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
   const [showArchived, setShowArchived] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
-  const [folders, setFolders] = useState<Folder[]>([]);
-  const [folder, setFolder] = useState<number | "all">("all");
+  const [moving, setMoving] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
 
   const refresh = useCallback(() => {
-    listSessions().then(setSessions).catch((e) => setError(String(e)));
-    listFolders().then(setFolders).catch(() => {});
-  }, []);
+    listSessions(folder).then(setSessions).catch((e) => setError(String(e)));
+  }, [folder]);
 
   useEffect(refresh, [refresh]);
 
@@ -52,7 +57,6 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
     const q = query.trim().toLowerCase();
     return sessions.filter((s) => {
       if (s.archived !== showArchived) return false;
-      if (folder !== "all" && s.folder_id !== folder) return false;
       if (tag && !s.tags.includes(tag)) return false;
       if (!q) return true;
       return (
@@ -62,7 +66,7 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
         longDate(s.started_at).toLowerCase().includes(q)
       );
     });
-  }, [sessions, query, tag, showArchived, folder]);
+  }, [sessions, query, tag, showArchived]);
 
   return (
     <div className="pane-inner">
@@ -91,49 +95,26 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
         </button>
       </div>
 
-      <div className="row tag-row">
-        <select
-          className="field select-sm"
-          value={folder}
-          onChange={(e) =>
-            setFolder(e.target.value === "all" ? "all" : Number(e.target.value))
-          }
-        >
-          <option value="all">Every folder</option>
-          {folders.map((f) => (
-            <option key={f.id} value={f.id}>
-              {f.name}
-            </option>
-          ))}
-        </select>
-
-        {tags.length > 0 && (
-          <>
-            {/* A dropdown rather than a row of buttons: with more than a few
-                subjects the row wrapped over several lines and pushed the
-                conversations themselves off the top. */}
-            <select
-              className="field select-sm"
-              value={tag ?? ""}
-              onChange={(e) => setTag(e.target.value || null)}
-            >
-              <option value="">Every subject</option>
-              {tags.map(([name, count]) => (
-                <option key={name} value={name}>
-                  {name} ({count})
-                </option>
-              ))}
-            </select>
-            {tag && (
-              <span
-                className="tag-swatch big"
-                style={{ "--tag-color": categoryColor(tag) } as React.CSSProperties}
-                aria-hidden="true"
-              />
-            )}
-          </>
-        )}
-      </div>
+      {tags.length > 0 && (
+        <div className="row tag-row">
+          {/* A dropdown rather than a row of buttons: with more than a few
+              subjects the row wrapped over several lines and pushed the
+              conversations themselves off the top. */}
+          <Select
+            value={tag ?? ""}
+            onChange={(v) => setTag(v || null)}
+            options={[
+              { value: "", label: "Every subject" },
+              ...tags.map(([name, count]) => ({
+                value: name,
+                label: name,
+                meta: String(count),
+                color: categoryColor(name),
+              })),
+            ]}
+          />
+        </div>
+      )}
 
       {adding && (
         <ImportChat
@@ -225,12 +206,12 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
               onSelect: () =>
                 setSessionArchived(menu.session.id, !menu.session.archived).then(refresh),
             },
-            ...folders
-              .filter((f) => f.id !== menu.session.folder_id)
-              .map((f) => ({
-                label: `Move to ${f.name}`,
-                onSelect: () => void moveSession(menu.session.id, f.id).then(refresh),
-              })),
+            {
+              // One entry rather than one per folder. With fifty folders the
+              // menu was taller than the window.
+              label: "Move to folder…",
+              onSelect: () => setMoving(menu.session.id),
+            },
             {
               label: "Delete",
               danger: true,
@@ -238,6 +219,10 @@ export default function Chats({ onOpen }: { onOpen?: (sessionId: number) => void
             },
           ]}
         />
+      )}
+
+      {moving !== null && (
+        <MoveTo sessionId={moving} onDone={refresh} onClose={() => setMoving(null)} />
       )}
 
       {deleting !== null && (
