@@ -480,9 +480,14 @@ input, textarea {
 
 /* A conversation's file: the transcript on the left, what came out of it on
    the right, where it can be read against the words that produced it. */
-.deep-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(16rem, 24rem); gap: 1.6rem; align-items: start; }
-.deep-main { min-width: 0; }
-.deep-aside { min-width: 0; position: sticky; top: 0; }
+/* Flex rather than a grid, and wrapping rather than a media query: the panel
+   is resized by dragging, so what runs out of room is the panel, not the
+   window — and a viewport query cannot see that. Below the two basis widths
+   the list drops underneath the transcript instead of squeezing it into a
+   column two words wide. */
+.deep-split { display: flex; flex-wrap: wrap; gap: 1.6rem; align-items: flex-start; }
+.deep-main { flex: 5 1 26rem; min-width: 0; }
+.deep-aside { flex: 1 1 17rem; min-width: 0; position: sticky; top: 0; }
 .taken-head {
   margin: 0 0 0.6rem;
   font-size: 1rem;
@@ -495,7 +500,6 @@ input, textarea {
 .trace-why { font-style: normal; font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
 .trace-quote { font-size: 0.78rem; color: var(--faint); border-left: 2px solid var(--gold); padding-left: 0.5rem; }
 @media (max-width: 68rem) {
-  .deep-split { grid-template-columns: 1fr; }
   .deep-aside { position: static; }
 }
 

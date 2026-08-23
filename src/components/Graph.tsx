@@ -216,6 +216,9 @@ export default function Graph({ folder }: { folder: number | null }) {
    *  named on the map when no subject is pinned. */
   const focusNodeRef = useRef<Node | null>(null);
   const revealRef = useRef<Set<string>>(new Set());
+  /** An idea being pointed at in the open file, so the list and the map are
+   *  reading the same thing at the same time. */
+  const tracedRef = useRef<number | null>(null);
   /** A view in flight, stepped by the draw loop. Retargeted every frame from
    *  the node's live position, so it lands centred even though the layout is
    *  still moving underneath it. */
@@ -300,8 +303,10 @@ export default function Graph({ folder }: { folder: number | null }) {
     // the whole map at once.
     const focus =
       legendPinRef.current || legendHoverRef.current || hover?.data.category || null;
+    const traced = tracedRef.current;
+    const isTraced = (n: Node) => traced !== null && n.data.idea_id === traced;
     const inFocus = (n: Node) =>
-      !focus || (n.data.kind === "idea" && n.data.category === focus) || n === hover;
+      !focus || (n.data.kind === "idea" && n.data.category === focus) || n === hover || isTraced(n);
 
     for (const link of linksRef.current) {
       const a = link.source as Node;
@@ -334,7 +339,9 @@ export default function Graph({ folder }: { folder: number | null }) {
       const r = drawnRadius(n.r, viewRef.current.scale, w);
       ctx.globalAlpha = inFocus(n) ? 1 : 0.22;
 
-      if (hover === n) {
+      // The same ring the pointer draws, so running down the list of what was
+      // taken from a conversation picks each one out on the map in turn.
+      if (hover === n || isTraced(n)) {
         ctx.beginPath();
         ctx.arc(s.x, s.y, r + 6, 0, Math.PI * 2);
         ctx.fillStyle = C.hoverRing;
@@ -383,6 +390,7 @@ export default function Graph({ folder }: { folder: number | null }) {
     const pinned = legendPinRef.current;
     const revealed = (n: Node) =>
       hover === n ||
+      isTraced(n) ||
       focusNodeRef.current === n ||
       revealRef.current.has(n.data.id) ||
       (pinned !== null && n.data.category === pinned);
@@ -482,13 +490,24 @@ export default function Graph({ folder }: { folder: number | null }) {
     for (const l of laid) {
       // Conversations are the map's landmarks and always keep their names, as
       // does whatever is being pointed at directly.
-      if (!l.isConversation && clash && hover !== l.n && focusNodeRef.current !== l.n) continue;
+      if (
+        !l.isConversation &&
+        clash &&
+        hover !== l.n &&
+        !isTraced(l.n) &&
+        focusNodeRef.current !== l.n
+      )
+        continue;
       ctx.font = l.isConversation
         ? `600 ${labelPx * 1.04}px ui-sans-serif, system-ui, sans-serif`
         : `${labelPx}px ui-sans-serif, system-ui, sans-serif`;
       ctx.globalAlpha = inFocus(l.n) ? 1 : 0.2;
       ctx.fillStyle =
-        hover === l.n ? C.labelHover : l.isConversation ? C.labelConversation : C.labelIdea;
+        hover === l.n || isTraced(l.n)
+          ? C.labelHover
+          : l.isConversation
+            ? C.labelConversation
+            : C.labelIdea;
       l.lines.forEach((line, i) => ctx.fillText(line, l.x, l.y + i * l.lineHeight));
     }
     ctx.globalAlpha = 1;
@@ -693,7 +712,23 @@ export default function Graph({ folder }: { folder: number | null }) {
           if (link && typeof link.links === "function") link.links(linksRef.current);
           sim.alpha(0.8).restart();
         }
-        fitToView();
+        // Opening a file resizes the canvas, and refitting here threw away the
+        // framing that opening it had just set up. Re-aim at what is being
+        // looked at instead, so it ends up centred in the space that is left.
+        const focused = focusNodeRef.current;
+        if (focused) {
+          const v = viewRef.current;
+          travelRef.current = {
+            node: focused,
+            fromX: v.x,
+            fromY: v.y,
+            fromScale: v.scale,
+            toScale: Math.min(2.2, Math.max(v.scale, 1.15)),
+            t0: performance.now(),
+          };
+        } else {
+          fitToView();
+        }
       }, 180);
     });
     ro.observe(canvas);
@@ -975,6 +1010,13 @@ export default function Graph({ folder }: { folder: number | null }) {
           const py = e.clientY - rect.top - rect.height / 2;
           const v = viewRef.current;
           const scale = Math.min(4, Math.max(0.15, v.scale * Math.exp(-e.deltaY * 0.0015)));
+          // Pulling back is a way of saying you are done with what you were
+          // looking at, the same as clicking away from it. Zooming further in
+          // is not — that is still looking.
+          if (scale < v.scale && focusNodeRef.current) {
+            focusNodeRef.current = null;
+            revealRef.current = new Set();
+          }
           const k = scale / v.scale;
           v.x = px - (px - v.x) * k;
           v.y = py - (py - v.y) * k;
@@ -1084,6 +1126,9 @@ export default function Graph({ folder }: { folder: number | null }) {
             <ConversationFile
               sessionId={panel.id}
               onOpenIdea={(id) => openIdea.current(id)}
+              onTrace={(id) => {
+                tracedRef.current = id;
+              }}
               onClose={() => setPanel(null)}
             />
           )}

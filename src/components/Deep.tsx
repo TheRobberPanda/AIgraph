@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown";
 import { dateTime, plainDate } from "../lib/format";
 import {
@@ -62,10 +62,13 @@ function Nudges({ strong, weak }: { strong: string[]; weak: string[] }) {
 export function ConversationFile({
   sessionId,
   onOpenIdea,
+  onTrace,
   onClose,
 }: {
   sessionId: number;
   onOpenIdea: (id: number) => void;
+  /** Pointing at one of these picks it out on the map behind the panel. */
+  onTrace?: (ideaId: number | null) => void;
   onClose: () => void;
 }) {
   const [view, setView] = useState<ConversationView | null>(null);
@@ -92,6 +95,14 @@ export function ConversationFile({
     setView(null);
     conversationView(sessionId).then(setView).catch((e) => setError(String(e)));
   }, [sessionId]);
+
+  // Closing the file must not leave a node lit on the map behind it. Held in a
+  // ref because the caller passes an inline function: depending on it directly
+  // would re-run this cleanup on every render and clear the highlight the
+  // moment it was set.
+  const traceRef = useRef(onTrace);
+  traceRef.current = onTrace;
+  useEffect(() => () => traceRef.current?.(null), []);
 
   return (
     <div className="pane-inner">
@@ -156,14 +167,20 @@ export function ConversationFile({
           {taken.length === 0 ? (
             <p className="blurb">Nothing was recorded from this one.</p>
           ) : (
-            <ul className="list">
+            <ul className="list" onMouseLeave={() => onTrace?.(null)}>
               {taken.map((t) => (
                 <li key={t.ideaId}>
                   <button
                     className="row-btn"
                     onClick={() => onOpenIdea(t.ideaId)}
-                    onMouseEnter={() => setTrace(t.ideaId)}
-                    onMouseLeave={() => setTrace(null)}
+                    onMouseEnter={() => {
+                      setTrace(t.ideaId);
+                      onTrace?.(t.ideaId);
+                    }}
+                    onMouseLeave={() => {
+                      setTrace(null);
+                      onTrace?.(null);
+                    }}
                   >
                     <span className="dot" />
                     <span className="row-main">
