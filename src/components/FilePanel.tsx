@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef } from "react";
 
 /** How much of the split the panel takes when first opened. */
-const DEFAULT_SHARE = 0.3;
+const DEFAULT_SHARE = 0.4;
+/**
+ * Narrower than this and the transcript and the list of ideas cannot both fit
+ * beside each other at a readable width — 17rem for the words, 9rem for the
+ * titles, the gap between them, and the pane's own padding.
+ */
+const MIN_WIDTH = 490;
 
 /**
  * A node or row's file, opened beside whatever it was opened from — the map,
@@ -37,8 +43,10 @@ export default function FilePanel({
       const dx = side === "right" ? start.x - e.clientX : e.clientX - start.x;
       const parent = ref.current?.parentElement?.clientWidth ?? window.innerWidth;
       // Always leave the other half something to be. A panel dragged to fill
-      // the window would be the full-page view this exists to replace.
-      onWidthChange(Math.min(Math.max(start.width + dx, 260), parent - 260));
+      // the window would be the full-page view this exists to replace — and
+      // one dragged below MIN_WIDTH has a transcript too narrow to read, which
+      // is the same thing from the other end.
+      onWidthChange(Math.min(Math.max(start.width + dx, MIN_WIDTH), parent - 260));
     },
     [side, onWidthChange],
   );
@@ -70,7 +78,12 @@ export default function FilePanel({
     <div
       ref={ref}
       className={`file-panel ${side}`}
-      style={{ flexBasis: width === null ? `${DEFAULT_SHARE * 100}%` : `${width}px` }}
+      style={{
+        // A share of the split, but never below what the file needs — on a
+        // small screen a third of the window is not enough to read in.
+        flexBasis:
+          width === null ? `max(${DEFAULT_SHARE * 100}%, ${MIN_WIDTH}px)` : `${width}px`,
+      }}
     >
       <div className="file-panel-resize" onMouseDown={startDrag} />
       <button
