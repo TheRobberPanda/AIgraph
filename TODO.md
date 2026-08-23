@@ -61,7 +61,20 @@ The current behaviour is arguably better — nothing is rebuilt, and the map nev
 covers what you're typing. Worth looking at together before building the
 alternative.
 
-## 5. `keep_in_memory` does nothing yet
+## 5. Two loose ends from the folders work
+
+**Per-folder re-reading has no button.** `reextract_all` takes a folder and
+scopes correctly, but Settings still calls it unscoped, so the only way to
+re-read one folder is to re-read everything. The backend is done; this is a
+control and a folder argument.
+
+**Folder colours stop at the picker.** A folder takes a colour and a mark from
+its name, and both show in the folder dialog. Neither reaches the chip in the
+composer, the banner above the box, or the conversation rows — so the thing
+that identifies a folder at a glance is only visible in the one place you
+already know which folder you are looking at.
+
+## 6. `keep_in_memory` does nothing yet
 
 The setting exists, persists, and has a control. What it should do is decide
 whether `llama-server` stays up between sessions or is stopped when one ends —
@@ -70,7 +83,7 @@ a reload of 3.8 GB against holding the memory.
 Right now the server is started and stopped by hand from the Models tab and the
 setting is never consulted. Needs a hook where a session ends.
 
-## 6. Why two ideas relate
+## 7. Why two ideas relate
 
 The map draws correlations in green and contradictions in red, and hovering one
 names the two ideas and which it is. What it cannot say is **why** — the
