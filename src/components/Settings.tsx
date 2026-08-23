@@ -78,29 +78,6 @@ export default function Settings() {
       </section>
 
       <section>
-        <h2 className="section">How much is on screen</h2>
-        <div className="row">
-          <button
-            className={s.layout === "simple" ? "btn on" : "btn"}
-            onClick={() => void update({ layout: "simple" })}
-          >
-            One place at a time
-          </button>
-          <button
-            className={s.layout === "advanced" ? "btn on" : "btn"}
-            onClick={() => void update({ layout: "advanced" })}
-          >
-            All at once
-          </button>
-        </div>
-        <p className="blurb">
-          {s.layout === "simple"
-            ? "The map, the ideas and the conversations are each their own page, reached from the tabs."
-            : "The map and the conversations sit to the left of the talking, the ideas to the right. Any of them can be opened full width."}
-        </p>
-      </section>
-
-      <section>
         <h2 className="section">Interface size</h2>
         <div className="row scale-row">
           <input

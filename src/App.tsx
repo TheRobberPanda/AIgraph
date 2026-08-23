@@ -14,6 +14,8 @@ import {
   IconMaximize,
   IconClose,
   IconFolder,
+  IconOnePane,
+  IconPanes,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
@@ -23,7 +25,7 @@ import Graph from "./components/Graph";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
 import SettingsPanel from "./components/Settings";
-import { applyTheme, applyUiScale, getSettings } from "./lib/settings";
+import { applyTheme, applyUiScale, getSettings, saveSettings } from "./lib/settings";
 import Markdown from "./components/Markdown";
 import { thinkingMessage } from "./lib/waiting";
 import {
@@ -341,6 +343,31 @@ export default function App() {
     setExpanded((e) => (e === which ? null : which));
   }
 
+  /**
+   * Somewhere else to come back from.
+   *
+   * In the all-at-once layout the tabs are gone, so expanding a panel left no
+   * way back at all. The app's own name is the one thing always on screen.
+   */
+  const awayFromMain = !!deep || !!expanded || view === "models" || view === "settings";
+
+  function backToMain() {
+    if (deep) setDeep(null);
+    else if (expanded) setExpanded(null);
+    else setView("chat");
+  }
+
+  async function setLayoutMode(next: "simple" | "advanced") {
+    setLayout(next);
+    setExpanded(null);
+    try {
+      const current = await getSettings();
+      await saveSettings({ ...current, layout: next });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   /** Ask the backend to look for models again, so nothing needs restarting. */
   async function recheck() {
     setRechecking(true);
@@ -515,7 +542,15 @@ export default function App() {
   return (
     <main className="app">
       <nav className="topbar" data-tauri-drag-region>
-        <div className="brand" data-tauri-drag-region>Idea Graph</div>
+        {awayFromMain ? (
+          <button className="brand back" onClick={backToMain} data-tip="Back to the conversation">
+            Idea Graph
+          </button>
+        ) : (
+          <div className="brand" data-tauri-drag-region>
+            Idea Graph
+          </div>
+        )}
 
         {/* Tabs only in simple mode. In advanced there is nothing for them to
             switch between — it is all on screen at once. */}
@@ -555,6 +590,21 @@ export default function App() {
         )}
 
         <div className="topbar-tabs topbar-setup">
+          <button
+            className="nav"
+            onClick={() => void setLayoutMode(layout === "simple" ? "advanced" : "simple")}
+            data-tip={
+              layout === "simple"
+                ? "Showing one place at a time. Switch to all at once."
+                : "Showing everything at once. Switch to one place at a time."
+            }
+          >
+            {layout === "simple" ? (
+              <IconOnePane className="nav-icon" />
+            ) : (
+              <IconPanes className="nav-icon" />
+            )}
+          </button>
           {SETUP.map((t) => {
             const Icon = TAB_ICONS[t];
             return (
