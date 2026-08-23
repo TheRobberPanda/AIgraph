@@ -17,6 +17,21 @@ export interface Settings {
   transcripts_dir: string;
   chat: ModelChoice | null;
   extraction: ModelChoice | null;
+  /** Short answers, read aloud — for talking rather than reading. */
+  call_mode: boolean;
+  voice: Voice;
+  runtime: Runtime;
+}
+
+export type Voice = "off" | "system";
+
+/** How the model that runs inside the app is run. */
+export interface Runtime {
+  /** Layers handed to the GPU. 0 keeps everything on the CPU. */
+  gpu_layers: number;
+  context_length: number;
+  kv_cache_on_gpu: boolean;
+  keep_in_memory: boolean;
 }
 
 export interface ActiveModels {

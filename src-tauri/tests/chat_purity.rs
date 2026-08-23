@@ -35,10 +35,15 @@ fn outgoing_payload_carries_only_the_conversation_and_the_fixed_house_voice() {
     keys.sort_unstable();
     assert_eq!(keys, vec!["messages", "model", "system"]);
 
-    assert_eq!(
-        json["system"], SYSTEM_PROMPT,
-        "the system prompt must be the one fixed house voice, not anything built per-request"
+    let sys = json["system"].as_str().expect("system prompt is a string");
+    assert!(
+        sys.starts_with(SYSTEM_PROMPT),
+        "the system prompt must begin with the fixed house voice"
     );
+    // The point of the rule is that nothing in here comes from the person.
+    for said in ["Trump", "bad man", "circumstances"] {
+        assert!(!sys.contains(said), "the system prompt echoed the conversation: {said:?}");
+    }
 
     for key in obj.keys() {
         assert!(

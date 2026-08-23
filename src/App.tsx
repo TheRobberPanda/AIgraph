@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import Chats from "./components/Chats";
 import {
   IconThink,
@@ -33,6 +34,7 @@ import {
 } from "./lib/ideas";
 import Mic from "./components/Mic";
 import { currentFolder, listFolders, setCurrentFolder, ROOT_FOLDER } from "./lib/folders";
+import { parseReply, speak, stopSpeaking } from "./lib/voice";
 import {
   deleteTurn,
   endSession,
@@ -160,6 +162,8 @@ export default function App() {
   const [folderId, setFolderId] = useState<number>(ROOT_FOLDER);
   const [folderName, setFolderName] = useState("Root");
   const [pickingFolder, setPickingFolder] = useState(false);
+  /** Read replies out as they finish. Always on in call mode. */
+  const [voiceOn, setVoiceOn] = useState(false);
   // The no-model screen can drop into the Models tab rather than being a dead
   // end — someone with an API key or the claude CLI had no way through it.
   const [setupModels, setSetupModels] = useState(false);
@@ -173,7 +177,14 @@ export default function App() {
     void getSettings().then((s) => {
       applyTheme(s.theme);
       applyUiScale(s.ui_scale);
+      setVoiceOn(s.voice === "system" || s.call_mode);
     });
+    const un = listen<{ voice?: string; call_mode?: boolean }>("settings:changed", (e) => {
+      setVoiceOn(e.payload.voice === "system" || !!e.payload.call_mode);
+    });
+    return () => {
+      void un.then((f: () => void) => f());
+    };
   }, []);
 
   // No native context menu anywhere in the app by default — only the places
@@ -271,7 +282,7 @@ export default function App() {
     setTurns((t) => [...t, { role: "user", content: text }, { role: "assistant", content: "" }]);
 
     try {
-      await sendMessage(
+      const reply = await sendMessage(
         text,
         (chunk) => {
           setThinking(false);
@@ -290,6 +301,19 @@ export default function App() {
           setThoughtChars((n) => n + chunk.length);
         },
       );
+
+      // The marker is the app's own plumbing, not something that was said —
+      // strip it before it is shown or archived, then act on it.
+      const { open, text: clean } = parseReply(reply);
+      if (clean !== reply) {
+        setTurns((t) => {
+          const next = [...t];
+          next[next.length - 1] = { role: "assistant", content: clean };
+          return next;
+        });
+      }
+      if (open) setView(open === "conversations" ? "chats" : open);
+      if (voiceOn) speak(clean);
     } catch (e) {
       setError(String(e));
       setTurns((t) => t.slice(0, -1));
@@ -329,6 +353,7 @@ export default function App() {
   }
 
   async function done() {
+    stopSpeaking();
     if (streaming || ending) return;
     setError(null);
     // Visible before the await: archiving writes to disk and can stall briefly.

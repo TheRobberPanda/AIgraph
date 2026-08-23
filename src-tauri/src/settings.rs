@@ -49,6 +49,57 @@ pub struct Settings {
     /// larger one — and tying them together means paying for the large model
     /// twice.
     pub extraction: Option<ModelChoice>,
+    /// Short answers, read aloud as they arrive — for talking rather than
+    /// reading. Nothing is truncated; the model is asked to be brief.
+    pub call_mode: bool,
+    /// How a reply is spoken. `off`, or `system` for the machine's own voice.
+    pub voice: Voice,
+    /// How the model bundled with the app is run, when that is the one in use.
+    pub runtime: Runtime,
+}
+
+/// How a reply gets read out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Voice {
+    #[default]
+    Off,
+    /// The machine's own speech, through whatever it already has installed.
+    /// Nothing to download, and it respects the voice already configured.
+    System,
+}
+
+/// Knobs for the model that runs inside the app.
+///
+/// These are the ones that decide whether a 27B model is pleasant or painful
+/// on a given machine, so they are settings rather than constants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Runtime {
+    /// Layers handed to the GPU. 0 keeps everything on the CPU.
+    pub gpu_layers: u32,
+    /// Tokens of context to allocate. Bonsai carries 262K, but reserving all
+    /// of it costs memory that most conversations never use.
+    pub context_length: u32,
+    /// Keep the key/value cache in GPU memory. Faster, at the cost of VRAM
+    /// that the chat model may want for itself.
+    pub kv_cache_on_gpu: bool,
+    /// Hold the weights in memory between sessions instead of unloading.
+    /// Avoids a reload on every conversation, at the cost of holding the RAM.
+    pub keep_in_memory: bool,
+}
+
+impl Default for Runtime {
+    fn default() -> Self {
+        Self {
+            // Conservative on purpose: the extraction model and the chat model
+            // already contend for one card, and a bad default here shows up as
+            // a crash rather than as slowness.
+            gpu_layers: 0,
+            context_length: 8192,
+            kv_cache_on_gpu: false,
+            keep_in_memory: true,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -60,6 +111,9 @@ impl Default for Settings {
             transcripts_dir: String::new(),
             chat: None,
             extraction: None,
+            call_mode: false,
+            voice: Voice::Off,
+            runtime: Runtime::default(),
         }
     }
 }

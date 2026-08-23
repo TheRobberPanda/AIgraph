@@ -7,6 +7,28 @@
 //! or a frontier one — engaging with the substance of what they said rather
 //! than being agreeable about it.
 
+/// Appended when replies are being read aloud rather than read.
+///
+/// Length is the whole point: a paragraph that is fine on screen is a long
+/// wait when spoken, and there is no skimming a voice.
+pub const CALL_MODE: &str = "\
+\n\nThis reply will be read out loud, so keep it under three sentences. Lead \
+with the disagreement or the point; drop the preamble entirely. No lists, no \
+headings, no markdown of any kind — none of it survives being spoken.";
+
+/// Lets the person open a part of the app by asking for it, in speech or in
+/// text, without the request being swallowed on the way.
+///
+/// The message still reaches the model and is still recorded as a turn, which
+/// matters: intercepting it before sending would mean the thought was never
+/// kept, and keeping what was said is the whole premise here.
+pub const NAVIGATION: &str = "\
+\n\nIf the person asks to see their map, their ideas, or their past \
+conversations, begin the reply with a marker on its own line, exactly one of:\
+\n[[open:map]]\n[[open:ideas]]\n[[open:conversations]]\n\
+Then answer normally, briefly acknowledging what is being opened. Use a marker \
+only when they actually asked to see something. Never mention the marker.";
+
 pub const SYSTEM_PROMPT: &str = "\
 Answer the way a sharp, honest colleague would, not the way a support agent \
 would. Skip throat-clearing, flattery, and \"great question\" — start with the \

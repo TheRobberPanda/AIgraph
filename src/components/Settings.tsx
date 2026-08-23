@@ -107,6 +107,113 @@ export default function Settings() {
       </section>
 
       <section>
+        <h2 className="section">Talking rather than reading</h2>
+        <p className="blurb">
+          Call mode keeps answers to a few sentences and reads them out, so a
+          conversation can happen without looking at the screen. Asking to see
+          the map or the ideas opens them.
+        </p>
+        <div className="row">
+          <button
+            className={s.call_mode ? "btn on" : "btn"}
+            onClick={() => void update({ call_mode: !s.call_mode })}
+          >
+            {s.call_mode ? "Call mode on" : "Call mode off"}
+          </button>
+          <button
+            className={s.voice === "system" ? "btn on" : "btn"}
+            onClick={() =>
+              void update({ voice: s.voice === "system" ? "off" : "system" })
+            }
+          >
+            {s.voice === "system" ? "Reading replies aloud" : "Read replies aloud"}
+          </button>
+        </div>
+        <p className="blurb">
+          Uses the voice this machine is already set up with, so nothing is
+          downloaded and whatever rate and voice you have configured is what you
+          get.
+        </p>
+      </section>
+
+      <section>
+        <h2 className="section">The model that runs in the app</h2>
+        <p className="blurb">
+          Only applies to the bundled model. These are the settings that decide
+          whether it is pleasant or painful on a given machine.
+        </p>
+
+        <div className="row runtime-row">
+          <label htmlFor="ctx">Context length</label>
+          <select
+            id="ctx"
+            className="field"
+            value={s.runtime.context_length}
+            onChange={(e) =>
+              void update({
+                runtime: { ...s.runtime, context_length: Number(e.target.value) },
+              })
+            }
+          >
+            {[4096, 8192, 16384, 32768, 65536, 131072, 262144].map((n) => (
+              <option key={n} value={n}>
+                {n >= 1024 ? `${n / 1024}K tokens` : `${n} tokens`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="row runtime-row">
+          <label htmlFor="gpu">GPU offload</label>
+          <input
+            id="gpu"
+            type="range"
+            className="scale-slider"
+            min={0}
+            max={64}
+            step={1}
+            value={s.runtime.gpu_layers}
+            onChange={(e) =>
+              setS({ ...s, runtime: { ...s.runtime, gpu_layers: Number(e.target.value) } })
+            }
+            onMouseUp={() => void update({ runtime: s.runtime })}
+            onKeyUp={() => void update({ runtime: s.runtime })}
+          />
+          <span className="scale-value">
+            {s.runtime.gpu_layers === 0 ? "CPU only" : `${s.runtime.gpu_layers} layers`}
+          </span>
+        </div>
+
+        <div className="row">
+          <button
+            className={s.runtime.kv_cache_on_gpu ? "btn on" : "btn"}
+            onClick={() =>
+              void update({
+                runtime: { ...s.runtime, kv_cache_on_gpu: !s.runtime.kv_cache_on_gpu },
+              })
+            }
+          >
+            KV cache in GPU memory
+          </button>
+          <button
+            className={s.runtime.keep_in_memory ? "btn on" : "btn"}
+            onClick={() =>
+              void update({
+                runtime: { ...s.runtime, keep_in_memory: !s.runtime.keep_in_memory },
+              })
+            }
+          >
+            Keep model loaded
+          </button>
+        </div>
+        <p className="blurb">
+          The KV cache is faster on the GPU but takes memory the chat model may
+          want. Keeping the model loaded avoids a reload each session and holds
+          the memory meanwhile.
+        </p>
+      </section>
+
+      <section>
         <h2 className="section">Ending a session</h2>
         <p className="blurb">Idle timeout before a session is filed.</p>
         <div className="row">

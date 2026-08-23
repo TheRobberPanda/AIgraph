@@ -24,11 +24,13 @@ use crate::llm::types::{ChatRequest, Message, Role};
 pub struct Conversation {
     model: String,
     messages: Vec<Message>,
+    /// Short answers, because they are being spoken rather than read.
+    call_mode: bool,
 }
 
 impl Conversation {
     pub fn new(model: impl Into<String>) -> Self {
-        Self { model: model.into(), messages: Vec::new() }
+        Self { model: model.into(), messages: Vec::new(), call_mode: false }
     }
 
     pub fn push_user(&mut self, content: impl Into<String>) {
@@ -37,6 +39,10 @@ impl Conversation {
 
     pub fn push_assistant(&mut self, content: impl Into<String>) {
         self.messages.push(Message { role: Role::Assistant, content: content.into() });
+    }
+
+    pub fn set_call_mode(&mut self, on: bool) {
+        self.call_mode = on;
     }
 
     pub fn messages(&self) -> &[Message] {
@@ -76,7 +82,14 @@ impl Conversation {
         ChatRequest {
             model: self.model.clone(),
             messages: self.messages.clone(),
-            system: Some(style::SYSTEM_PROMPT.to_string()),
+            system: Some({
+                let mut sys = String::from(style::SYSTEM_PROMPT);
+                sys.push_str(style::NAVIGATION);
+                if self.call_mode {
+                    sys.push_str(style::CALL_MODE);
+                }
+                sys
+            }),
         }
     }
 
@@ -117,7 +130,27 @@ mod tests {
              the purity promise is broken"
         );
         assert_eq!(req.messages.len(), 2);
-        assert_eq!(req.system.as_deref(), Some(style::SYSTEM_PROMPT));
+        // Composed from compile-time constants only — never from anything the
+        // person said. That is the part worth guarding.
+        let sys = req.system.as_deref().unwrap();
+        assert!(sys.starts_with(style::SYSTEM_PROMPT));
+        assert!(sys.contains(style::NAVIGATION));
+        assert!(!sys.contains("latency"), "the system prompt drew on the conversation");
+    }
+
+    #[test]
+    fn call_mode_only_adds_the_brevity_rule() {
+        let mut plain = Conversation::new("m");
+        plain.push_user("x");
+        let mut brief = Conversation::new("m");
+        brief.push_user("x");
+        brief.set_call_mode(true);
+
+        let a = plain.to_request().system.unwrap();
+        let b = brief.to_request().system.unwrap();
+        assert!(!a.contains(style::CALL_MODE));
+        assert!(b.contains(style::CALL_MODE));
+        assert!(b.starts_with(&a), "call mode should append, not rewrite the voice");
     }
 
     #[test]

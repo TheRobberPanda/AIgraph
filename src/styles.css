@@ -288,6 +288,11 @@ input, textarea {
 .filed-head { margin: 0; font-size: 1rem; font-weight: 600; }
 .filed-status { margin: 0; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: var(--muted); }
 
+/* A labelled control in Settings — label, control, then its value. */
+.runtime-row { align-items: center; gap: 0.75rem; margin-bottom: 0.6rem; }
+.runtime-row label { min-width: 8rem; font-size: 0.86rem; color: var(--muted); }
+.runtime-row select.field { width: auto; }
+
 /* ---- Folders ---- */
 
 .folder-btn { display: inline-flex; align-items: center; gap: 0.4rem; max-width: 12rem; }

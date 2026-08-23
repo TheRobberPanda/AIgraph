@@ -274,9 +274,11 @@ pub async fn send_message(
         }
     }
 
+    let call_mode = state.settings.lock().await.call_mode;
     let request = {
         let mut guard = state.conversation.lock().await;
         let convo = guard.as_mut().ok_or("no conversation")?;
+        convo.set_call_mode(call_mode);
         convo.push_user(&text);
         convo.to_request()
     };
