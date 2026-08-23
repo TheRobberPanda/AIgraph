@@ -22,14 +22,21 @@ const THEMES: { value: Theme; label: string }[] = [
   { value: "light", label: "Light" },
 ];
 
-export default function Settings() {
+export default function Settings({
+  folder,
+  folderName,
+}: {
+  folder: number | null;
+  folderName: string;
+}) {
   const [s, setS] = useState<S | null>(null);
   const [dir, setDir] = useState("");
   const [speech, setSpeech] = useState<{ installed: boolean; mb: number } | null>(null);
   const [downloading, setDownloading] = useState<DownloadProgress | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  /** Null while nothing is pending, otherwise the scope being confirmed. */
+  const [confirming, setConfirming] = useState<"folder" | "all" | null>(null);
 
   useEffect(() => {
     void getSettings().then(setS);
@@ -176,9 +183,10 @@ export default function Settings() {
       </section>
 
       <section>
-        <h2 className="section">Re-read every conversation</h2>
+        <h2 className="section">Re-read conversations</h2>
         <p className="blurb">
-          Re-extracts ideas from every conversation. The conversations
+          Discards the ideas and reads the conversations again — worth doing
+          after the app has learned to read better. The conversations
           themselves are untouched.
         </p>
         {confirming ? (
@@ -186,22 +194,30 @@ export default function Settings() {
             <button
               className="btn danger"
               onClick={() => {
-                setConfirming(false);
-                reextractAll()
+                const scope = confirming === "folder" ? folder : null;
+                setConfirming(null);
+                reextractAll(scope)
                   .then((n) => setNote(`Re-reading ${n} conversation${n === 1 ? "" : "s"}.`))
                   .catch((e) => setError(String(e)));
               }}
             >
-              Yes, re-read them
+              {confirming === "folder" ? `Yes, re-read ${folderName}` : "Yes, re-read everything"}
             </button>
-            <button className="btn" onClick={() => setConfirming(false)}>
+            <button className="btn" onClick={() => setConfirming(null)}>
               Cancel
             </button>
           </div>
         ) : (
-          <button className="btn" onClick={() => setConfirming(true)}>
-            Re-read everything
-          </button>
+          <div className="row">
+            {/* Scoped first: fixing one line of thinking should not mean
+                paying to re-read every other one. */}
+            <button className="btn" onClick={() => setConfirming("folder")}>
+              Re-read {folderName}
+            </button>
+            <button className="btn" onClick={() => setConfirming("all")}>
+              Re-read every folder
+            </button>
+          </div>
         )}
         {note && <p className="blurb">{note}</p>}
       </section>

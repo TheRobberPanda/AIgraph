@@ -333,7 +333,10 @@ export default function Graph({ folder }: { folder: number | null }) {
       ctx.fill();
     }
 
-    // Labels last so nothing is drawn over them.
+    // Labels last so nothing is drawn over them. Every node gets one — the
+    // force simulation's collision radius accounts for label size precisely
+    // so that spacing, not skipping, is what keeps them apart.
+    ctx.textAlign = "center";
     ctx.textBaseline = "top";
 
     // In a side panel there is no room to name every idea — the labels stack
@@ -341,19 +344,12 @@ export default function Graph({ folder }: { folder: number | null }) {
     // named, plus whatever is being pointed at.
     const compact = ruleset(w).tight;
 
-    type Box = { x0: number; y0: number; x1: number; y1: number };
-    const placed: Box[] = [];
-    const collides = (b: Box) =>
+    // Boxes already drawn this frame. Spacing gets it most of the way, but a
+    // drag or a fresh layout can still overlap two labels, and text on text is
+    // unreadable in a way that a hidden label is not.
+    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    const collides = (b: { x0: number; y0: number; x1: number; y1: number }) =>
       placed.some((p) => b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
-
-    // The nodes themselves are obstacles too. Without this a label happily
-    // lands on someone else's dot, which is no more readable than landing on
-    // their text.
-    for (const n of nodesRef.current) {
-      const p = toScreen(n, w, h);
-      const rr = drawnRadius(n.r, viewRef.current.scale, w) + 2;
-      placed.push({ x0: p.x - rr, y0: p.y - rr, x1: p.x + rr, y1: p.y + rr });
-    }
 
     const candidates = [...nodesRef.current].sort((a, b) => {
       const rank = (n: Node) => (hover === n ? 0 : n.data.kind === "conversation" ? 1 : n.data.shared ? 2 : 3);
@@ -382,48 +378,25 @@ export default function Graph({ folder }: { folder: number | null }) {
       const maxLabelWidth = isConversation ? baseLabelWidth * 1.4 : baseLabelWidth;
       const lineHeight = labelPx * 1.3;
       const lines = wrapLines(ctx, n.data.label, maxLabelWidth, isConversation ? 5 : 4);
+
       const widest = Math.max(...lines.map((l) => ctx.measureText(l).width));
-      const height = lines.length * lineHeight;
-      const gap = 6;
-
-      // Four places a label can sit, tried in order of how naturally it reads
-      // against a node. Trying only the first — directly below — is what left
-      // so many nodes unnamed: one collision and the label was dropped, when
-      // there was usually room a few pixels away.
-      const diag = r * 0.72 + gap;
-      const spots: { x: number; top: number; align: CanvasTextAlign }[] = [
-        { x: s.x, top: s.y + r + gap, align: "center" },
-        { x: s.x, top: s.y - r - gap - height, align: "center" },
-        { x: s.x + r + gap, top: s.y - height / 2, align: "left" },
-        { x: s.x - r - gap, top: s.y - height / 2, align: "right" },
-        // Then the corners, which read less naturally but beat no label.
-        { x: s.x + diag, top: s.y + diag, align: "left" },
-        { x: s.x - diag, top: s.y + diag, align: "right" },
-        { x: s.x + diag, top: s.y - diag - height, align: "left" },
-        { x: s.x - diag, top: s.y - diag - height, align: "right" },
-      ];
-
-      const boxFor = (spot: { x: number; top: number; align: CanvasTextAlign }): Box => {
-        const left =
-          spot.align === "center" ? spot.x - widest / 2 : spot.align === "left" ? spot.x : spot.x - widest;
-        return { x0: left - 3, y0: spot.top - 2, x1: left + widest + 3, y1: spot.top + height + 2 };
+      const box = {
+        x0: s.x - widest / 2 - 3,
+        x1: s.x + widest / 2 + 3,
+        y0: s.y + r + 5,
+        y1: s.y + r + 9 + lines.length * lineHeight,
       };
-
+      // Conversations and whatever is hovered always draw — losing those hides
+      // the map's landmarks. An ordinary idea steps aside instead.
       const mustDraw = isConversation || hover === n;
-      const chosen = spots.find((spot) => !collides(boxFor(spot)));
-      // A conversation or the hovered node is named wherever it lands: losing
-      // those hides the map's landmarks.
-      const spot = chosen ?? (mustDraw ? spots[0] : null);
-      if (!spot) continue;
-      placed.push(boxFor(spot));
+      if (!mustDraw && collides(box)) continue;
+      placed.push(box);
 
-      ctx.textAlign = spot.align;
       ctx.globalAlpha = inFocus(n) ? 1 : 0.2;
       ctx.fillStyle =
         hover === n ? C.labelHover : isConversation ? C.labelConversation : C.labelIdea;
-      lines.forEach((l, i) => ctx.fillText(l, spot.x, spot.top + i * lineHeight));
+      lines.forEach((l, i) => ctx.fillText(l, s.x, s.y + r + 7 + i * lineHeight));
     }
-    ctx.textAlign = "center";
     ctx.globalAlpha = 1;
   }, [toScreen]);
 

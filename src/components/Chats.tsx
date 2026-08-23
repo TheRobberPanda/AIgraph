@@ -14,6 +14,7 @@ import { IconArchive, IconPlus, IconTrash, IconRewind } from "./Icons";
 import Select from "./Select";
 import { categoryColor } from "../lib/categories";
 import { reextractSession } from "../lib/ideas";
+import { folderColor, folderMark, listFolders, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 
 /**
@@ -38,10 +39,12 @@ export default function Chats({
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [moving, setMoving] = useState<number | null>(null);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
 
   const refresh = useCallback(() => {
     listSessions(folder).then(setSessions).catch((e) => setError(String(e)));
+    listFolders().then(setFolders).catch(() => {});
   }, [folder]);
 
   useEffect(refresh, [refresh]);
@@ -177,7 +180,38 @@ export default function Chats({
                   >
                     <span className="row-main">
                       <span className="chat-open">
+                        {/* Only worth showing when looking across folders —
+                            inside one, every row would carry the same mark. */}
+                        {folder === null &&
+                          (() => {
+                            const f = folders.find((x) => x.id === s.folder_id);
+                            return f ? (
+                              <span
+                                className="folder-mark row-mark"
+                                style={{ "--folder-color": folderColor(f.name) } as React.CSSProperties}
+                                data-tip={f.name}
+                                aria-hidden="true"
+                              >
+                                {folderMark(f.name)}
+                              </span>
+                            ) : null;
+                          })()}
                         {s.title || s.opening || "(nothing was said)"}
+                        {/* Subjects sit where the title ends, as part of it —
+                            against the right edge they read as a separate
+                            column belonging to nothing in particular. */}
+                        {s.tags.length > 0 && (
+                          <span className="chat-tags">
+                            {s.tags.map((t) => (
+                              <i
+                                key={t}
+                                className="tag-swatch"
+                                style={{ "--tag-color": categoryColor(t) } as React.CSSProperties}
+                                data-tip={t}
+                              />
+                            ))}
+                          </span>
+                        )}
                       </span>
                       <span className="chat-sub">
                         {longDate(s.started_at)} · {s.turn_count} turns ·{" "}
@@ -188,21 +222,6 @@ export default function Chats({
                             : s.extract_state}
                       </span>
                     </span>
-
-                    {/* Subjects as their own colours rather than a comma list —
-                        the same colours they have on the map. */}
-                    {s.tags.length > 0 && (
-                      <span className="chat-tags">
-                        {s.tags.map((t) => (
-                          <i
-                            key={t}
-                            className="tag-swatch"
-                            style={{ "--tag-color": categoryColor(t) } as React.CSSProperties}
-                            data-tip={t}
-                          />
-                        ))}
-                      </span>
-                    )}
                   </button>
 
                   {/* On the row rather than behind a right-click, which is not

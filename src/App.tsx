@@ -13,7 +13,6 @@ import {
   IconMinimize,
   IconMaximize,
   IconClose,
-  IconFolder,
   IconCall,
   IconSpeaker,
   IconClock,
@@ -37,7 +36,14 @@ import {
   type ExtractionProgress,
 } from "./lib/ideas";
 import Mic from "./components/Mic";
-import { currentFolder, listFolders, setCurrentFolder, ROOT_FOLDER } from "./lib/folders";
+import {
+  currentFolder,
+  folderColor,
+  folderMark,
+  listFolders,
+  setCurrentFolder,
+  ROOT_FOLDER,
+} from "./lib/folders";
 import { parseReply, speak, stopSpeaking } from "./lib/voice";
 import {
   deleteTurn,
@@ -632,7 +638,7 @@ export default function App() {
       {view === "models" ? (
         <Models />
       ) : view === "settings" ? (
-        <SettingsPanel />
+        <SettingsPanel folder={folderId} folderName={folderName} />
       ) : (
       // Everything at once rather than one tab at a time: the map and the
       // conversations to the left, the ideas they produced to the right, and
@@ -811,8 +817,14 @@ export default function App() {
           // Before anything is said, the folder is the decision — shown large,
           // above the box. Once the conversation is under way it steps aside
           // to the bar below, next to Speak.
-          <button className="folder-banner" onClick={() => setPickingFolder(true)}>
-            <IconFolder />
+          <button
+            className="folder-banner"
+            style={{ "--folder-color": folderColor(folderName) } as React.CSSProperties}
+            onClick={() => setPickingFolder(true)}
+          >
+            <span className="folder-mark big" aria-hidden="true">
+              {folderMark(folderName)}
+            </span>
             <span className="folder-banner-text">
               <span className="folder-banner-label">This conversation goes in</span>
               <span className="folder-banner-name">{folderName}</span>
@@ -874,10 +886,13 @@ export default function App() {
           {turns.length > 0 && (
             <button
               className="btn folder-btn"
+              style={{ "--folder-color": folderColor(folderName) } as React.CSSProperties}
               onClick={() => setPickingFolder(true)}
               data-tip="Where this conversation is filed"
             >
-              <IconFolder />
+              <span className="folder-mark" aria-hidden="true">
+                {folderMark(folderName)}
+              </span>
               {folderName}
             </button>
           )}

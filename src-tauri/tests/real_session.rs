@@ -40,7 +40,7 @@ async fn extracts_ideas_from_a_real_archived_session() {
     }
 
     let mut store = Store::open(&tmp).expect("open copy");
-    let sessions = store.list_sessions(10).expect("list");
+    let sessions = store.list_sessions(10, None).expect("list");
     assert!(!sessions.is_empty(), "no archived sessions to extract from");
 
     let session = &sessions[0];
