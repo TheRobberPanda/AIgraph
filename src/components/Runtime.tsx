@@ -113,6 +113,7 @@ export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) 
 
   function install(flavour: string) {
     setBusy(flavour);
+    setFetching(null);
     setError(null);
     installLlamaServer(flavour)
       .then(() => embeddedStatus().then(setStatus))
@@ -142,6 +143,11 @@ export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) 
     });
   }
 
+  const pct =
+    fetching && fetching.total > 0
+      ? Math.min(100, Math.round((fetching.received / fetching.total) * 100))
+      : null;
+
   if (!s) return null;
   const r = s.runtime;
   const tuned =
@@ -156,16 +162,34 @@ export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) 
       <h3 className="section">The engine</h3>
       {error && <p className="error">{error}</p>}
 
-      {status?.server_ready ? (
+      {/* Shown whether or not one is installed already. It used to be an
+          alternative to the "ready" line, so pressing Reinstall — which is only
+          ever pressed when one *is* installed — showed nothing at all, and a
+          twenty-second download looked like a dead button. */}
+      {busy ? (
+        <div className="installing">
+          <div className="row">
+            <span className="spinner" aria-hidden="true" />
+            <span>
+              Fetching the {busy === "vulkan" ? "GPU" : "CPU"} build
+              {pct !== null ? ` — ${pct}%` : "…"}
+            </span>
+            <span className="row-meta">
+              {fetching ? `${(fetching.received / 1e6).toFixed(0)} MB` : "starting"}
+            </span>
+          </div>
+          <div className="bar-track">
+            <div
+              className={pct === null ? "bar-fill idle" : "bar-fill"}
+              style={pct === null ? undefined : { width: `${pct}%` }}
+            />
+          </div>
+        </div>
+      ) : status?.server_ready ? (
         <div className="row">
           <span className="tag ready">{status.server_build ?? "found on PATH"}</span>
           <span className="row-meta">{status.server_path}</span>
         </div>
-      ) : busy ? (
-        <p className="blurb">
-          <span className="spinner" aria-hidden="true" /> Installing…
-          {fetching && ` ${Math.round((fetching.received / (fetching.total || 1)) * 100)}%`}
-        </p>
       ) : (
         <p className="blurb">
           Nothing to run a model with yet. The CPU build works everywhere; the

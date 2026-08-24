@@ -1373,11 +1373,46 @@ blockquote {
 
 /* The live readout, beside the model that is producing it. */
 .vitals { font-variant-numeric: tabular-nums; }
+
+/* A download in progress. The bar answers "how far", which a spinner cannot. */
+.installing { display: flex; flex-direction: column; gap: 0.4rem; margin: 0.4rem 0 0.8rem; max-width: 34rem; }
+.installing .row-meta { margin-left: auto; }
+.bar-track { height: 4px; border-radius: 999px; background: var(--surface-lift); overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 200ms ease; }
+/* Before the first byte arrives there is nothing to measure, so it paces
+   rather than pretending to a number. */
+.bar-fill.idle { width: 30%; animation: bar-pace 1.1s ease-in-out infinite alternate; }
+@keyframes bar-pace { from { margin-left: 0; } to { margin-left: 70%; } }
+@media (prefers-reduced-motion: reduce) { .bar-fill.idle { animation: none; } }
 .blurb.warn {
   border-left: 2px solid var(--gold);
   padding-left: 0.6rem;
   color: var(--fg);
 }
+
+/* The model, at the left edge of the conversation it is answering in. */
+.model-chip {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 14rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.model-chip:hover { color: var(--fg); border-color: var(--faint); }
+.model-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-chip .nav-icon { flex: none; width: 13px; height: 13px; }
+.think { position: relative; }
 
 .digest-group { gap: 0.25rem; align-items: center; }
 .queue-btn { padding: 0.2rem 0.5rem; font-size: 0.9rem; line-height: 1; }
@@ -1410,6 +1445,30 @@ blockquote {
   margin-top: 28vh;
 }
 .call-status { margin: 0; font-size: 0.95rem; color: var(--muted); }
+/* What was heard, before it is sent. Wide but capped, so a long ramble does
+   not push the controls off the screen. */
+.call-heard {
+  margin: 0;
+  max-width: min(48rem, 80vw);
+  max-height: 22vh;
+  overflow-y: auto;
+  text-align: center;
+  font-size: 1.05rem;
+  line-height: 1.5;
+  color: var(--fg);
+}
+.call-countdown { display: flex; flex-direction: column; align-items: center; gap: 0.9rem; }
+.ring { position: relative; display: grid; place-items: center; }
+.ring svg { display: block; }
+.ring circle:last-child { transition: stroke-dashoffset 120ms linear; }
+.ring-count {
+  position: absolute;
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.call-progress { display: flex; flex-direction: column; gap: 0.35rem; width: min(28rem, 70vw); }
 .call-end { padding: 0.55rem 1.6rem; border-radius: 999px; }
 @media (prefers-reduced-motion: reduce) {
   .call { animation: none; }

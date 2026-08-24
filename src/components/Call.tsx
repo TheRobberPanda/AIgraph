@@ -18,6 +18,12 @@ export default function Call({
   speaking,
   thinking,
   status,
+  heard,
+  sendingIn,
+  silence,
+  progress,
+  onHold,
+  onSendNow,
   onHangUp,
 }: {
   /** The voice detector hears something right now. */
@@ -25,6 +31,17 @@ export default function Call({
   /** A reply is being generated or read out. */
   thinking: boolean;
   status: string;
+  /** What has been transcribed and is waiting to go. */
+  heard: string;
+  /** Seconds left before it sends, or null when nothing is pending. */
+  sendingIn: number | null;
+  /** The full wait, so the ring knows what a full circle means. */
+  silence: number;
+  /** How far the model has got, 0–1, or null when it cannot say. */
+  progress: number | null;
+  /** Stop the countdown and keep listening. */
+  onHold: () => void;
+  onSendNow: () => void;
   onHangUp: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -108,11 +125,82 @@ export default function Call({
     <div className="call">
       <canvas ref={canvasRef} className="call-wave" />
       <div className="call-body">
-        <p className="call-status">{status}</p>
+        {/* What was heard, so a misheard sentence is visible before it is sent
+            rather than after it is answered. */}
+        {heard && <p className="call-heard">{heard}</p>}
+
+        {sendingIn !== null ? (
+          // The wait is the one thing here with an end you can see coming, so
+          // it gets a shape rather than a number counting down alone.
+          <div className="call-countdown">
+            <Ring seconds={sendingIn} total={silence} />
+            <div className="row">
+              <button className="btn" onClick={onHold}>
+                Wait — still thinking
+              </button>
+              <button className="btn on" onClick={onSendNow}>
+                Send now
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p className="call-status">{status}</p>
+        )}
+
+        {thinking && progress !== null && (
+          <div className="call-progress">
+            <div className="bar-track">
+              <div className="bar-fill" style={{ width: `${Math.round(progress * 100)}%` }} />
+            </div>
+            <span className="row-meta">reading what you said · {Math.round(progress * 100)}%</span>
+          </div>
+        )}
+
         <button className="btn call-end" onClick={onHangUp}>
           End
         </button>
       </div>
+    </div>
+  );
+}
+
+
+/**
+ * The seconds left before what you said is sent, drawn as a closing ring.
+ *
+ * A number counting down reads as a deadline; a ring closing reads as a pause
+ * running out, which is what it is. The number is there too, because "how long
+ * exactly" is a fair question when the answer decides whether you get cut off.
+ */
+function Ring({ seconds, total }: { seconds: number; total: number }) {
+  const size = 62;
+  const r = (size - 6) / 2;
+  const circumference = 2 * Math.PI * r;
+  return (
+    <div className="ring" role="timer" aria-label={`Sending in ${Math.ceil(seconds)} seconds`}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="var(--line)"
+          strokeWidth="3"
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - Math.max(0, seconds) / Math.max(1, total))}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </svg>
+      <span className="ring-count">{Math.ceil(seconds)}</span>
     </div>
   );
 }

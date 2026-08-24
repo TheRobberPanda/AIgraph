@@ -49,6 +49,7 @@ import {
 } from "./lib/folders";
 import { parseReply, speak, stopSpeaking } from "./lib/voice";
 import { modelName } from "./lib/format";
+import { runtimeStatus } from "./lib/settings";
 import { sessionTurns } from "./lib/sessions";
 import { startDictation, stopDictation } from "./lib/dictation";
 import {
@@ -175,6 +176,7 @@ export default function App() {
   const [digesting, setDigesting] = useState<ExtractionProgress | null>(null);
   const [digestBusy, setDigestBusy] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  const [showModels, setShowModels] = useState(false);
   // A pending delete or rewind, waiting on confirmation — losing a message is
   // not something a stray click should be able to do.
   const [turnAction, setTurnAction] = useState<{ index: number; kind: "delete" | "rewind" } | null>(
@@ -201,6 +203,14 @@ export default function App() {
   /** Words dictated since the last silence, waiting to be sent. */
   const heardRef = useRef("");
   const quietRef = useRef<number | undefined>(undefined);
+  /** What has been transcribed and not yet sent, on screen. */
+  const [heardText, setHeardText] = useState("");
+  /** Seconds left before it sends, or null when nothing is pending. */
+  const [sendingIn, setSendingIn] = useState<number | null>(null);
+  /** Held open because the pause was a thinking pause, not a finished one. */
+  const [held, setHeld] = useState(false);
+  /** How far the model has got reading the prompt, when it can say. */
+  const [readProgress, setReadProgress] = useState<number | null>(null);
   const [callMode, setCallMode] = useState(false);
   const [idleMinutes, setIdleMinutes] = useState(30);
   const [idleOpen, setIdleOpen] = useState(false);
@@ -324,6 +334,41 @@ export default function App() {
     return () => clearInterval(id);
   }, [streaming]);
 
+  // The countdown on screen. Its own timer rather than a value derived from
+  // the send timeout, because the send has to stay exact whatever the display
+  // is doing.
+  useEffect(() => {
+    if (sendingIn === null) return;
+    const id = setInterval(() => {
+      setSendingIn((s) => (s === null ? null : Math.max(0, s - 0.1)));
+    }, 100);
+    return () => clearInterval(id);
+  }, [sendingIn === null]);
+
+  // How far the model has got reading, while a call waits on it. Polled only
+  // during a call, and only while it is working.
+  useEffect(() => {
+    if (!callMode || !streaming) {
+      setReadProgress(null);
+      return;
+    }
+    const tick = () =>
+      runtimeStatus()
+        .then((r) =>
+          setReadProgress(
+            r.phase === "reading" && r.prompt_total > 0
+              ? r.prompt_done / r.prompt_total
+              : r.phase === "writing"
+                ? 1
+                : null,
+          ),
+        )
+        .catch(() => {});
+    void tick();
+    const id = setInterval(tick, 600);
+    return () => clearInterval(id);
+  }, [callMode, streaming]);
+
   // Extraction runs in the background after Done, so the notice has to live
   // outside the Ideas tab — otherwise the work is invisible from where you are.
   useEffect(() => {
@@ -395,6 +440,9 @@ export default function App() {
     if (!on) {
       window.clearTimeout(quietRef.current);
       heardRef.current = "";
+      setHeardText("");
+      setSendingIn(null);
+      setHeld(false);
       setHearing(false);
       stopSpeaking();
     }
@@ -415,12 +463,26 @@ export default function App() {
       return;
     }
     heardRef.current = heardRef.current ? `${heardRef.current} ${text}` : text;
+    setHeardText(heardRef.current);
+    setHeld(false);
+    armSend();
+  }
+
+  /** Start (or restart) the countdown to sending what has been heard. */
+  function armSend() {
     window.clearTimeout(quietRef.current);
-    quietRef.current = window.setTimeout(() => {
-      const said = heardRef.current.trim();
-      heardRef.current = "";
-      if (said) void sendText(said);
-    }, Math.max(1, callSilence) * 1000);
+    const total = Math.max(1, callSilence);
+    setSendingIn(total);
+    quietRef.current = window.setTimeout(() => flushCall(), total * 1000);
+  }
+
+  function flushCall() {
+    window.clearTimeout(quietRef.current);
+    setSendingIn(null);
+    const said = heardRef.current.trim();
+    heardRef.current = "";
+    setHeardText("");
+    if (said) void sendText(said);
   }
 
   async function send() {
@@ -872,6 +934,18 @@ export default function App() {
 
         <div className="ws-center">
       <div className={turns.length === 0 && !justArchived ? "think opening" : "think"}>
+      {/* Which model is answering, at the edge of the conversation it is
+          answering in. Changing it is a thing you do *while* thinking — after
+          a bad answer, usually — and sending someone to a settings tab for it
+          means leaving the thing that prompted the question. */}
+      <button
+        className="model-chip"
+        data-tip="Which model is answering"
+        onClick={() => setShowModels(true)}
+      >
+        <IconModels className="nav-icon" />
+        <span>{provider ? modelName(provider.model) : "no model"}</span>
+      </button>
       <div className="stream">
         {turns.length === 0 && !justArchived && (
           <p className="empty">
@@ -1165,6 +1239,18 @@ export default function App() {
         />
       )}
 
+      {showModels && (
+        <Sheet
+          onClose={() => {
+            setShowModels(false);
+            // Whatever was chosen in there is the answer now.
+            void recheck();
+          }}
+        >
+          <Models />
+        </Sheet>
+      )}
+
       {showQueue && (
         <Queue
           onClose={() => setShowQueue(false)}
@@ -1176,13 +1262,27 @@ export default function App() {
         <Call
           speaking={hearing}
           thinking={streaming}
+          heard={heardText}
+          sendingIn={streaming || held ? null : sendingIn}
+          silence={Math.max(1, callSilence)}
+          progress={readProgress}
           status={
             streaming
               ? "Thinking…"
-              : hearing
-                ? "Listening"
-                : "Say something — it sends when you stop"
+              : held
+                ? "Waiting for you — say more, or send"
+                : hearing
+                  ? "Listening"
+                  : "Say something — it sends when you stop"
           }
+          onHold={() => {
+            // Cancels the send without dropping what was heard: the pause was
+            // a thinking pause, and the words are still wanted.
+            window.clearTimeout(quietRef.current);
+            setSendingIn(null);
+            setHeld(true);
+          }}
+          onSendNow={flushCall}
           onHangUp={() => void toggleCall(false)}
         />
       )}

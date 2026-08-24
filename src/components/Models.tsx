@@ -26,50 +26,39 @@ import {
 type Role = "chat" | "extraction";
 
 /** Where a model comes from. One tab each, because the setup is different. */
-/** Where the model runs. Two answers, not three: "on this machine" is the
- *  question, and whether the app or LM Studio holds it is the follow-up. */
-type Source = "local" | "cloud";
-/** Within local: the app's own model, or one you are already running. */
-type LocalKindChoice = "inapp" | "own";
+/**
+ * Where the model comes from.
+ *
+ * Flat, and named after the thing rather than the category. It was two levels
+ * — Local, then "in the app" or "my own server" — which meant two clicks and a
+ * taxonomy lesson to reach the four answers that actually exist.
+ */
+type Source = "local" | "lmstudio" | "ollama" | "cloud";
 
 const SOURCES: { id: Source; label: string; blurb: string }[] = [
   {
     id: "local",
     label: "Local",
-    blurb: "The model runs on this machine and nothing said to it leaves.",
+    blurb:
+      "The app downloads a model and an engine and runs them itself. Nothing else to install, and nothing said to it leaves this machine.",
+  },
+  {
+    id: "lmstudio",
+    label: "LM Studio",
+    blurb: "Running alongside the app. Whatever it has loaded is used automatically.",
+  },
+  {
+    id: "ollama",
+    label: "Ollama",
+    blurb: "Running alongside the app. Whatever it has pulled is offered here.",
   },
   {
     id: "cloud",
-    label: "Cloud",
+    label: "Claude",
     blurb:
-      "Anthropic's API, or a Claude subscription through the claude command. Transcripts leave this machine.",
+      "Anthropic's API, or a subscription through the claude command. Transcripts leave this machine.",
   },
 ];
-
-const LOCAL_KINDS: { id: LocalKindChoice; label: string; blurb: string }[] = [
-  {
-    id: "inapp",
-    label: "Run it in the app",
-    blurb: "The app downloads a model and an engine, and runs them itself. Nothing else to install.",
-  },
-  {
-    id: "own",
-    label: "Use my own server",
-    blurb:
-      "LM Studio or Ollama, running alongside the app. Whatever they have loaded is used automatically.",
-  },
-];
-
-/** The model the app will run itself. Apache 2.0, so it can be built on. */
-const BUNDLED = {
-  name: "Bonsai 27B",
-  repo: "prism-ml/Bonsai-27B-gguf",
-  file: "Bonsai-27B-Q1_0.gguf",
-  size: "3.8 GB",
-  licence: "Apache 2.0",
-  context: "262K tokens",
-  note: "A 1-bit build of Qwen3.6-27B. Reasoning and coding at 27B class, in under four gigabytes.",
-};
 
 const ROLES: { role: Role; title: string; blurb: string }[] = [
   {
@@ -95,9 +84,7 @@ export default function Models() {
   const [keyInput, setKeyInput] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [source, setSource] = useState<Source>("local");
-  // The app's own model is the default: it is the only answer that works with
-  // nothing else installed, which is the state everyone starts in.
-  const [localKind, setLocalKind] = useState<LocalKindChoice>("inapp");
+
   const [showAll, setShowAll] = useState(false);
   const [embedded, setEmbedded] = useState<EmbeddedStatus | null>(null);
   const [pulling, setPulling] = useState<{ received: number; total: number } | null>(null);
@@ -268,22 +255,7 @@ export default function Models() {
       </div>
       <p className="blurb">{SOURCES.find((t) => t.id === source)!.blurb}</p>
 
-      {source === "local" && (
-        <>
-          <div className="row source-tabs sub">
-            {LOCAL_KINDS.map((k) => (
-              <button
-                key={k.id}
-                className={localKind === k.id ? "btn on" : "btn"}
-                onClick={() => setLocalKind(k.id)}
-              >
-                {k.label}
-              </button>
-            ))}
-          </div>
-          <p className="blurb">{LOCAL_KINDS.find((k) => k.id === localKind)!.blurb}</p>
-        </>
-      )}
+
 
       {source === "cloud" && (
       <section className="model-role">
@@ -336,7 +308,7 @@ export default function Models() {
       </section>
       )}
 
-      {source === "local" && localKind === "own" && loadedCount > 0 && (
+      {(source === "lmstudio" || source === "ollama") && loadedCount > 0 && (
         <div className="row">
           <button className={showAll ? "btn on" : "btn"} onClick={() => setShowAll((v) => !v)}>
             {showAll ? "Showing every model" : "Show models that aren't loaded"}
@@ -347,7 +319,7 @@ export default function Models() {
         </div>
       )}
 
-      {source === "local" && localKind === "own" && (usable.length === 0 ? (
+      {(source === "lmstudio" || source === "ollama") && (usable.length === 0 ? (
         <p className="empty">
           <strong>No model server found.</strong>
           Start <b>LM Studio</b> and load a model, or run <code>ollama serve</code>{" "}
@@ -419,27 +391,10 @@ export default function Models() {
         })
       ))}
 
-      {source === "local" && localKind === "inapp" && (
+      {source === "local" && (
         <>
           <section className="model-role">
-            <h2 className="section">{BUNDLED.name}</h2>
-            <p className="blurb">{BUNDLED.note}</p>
-            <ul className="plain-list bundled-facts">
-              <li>
-                <b>{BUNDLED.size}</b> — downloaded once, on first use
-              </li>
-              <li>
-                <b>{BUNDLED.licence}</b> — open weights, free to build on
-              </li>
-              <li>
-                <b>{BUNDLED.context}</b> of context
-              </li>
-              <li>
-                <code>
-                  {BUNDLED.repo}/{BUNDLED.file}
-                </code>
-              </li>
-            </ul>
+            <h2 className="section">The model</h2>
             {pulling ? (
               <div className="pulling">
                 <div className="pulling-head">
