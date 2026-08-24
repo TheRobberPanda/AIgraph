@@ -18,7 +18,6 @@ import {
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
 import Sheet from "./components/Sheet";
-import Select from "./components/Select";
 import Call from "./components/Call";
 import Queue from "./components/Queue";
 import Drawer from "./components/Drawer";
@@ -59,12 +58,9 @@ import {
   endSession,
   onArchived,
   rewindConversation,
-  selectProvider,
   sendMessage,
   startup,
   type Archived,
-  type Detected,
-  type ModelInfo,
   type Selected,
   type Turn,
 } from "./lib/chat";
@@ -164,7 +160,6 @@ export default function App() {
   // slow model reads as working rather than frozen.
   const [thoughtChars, setThoughtChars] = useState(0);
   const [provider, setProvider] = useState<Selected | null>(null);
-  const [servers, setServers] = useState<Detected[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [justArchived, setJustArchived] = useState<Archived | null>(null);
   const [view, setView] = useState<Tab>(tabFromHash());
@@ -214,6 +209,17 @@ export default function App() {
   const [readProgress, setReadProgress] = useState<number | null>(null);
   /** Reply text that has arrived but has not yet completed a sentence. */
   const pendingSpeech = useRef("");
+  /**
+   * Whether a reply is being generated, readable from a timer.
+   *
+   * The countdown fires from a `setTimeout` closed over an old render, where
+   * `streaming` is whatever it was when the timer was set — so a phrase spoken
+   * while the model was still answering saw `streaming: false`, sent anyway,
+   * and produced a second answer on top of the first.
+   */
+  const streamingRef = useRef(false);
+  /** Something was said while the model was answering, and is still waiting. */
+  const queuedRef = useRef(false);
   const [callMode, setCallMode] = useState(false);
   const [idleMinutes, setIdleMinutes] = useState(30);
   const [idleOpen, setIdleOpen] = useState(false);
@@ -223,20 +229,9 @@ export default function App() {
   const [layout, setLayout] = useState<"simple" | "advanced">("simple");
   // The no-model screen can drop into the Models tab rather than being a dead
   // end — someone with an API key or the claude CLI had no way through it.
-  const [setupModels, setSetupModels] = useState(false);
-  /**
-   * Whether the picker is standing in the way, and whether it should be next
-   * time.
-   *
-   * `null` until settings load, so the app does not flash the picker on its
-   * way to skipping it.
-   */
-  const [asking, setAsking] = useState<boolean | null>(null);
-  const [remember, setRemember] = useState(false);
   /** Seconds of quiet before a call sends. Mirrored from settings so the
    *  timer does not have to read them on every phrase. */
   const [callSilence, setCallSilence] = useState(5);
-  const [rechecking, setRechecking] = useState(false);
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -286,29 +281,14 @@ export default function App() {
   useEffect(() => {
     startup()
       .then((s) => {
-        setServers(s.servers);
         setProvider(s.selected);
       })
       .catch((e) => setError(String(e)));
     void getSettings()
-      .then((s) => {
-        setAsking(s.ask_provider);
-        setCallSilence(s.call_silence_seconds);
-      })
-      .catch(() => setAsking(false));
+      .then((s) => setCallSilence(s.call_silence_seconds))
+      .catch(() => {});
   }, []);
 
-  /**
-   * Get past the picker, remembering the answer if asked to.
-   *
-   * The tick is what turns the question off, not the choosing — someone can
-   * pick a model today and still want to be asked tomorrow, and the two are
-   * different decisions.
-   */
-  function settle() {
-    setAsking(false);
-    if (remember) void patchSetting({ ask_provider: false });
-  }
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -446,6 +426,7 @@ export default function App() {
       setHeardText("");
       setSendingIn(null);
       setHeld(false);
+      queuedRef.current = false;
       setHearing(false);
       stopSpeaking();
     }
@@ -482,6 +463,13 @@ export default function App() {
   function flushCall() {
     window.clearTimeout(quietRef.current);
     setSendingIn(null);
+    // Interrupting the model with a second question is not the same as asking
+    // two — the first answer is still coming. Held until it lands, then sent,
+    // so nothing said is lost and nothing is answered twice.
+    if (streamingRef.current) {
+      queuedRef.current = true;
+      return;
+    }
     const said = heardRef.current.trim();
     heardRef.current = "";
     setHeardText("");
@@ -493,11 +481,19 @@ export default function App() {
   }
 
   async function sendText(text: string) {
-    if (!text || streaming || !provider) return;
+    if (!text || streaming) return;
+    // Said rather than swallowed. Without this, pressing Send with no model
+    // did nothing at all — the same thing a broken button does.
+    if (!provider) {
+      setError("No model is loaded. Pick one and the message will send.");
+      setShowModels(true);
+      return;
+    }
 
     setDraft("");
     setError(null);
     pendingSpeech.current = "";
+    streamingRef.current = true;
     setStreaming(true);
     setThinking(false);
     setThoughtChars(0);
@@ -562,7 +558,13 @@ export default function App() {
       setError(String(e));
       setTurns((t) => t.slice(0, -1));
     } finally {
+      streamingRef.current = false;
       setStreaming(false);
+      // Whatever was said while it was answering goes now.
+      if (queuedRef.current) {
+        queuedRef.current = false;
+        if (heardRef.current.trim()) flushCall();
+      }
       setThinking(false);
       inputRef.current?.focus();
     }
@@ -613,18 +615,14 @@ export default function App() {
 
   /** Ask the backend to look for models again, so nothing needs restarting. */
   async function recheck(): Promise<Selected | null> {
-    setRechecking(true);
     setError(null);
     try {
       const s = await startup();
-      setServers(s.servers);
       setProvider(s.selected);
       return s.selected;
     } catch (e) {
       setError(String(e));
       return null;
-    } finally {
-      setRechecking(false);
     }
   }
 
@@ -673,165 +671,10 @@ export default function App() {
     }
   }
 
-  // Embedding models can't chat, so they're never offered. Models that aren't
-  // loaded are offered but marked — LM Studio will load one on demand, which
-  // can take a while or fail outright on a large model.
-  const chatModels = (s: Detected): ModelInfo[] =>
-    s.models.filter((m) => m.kind === "chat");
-  const usable = (servers ?? []).filter((s) => chatModels(s).length > 0);
-
-  // Shown when there is nothing to talk to, and — unless told not to — on
-  // every launch even when there is. Which model answers shapes what ends up
-  // in the map; reusing last week's choice without saying so is the app
-  // deciding that.
-  if (servers && (!provider || asking === true)) {
-    const idle = servers.some((s) => s.models.length === 0);
-    return (
-      <main className="app">
-        <nav className="topbar" data-tauri-drag-region>
-          <div className="brand" data-tauri-drag-region>Idea Graph</div>
-          <div className="topbar-spacer" data-tauri-drag-region />
-          <WindowControls />
-        </nav>
-
-        <div className="pane">
-          {setupModels ? (
-            <>
-              {/* Outside the pane-inner on purpose: Models brings its own, and
-                  nesting them would double the padding and stack two scroll
-                  containers. */}
-              <div className="row setup-bar bordered">
-                <button className="btn" onClick={() => setSetupModels(false)}>
-                  ← Back
-                </button>
-                <button
-                  className="btn on"
-                  disabled={rechecking}
-                  // Only gets out of the way if something was actually found;
-                  // otherwise it would dismiss the picker onto a chat with
-                  // nothing to talk to.
-                  onClick={() => void recheck().then((p) => p && settle())}
-                >
-                  {rechecking ? "Checking…" : "Done — start thinking"}
-                </button>
-              </div>
-              {/* The Models tab already knows how to find local servers, hold an
-                  API key, and detect the claude CLI. No reason to build a
-                  second, worse version of it here. */}
-              <Models />
-            </>
-          ) : (
-            <div className="pane-inner">
-              <div className="setup">
-                <h1>Pick a model</h1>
-
-                {/* One question with one recommended answer, rather than a
-                    list of things to go and install. Running it here is the
-                    only option that works with nothing else on the machine, so
-                    it is the button; everything else is the dropdown beside
-                    it. */}
-                <p className="blurb">
-                  Idea Graph needs a model to talk to. It can run one itself —
-                  nothing else to install, and nothing said to it leaves this
-                  machine.
-                </p>
-
-                <div className="row setup-choice">
-                  <button className="btn on big" onClick={() => setSetupModels(true)}>
-                    Run a model in the app
-                  </button>
-                  <Select
-                    value=""
-                    placeholder="I have my own"
-                    options={[
-                      { value: "lmstudio", label: "LM Studio" },
-                      { value: "ollama", label: "Ollama" },
-                      { value: "cloud", label: "An API key or Claude" },
-                    ]}
-                    onChange={() => setSetupModels(true)}
-                  />
-                </div>
-
-                {usable.length > 0 && (
-                  <>
-                    <h2 className="section">Already running</h2>
-                    {usable.map((srv) => (
-                      <section key={srv.kind}>
-                        <ul className="list">
-                          {chatModels(srv)
-                            // Ready models first — those start answering immediately.
-                            .sort((a, b) => Number(b.loaded ?? true) - Number(a.loaded ?? true))
-                            .map((m) => (
-                              <li key={m.id}>
-                                <button
-                                  className="row-btn"
-                                  onClick={() =>
-                                    selectProvider(srv.kind, srv.host, m.id)
-                                      .then((p) => {
-                                        setProvider(p);
-                                        settle();
-                                      })
-                                      .catch((e) => setError(String(e)))
-                                  }
-                                >
-                                  <span className="row-main">{modelName(m.id)}</span>
-                                  <span className="row-meta">
-                                    {srv.kind === "lmstudio"
-                                      ? "LM Studio"
-                                      : srv.kind === "embedded"
-                                        ? "In the app"
-                                        : "Ollama"}
-                                  </span>
-                                  {m.loaded === false && <span className="tag">needs loading</span>}
-                                  {m.loaded === true && <span className="tag ready">ready</span>}
-                                </button>
-                              </li>
-                            ))}
-                        </ul>
-                      </section>
-                    ))}
-                  </>
-                )}
-
-                {usable.length === 0 && idle && (
-                  <p className="blurb">
-                    A model server is running, but nothing is loaded in it.
-                  </p>
-                )}
-
-                <div className="row setup-bar">
-                  {provider && (
-                    <button className="btn on" onClick={settle}>
-                      Continue with {modelName(provider.model)}
-                    </button>
-                  )}
-                  <button className="btn" disabled={rechecking} onClick={() => void recheck()}>
-                    {rechecking ? "Looking…" : "Look again"}
-                  </button>
-                  <button className="btn" onClick={() => setSetupModels(true)}>
-                    Models and API keys
-                  </button>
-                </div>
-
-                {/* Ticking this is the decision, not choosing a model — someone
-                    can pick one today and still want to be asked tomorrow. */}
-                <label className="remember">
-                  <input
-                    type="checkbox"
-                    checked={remember}
-                    onChange={(e) => setRemember(e.target.checked)}
-                  />
-                  Don&apos;t ask again — use whatever was chosen last
-                </label>
-
-                {error && <p className="error">{error}</p>}
-              </div>
-            </div>
-          )}
-        </div>
-      </main>
-    );
-  }
+  // No gate. The app opens on the conversation and the model chip asks for
+  // attention if there is nothing to talk to — a setup screen in front of
+  // someone who came to think is the app's problem being made theirs, and the
+  // answer is one click away from where they already are.
 
   const pending = digesting?.pending ?? 0;
 
@@ -960,12 +803,12 @@ export default function App() {
           a bad answer, usually — and sending someone to a settings tab for it
           means leaving the thing that prompted the question. */}
       <button
-        className="model-chip"
-        data-tip="Which model is answering"
-        onClick={() => setShowModels(true)}
+        className={`model-chip${showModels ? " on" : provider ? "" : " missing"}`}
+        data-tip={provider ? "Which model is answering" : "Nothing to talk to yet — pick a model"}
+        onClick={() => setShowModels((v) => !v)}
       >
         <IconModels className="nav-icon" />
-        <span>{provider ? modelName(provider.model) : "no model"}</span>
+        <span>{provider ? modelName(provider.model) : "No model — pick one"}</span>
       </button>
 
       {showModels && (

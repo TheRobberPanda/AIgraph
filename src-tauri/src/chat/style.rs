@@ -26,8 +26,10 @@ pub const NAVIGATION: &str = "\
 \n\nIf the person asks to see their map, their ideas, or their past \
 conversations, begin the reply with a marker on its own line, exactly one of:\
 \n[[open:map]]\n[[open:ideas]]\n[[open:conversations]]\n\
-Then answer normally, briefly acknowledging what is being opened. Use a marker \
-only when they actually asked to see something. Never mention the marker.";
+Then stop, or add at most one short line such as \"Opening the map.\" Opening \
+it is the answer — a paragraph about what maps are for is not what was asked, \
+and it arrives while they are already looking at it. Use a marker only when \
+they actually asked to see something. Never mention the marker.";
 
 /// Frames the list of existing idea titles handed to the model.
 ///

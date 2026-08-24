@@ -1398,16 +1398,23 @@ blockquote {
   inset: 0;
   z-index: 40;
   display: flex;
+  align-items: stretch;
+  /* Room at the bottom for the chip that opened it, which stays above this
+     and so stays clickable — pressing it again is the obvious way to put the
+     panel away, and it only works if the panel does not cover it. */
+  padding: 0.9rem 0.9rem 3.4rem;
   background: color-mix(in srgb, var(--bg) 55%, transparent);
 }
 .drawer {
   display: flex;
   flex-direction: column;
-  width: min(34rem, 82%);
+  width: min(34rem, 78%);
   min-width: 0;
   background: var(--surface);
-  border-right: 1px solid var(--line);
-  box-shadow: 8px 0 32px rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
   animation: drawer-in 160ms ease forwards;
 }
 @keyframes drawer-in { from { transform: translateX(-16px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -1426,6 +1433,8 @@ blockquote {
 /* The model, at the left edge of the conversation it is answering in. */
 .model-chip {
   position: absolute;
+  /* Above the drawer it opens, so it can close it again. */
+  z-index: 45;
   /* Bottom rather than top: it sits with the other things you reach for while
      talking, not over the first thing you read. */
   bottom: 0.6rem;
@@ -1445,6 +1454,19 @@ blockquote {
   cursor: pointer;
 }
 .model-chip:hover { color: var(--fg); border-color: var(--faint); }
+.model-chip.on { color: var(--fg); border-color: var(--accent); }
+/* Nothing to talk to. Asked for rather than announced: the app opens on the
+   conversation, and this is the one thing in it that needs attention. */
+.model-chip.missing {
+  color: var(--accent);
+  border-color: var(--accent);
+  animation: chip-ask 2.4s ease-in-out infinite;
+}
+@keyframes chip-ask {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .model-chip.missing { animation: none; } }
 .model-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-chip .nav-icon { flex: none; width: 13px; height: 13px; }
 .think { position: relative; }

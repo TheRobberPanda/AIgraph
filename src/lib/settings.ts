@@ -22,8 +22,6 @@ export interface Settings {
   voice: Voice;
   /** Hand the chat the titles of ideas already recorded. */
   recall: boolean;
-  /** Offer the choice of where the model runs on every launch. */
-  ask_provider: boolean;
   /** Let the model think out loud before answering. */
   reasoning: boolean;
   /** Seconds of quiet in a call before what you said is sent. */
