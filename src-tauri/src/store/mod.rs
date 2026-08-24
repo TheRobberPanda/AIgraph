@@ -219,6 +219,10 @@ pub struct GraphEdge {
     /// `from` (conversation → idea), `related`, or `contradicts`.
     pub kind: String,
     pub weight: f32,
+    /// Why these two relate, where reconciliation said so. Absent on the
+    /// structural edges, and on links drawn from similarity alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -356,6 +360,76 @@ impl Store {
 
         tx.commit()?;
         Ok(session_id)
+    }
+
+    /// Replace an archived conversation with a longer version of itself.
+    ///
+    /// Used when a conversation is picked back up: the transcript grows at the
+    /// end and nothing before the join moves, so every byte offset already
+    /// recorded in `evidence` still points at the same words. That is the whole
+    /// reason continuing is safe and editing a past turn would not be.
+    ///
+    /// The turns are rewritten and the session goes back in the queue. Existing
+    /// ideas are left alone — reconciliation will meet them again on the way
+    /// through and attach, rewrite, or leave them as it sees fit.
+    pub fn extend_session(
+        &mut self,
+        session_id: i64,
+        rendered: &Rendered,
+        model: &str,
+        md_dir: Option<&Path>,
+    ) -> Result<()> {
+        let started_at: String = self.conn.query_row(
+            "SELECT started_at FROM sessions WHERE id = ?1",
+            [session_id],
+            |r| r.get(0),
+        )?;
+        let started = DateTime::parse_from_rfc3339(&started_at)
+            .map(|d| d.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+        let ended_at = Utc::now();
+
+        let md_path = match md_dir {
+            Some(dir) => Some(write_markdown(dir, rendered, model, started, ended_at)?),
+            None => None,
+        };
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE sessions
+                SET ended_at = ?2, transcript = ?3, extract_state = 'pending',
+                    md_path = COALESCE(?4, md_path)
+              WHERE id = ?1",
+            params![
+                session_id,
+                ended_at.to_rfc3339(),
+                rendered.text,
+                md_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+            ],
+        )?;
+        tx.execute("DELETE FROM turns WHERE session_id = ?1", [session_id])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO turns (session_id, ord, role, text, start_byte, end_byte)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for span in &rendered.spans {
+                let role = match span.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                };
+                stmt.execute(params![
+                    session_id,
+                    span.ord as i64,
+                    role,
+                    &rendered.text[span.start..span.end],
+                    span.start as i64,
+                    span.end as i64,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Conversations, optionally only those in one folder.
@@ -542,6 +616,31 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(ids)
+    }
+
+    /// Titles of what has already been thought, newest first.
+    ///
+    /// Scoped to a folder, because a folder is a separate line of thinking and
+    /// crossing them is exactly what folders exist to prevent. Titled ideas
+    /// only — an untitled one would be handed over as an empty bullet.
+    pub fn idea_titles(&self, folder: Option<i64>, limit: usize) -> Result<Vec<String>> {
+        let sql = match folder {
+            Some(_) => {
+                "SELECT DISTINCT i.title FROM ideas i
+                   JOIN evidence e ON e.idea_id = i.id
+                   JOIN sessions s ON s.id = e.session_id
+                  WHERE i.title <> '' AND COALESCE(s.folder_id, 1) = ?1
+                  ORDER BY i.updated_at DESC LIMIT ?2"
+            }
+            None => {
+                "SELECT title FROM ideas
+                  WHERE title <> '' AND ?1 IS NULL
+                  ORDER BY updated_at DESC LIMIT ?2"
+            }
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![folder, limit as i64], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn ideas(&self, folder: Option<i64>) -> Result<Vec<StoredIdea>> {
@@ -970,6 +1069,7 @@ impl Store {
                 target: format!("i{i}"),
                 kind: "from".into(),
                 weight: 1.0,
+                reasoning: None,
             })
         })? {
             g.edges.push(row?);
@@ -980,7 +1080,7 @@ impl Store {
         // at all; with them it has structure without claiming false identity.
         let mut rel = self
             .conn
-            .prepare("SELECT idea_a, idea_b, kind, confidence FROM relations")?;
+            .prepare("SELECT idea_a, idea_b, kind, confidence, reasoning FROM relations")?;
         for row in rel.query_map([], |r| {
             let (a, b): (i64, i64) = (r.get(0)?, r.get(1)?);
             Ok(GraphEdge {
@@ -988,6 +1088,7 @@ impl Store {
                 target: format!("i{b}"),
                 kind: r.get(2)?,
                 weight: r.get(3)?,
+                reasoning: r.get(4)?,
             })
         })? {
             g.edges.push(row?);
@@ -1016,6 +1117,7 @@ impl Store {
                         target: format!("i{id}"),
                         kind: "category".into(),
                         weight: 0.3,
+                        reasoning: None,
                     });
                 }
             }
@@ -1264,12 +1366,12 @@ impl Store {
 
         match decision {
             Decision::New { related } => {
-                for (other, sim) in related {
-                    relate(&tx, idea_id, *other, "related", *sim, &now)?;
+                for (other, sim, why) in related {
+                    relate(&tx, idea_id, *other, "related", *sim, why.as_deref(), &now)?;
                 }
             }
-            Decision::Conflict { idea_id: other, confidence } => {
-                relate(&tx, idea_id, *other, "contradicts", *confidence, &now)?;
+            Decision::Conflict { idea_id: other, confidence, reason } => {
+                relate(&tx, idea_id, *other, "contradicts", *confidence, reason.as_deref(), &now)?;
             }
             _ => {}
         }
@@ -1450,6 +1552,15 @@ impl Store {
         Ok(())
     }
 
+    /// Which folder a conversation is filed in.
+    pub fn session_folder(&self, session_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(folder_id, 1) FROM sessions WHERE id = ?1",
+            [session_id],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn set_session_folder(&mut self, session_id: i64, folder_id: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE sessions SET folder_id = ?2 WHERE id = ?1",
@@ -1530,6 +1641,7 @@ fn relate(
     b: i64,
     kind: &str,
     confidence: f32,
+    reasoning: Option<&str>,
     now: &str,
 ) -> Result<()> {
     if a == b {
@@ -1538,10 +1650,20 @@ fn relate(
     // Stored with the lower id first so the pair is recorded once, not twice.
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
     tx.execute(
-        "INSERT OR IGNORE INTO relations (idea_a, idea_b, kind, confidence, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![lo, hi, kind, confidence, now],
+        "INSERT OR IGNORE INTO relations (idea_a, idea_b, kind, confidence, reasoning, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![lo, hi, kind, confidence, reasoning, now],
     )?;
+    // A pair seen again with a reason this time keeps the reason. The insert
+    // above is IGNORE, so without this the first sighting wins forever — and
+    // the first sighting is usually the one from a bare similarity score.
+    if reasoning.is_some() {
+        tx.execute(
+            "UPDATE relations SET reasoning = ?4
+             WHERE idea_a = ?1 AND idea_b = ?2 AND kind = ?3 AND reasoning IS NULL",
+            params![lo, hi, kind, reasoning],
+        )?;
+    }
     Ok(())
 }
 
@@ -1947,7 +2069,7 @@ mod tests {
         let (s2, t2) = session_with(&mut store, "speed matters most of all");
         let second = verified("Speed matters most", "speed matters most of all", &t2);
         let b = store
-            .apply_decision(s2, &second, &Decision::New { related: vec![(a, 0.7)] }, "t", "m")
+            .apply_decision(s2, &second, &Decision::New { related: vec![(a, 0.7, Some("both treat latency as the binding constraint".into()))] }, "t", "m")
             .unwrap();
 
         assert_ne!(a, b, "related is not the same as merged");

@@ -205,16 +205,60 @@ impl Embedded {
         format!("http://{HOST}:{PORT}")
     }
 
+    /// Fetch a `llama-server` build and unpack it beside the weights.
+    ///
+    /// The CPU build only. The GPU ones are per-vendor — CUDA, ROCm, Vulkan —
+    /// and choosing between them from inside the app means owning the whole
+    /// matrix, which is the largest cost of embedding a model at all. Anyone
+    /// who wants the GPU build can put their own `llama-server` on PATH and it
+    /// is preferred over this one.
+    pub fn install_server(
+        &self,
+        on_progress: &(dyn Fn(DownloadProgress) + Send + Sync),
+    ) -> Result<(), String> {
+        if self.root.join(server_name()).is_file() {
+            return Ok(());
+        }
+        let asset = server_asset()
+            .ok_or("no prebuilt llama-server for this platform — build llama.cpp and put llama-server on PATH")?;
+        std::fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
+        let zip = self.root.join("llama-server.zip");
+        crate::stt::model::download_to(
+            &format!("https://github.com/ggml-org/llama.cpp/releases/download/{SERVER_RELEASE}/{asset}"),
+            &zip,
+            "llama-server",
+            SERVER_APPROX_BYTES,
+            on_progress,
+        )
+        .map_err(|e| e.to_string())?;
+        let out = unzip(&zip, &self.root);
+        let _ = std::fs::remove_file(&zip);
+        out?;
+        // The archive nests everything under build/bin; flatten what we need up
+        // to the root so `server_binary` finds it without knowing the layout.
+        flatten(&self.root)?;
+        let bin = self.root.join(server_name());
+        if !bin.is_file() {
+            return Err("the archive did not contain a llama-server".into());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755));
+        }
+        Ok(())
+    }
+
     /// A `llama-server` to drive, if there is one.
     ///
-    /// Ours first, then whatever is on PATH — someone who already has llama.cpp
-    /// built should not be made to download a second copy.
+    /// Whatever is on PATH first, then ours — someone who has built llama.cpp
+    /// themselves has a GPU build, and ours is deliberately CPU-only.
     pub fn server_binary(&self) -> Option<PathBuf> {
-        let own = self.root.join(if cfg!(windows) { "llama-server.exe" } else { "llama-server" });
-        if own.is_file() {
-            return Some(own);
+        if let Some(found) = which_on_path("llama-server") {
+            return Some(found);
         }
-        which_on_path("llama-server")
+        let own = self.root.join(server_name());
+        own.is_file().then_some(own)
     }
 
     pub fn status(&mut self) -> EmbeddedStatus {
@@ -285,11 +329,34 @@ impl Embedded {
             .arg(rt.context_length.to_string())
             .arg("-ngl")
             .arg(rt.gpu_layers.to_string())
+            .arg("-np")
+            .arg(rt.parallel.max(1).to_string())
+            .arg("-b")
+            .arg(rt.batch_size.max(32).to_string())
+            .arg("--temp")
+            .arg(rt.temperature.to_string())
+            .arg("--top-p")
+            .arg(rt.top_p.to_string())
+            .arg("--top-k")
+            .arg(rt.top_k.to_string())
+            .arg("--repeat-penalty")
+            .arg(rt.repeat_penalty.to_string())
             // Quiet: its logs are not this app's logs, and a chatty child
             // filling a pipe nobody reads will eventually block it.
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
+        // Zero means "decide from the machine", which is llama.cpp's own
+        // behaviour when the flag is absent — so absence is how we say it.
+        if rt.threads > 0 {
+            cmd.arg("-t").arg(rt.threads.to_string());
+        }
+        if rt.flash_attention {
+            cmd.arg("-fa").arg("on");
+        }
+        if rt.mlock {
+            cmd.arg("--mlock");
+        }
         // llama.cpp's flag is the negative one. Off by default there, so it is
         // only passed when the setting says to keep the cache on the CPU.
         if !rt.kv_cache_on_gpu {
@@ -305,6 +372,92 @@ impl Embedded {
         if let Some(mut c) = self.child.take() {
             let _ = c.kill();
             let _ = c.wait();
+        }
+    }
+}
+
+/// The llama.cpp release the CPU build is taken from. Pinned rather than
+/// "latest": a release that changes under the app is a bug report nobody can
+/// reproduce.
+const SERVER_RELEASE: &str = "b6193";
+/// Roughly 3 MB compressed, for the bar before Content-Length arrives.
+const SERVER_APPROX_BYTES: u64 = 3_000_000;
+
+fn server_name() -> &'static str {
+    if cfg!(windows) { "llama-server.exe" } else { "llama-server" }
+}
+
+/// The prebuilt asset for this machine, if upstream publishes one.
+fn server_asset() -> Option<String> {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    Some(match (os, arch) {
+        ("linux", "x86_64") => format!("llama-{SERVER_RELEASE}-bin-ubuntu-x64.zip"),
+        ("macos", "aarch64") => format!("llama-{SERVER_RELEASE}-bin-macos-arm64.zip"),
+        ("macos", "x86_64") => format!("llama-{SERVER_RELEASE}-bin-macos-x64.zip"),
+        ("windows", "x86_64") => format!("llama-{SERVER_RELEASE}-bin-win-cpu-x64.zip"),
+        _ => return None,
+    })
+}
+
+/// Unpack an archive with the zip crate, refusing any entry whose path climbs
+/// out of the destination — an archive is untrusted input even from a release
+/// page we chose.
+fn unzip(archive: &Path, into: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        let Some(rel) = entry.enclosed_name() else { continue };
+        let dest = into.join(rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut out = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Move the server and its shared libraries up out of whatever directory the
+/// archive nested them in. They have to sit together: the binary loads the
+/// ggml libraries from beside itself.
+fn flatten(root: &Path) -> Result<(), String> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    collect(root, &mut found, 0);
+    for path in found {
+        let Some(name) = path.file_name() else { continue };
+        let dest = root.join(name);
+        if dest == path {
+            continue;
+        }
+        let _ = std::fs::rename(&path, &dest);
+    }
+    Ok(())
+}
+
+fn collect(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect(&path, out, depth + 1);
+            continue;
+        }
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let wanted = name == server_name()
+            || name.ends_with(".so")
+            || name.ends_with(".dylib")
+            || name.ends_with(".dll");
+        if wanted {
+            out.push(path);
         }
     }
 }

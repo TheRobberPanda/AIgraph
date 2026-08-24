@@ -510,8 +510,7 @@ input, textarea {
 
 /* A conversation row: the row itself, its subjects, and its actions. */
 .chat-line { display: flex; align-items: center; gap: 0.3rem; }
-.chat-line .row-btn { flex: 1; min-width: 0; cursor: grab; }
-.chat-line .row-btn:active { cursor: grabbing; }
+.chat-line .row-btn { flex: 1; min-width: 0; }
 /* Inline with the title, a beat after it ends. */
 .chat-tags { display: inline-flex; gap: 0.25rem; align-items: center; margin-left: 0.5rem; vertical-align: middle; }
 .chat-actions { display: flex; gap: 0.2rem; flex: none; opacity: 0; transition: opacity 100ms ease; }
@@ -1276,6 +1275,14 @@ blockquote {
 .relation-kind.related { color: var(--verdant); }
 .relation-kind.contradicts { color: var(--danger); }
 .relation-side { font-size: 0.8rem; color: var(--fg); }
+.relation-why {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
 .relation-side + .relation-side { padding-top: 0.15rem; border-top: 1px solid var(--line); }
 
 .graph-key {
@@ -1307,6 +1314,21 @@ blockquote {
 /* Picking a subject out of the idea list, the same toggle the map's legend
    uses. Several can be on at once: two subjects that keep coming up together
    are worth seeing side by side. */
+/* Every knob the embedded model takes, laid out as a grid so the names line
+   up and the numbers can be scanned down a column. */
+.params {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.7rem 1.2rem;
+  margin: 0 0 0.9rem;
+}
+.param { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.2rem 0.6rem; }
+.param-name { font-size: 0.85rem; color: var(--fg); }
+.param-input { width: 7rem; text-align: right; font-variant-numeric: tabular-nums; }
+.param-hint { grid-column: 1 / -1; font-size: 0.72rem; color: var(--faint); line-height: 1.35; }
+.section.sub { font-size: 0.68rem; margin-top: 1rem; }
+.row.wrap { flex-wrap: wrap; }
+
 .tag-filter {
   display: flex;
   flex-wrap: wrap;

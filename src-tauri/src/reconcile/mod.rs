@@ -59,7 +59,12 @@ pub struct Candidate {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decision {
     /// Insert as a new idea. `related` get faint links, not merges.
-    New { related: Vec<(i64, f32)> },
+    ///
+    /// The third element is why the two relate, where the adjudicator said so.
+    /// A shortlist entry that was never judged has none — it is a similarity
+    /// score and nothing more, and inventing a sentence for it would be worse
+    /// than saying nothing.
+    New { related: Vec<(i64, f32, Option<String>)> },
     /// Attach evidence to an existing idea; claim unchanged.
     Attach { idea_id: i64, confidence: f32 },
     /// Rewrite an existing idea's claim and attach the evidence.
@@ -69,7 +74,7 @@ pub enum Decision {
         confidence: f32,
     },
     /// Separate idea, but recorded as contradicting an existing one.
-    Conflict { idea_id: i64, confidence: f32 },
+    Conflict { idea_id: i64, confidence: f32, reason: Option<String> },
 }
 
 /// Nearest existing ideas above the floor, best first.
@@ -99,10 +104,10 @@ pub async fn decide(
     new_claim: &str,
     candidates: &[Candidate],
 ) -> Result<Decision, LlmError> {
-    let related: Vec<(i64, f32)> = candidates
+    let mut related: Vec<(i64, f32, Option<String>)> = candidates
         .iter()
         .filter(|c| c.similarity >= RELATED_FLOOR)
-        .map(|c| (c.idea_id, c.similarity))
+        .map(|c| (c.idea_id, c.similarity, None))
         .collect();
 
     if candidates.is_empty() {
@@ -110,6 +115,16 @@ pub async fn decide(
     }
 
     let judgements = prompt::adjudicate(adjudicator, new_claim, candidates).await?;
+
+    // The adjudicator saw every candidate, including the ones it called
+    // distinct — so a faint link can carry its sentence too.
+    for r in related.iter_mut() {
+        if let Some(j) = judgements.iter().find(|j| j.idea_id == r.0) {
+            if !j.reason.trim().is_empty() {
+                r.2 = Some(j.reason.trim().to_string());
+            }
+        }
+    }
 
     // Highest confidence wins, and ties break towards leaving things alone.
     let best = judgements
@@ -124,7 +139,8 @@ pub async fn decide(
     // Contradictions are recorded whatever the confidence — they draw nothing
     // yet, so a wrong one costs little, while a missed one loses information.
     if j.verdict == Verdict::Contradicts {
-        return Ok(Decision::Conflict { idea_id: j.idea_id, confidence: j.confidence });
+        let reason = (!j.reason.trim().is_empty()).then(|| j.reason.trim().to_string());
+        return Ok(Decision::Conflict { idea_id: j.idea_id, confidence: j.confidence, reason });
     }
 
     if j.confidence < MERGE_CONFIDENCE {
@@ -241,7 +257,7 @@ mod tests {
         let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.9)])
             .await
             .unwrap();
-        assert_eq!(out, Decision::New { related: vec![(1, 0.9)] });
+        assert_eq!(out, Decision::New { related: vec![(1, 0.9, None)] });
     }
 
     #[tokio::test]
@@ -261,7 +277,7 @@ mod tests {
         let out = decide(&Scripted(judged.into()), "new", &[candidate(2, 0.7)])
             .await
             .unwrap();
-        assert_eq!(out, Decision::Conflict { idea_id: 2, confidence: 0.4 });
+        assert_eq!(out, Decision::Conflict { idea_id: 2, confidence: 0.4, reason: None });
     }
 
     #[tokio::test]
@@ -272,7 +288,7 @@ mod tests {
         let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.9)])
             .await
             .unwrap();
-        assert_eq!(out, Decision::New { related: vec![(1, 0.9)] });
+        assert_eq!(out, Decision::New { related: vec![(1, 0.9, None)] });
     }
 
     #[tokio::test]
@@ -282,6 +298,6 @@ mod tests {
             .await
             .unwrap();
         // 0.70 is above RELATED_FLOOR and links; 0.56 is below and does not.
-        assert_eq!(out, Decision::New { related: vec![(1, 0.7)] });
+        assert_eq!(out, Decision::New { related: vec![(1, 0.7, None)] });
     }
 }

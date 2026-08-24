@@ -30,13 +30,17 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 async-trait = "0.1"
-# Speech recognition. `download-binaries` pulls prebuilt sherpa-onnx rather than
-# compiling C++ here; `tts` is off since we only transcribe.
-sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries"] }
+# Speech recognition and the neural voice. `download-binaries` pulls prebuilt
+# sherpa-onnx rather than compiling C++ here; `tts` gives us Piper voices
+# through the runtime dictation already brings in, rather than a second one.
+sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries", "tts"] }
 cpal = "0.18"
 fastembed = "6"
 tar = "0.4"
 ureq = "2"
+# Unpacking the prebuilt llama-server. Deflate only — the release archives
+# use nothing else, and the other codecs bring C dependencies.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 bzip2 = "0.4"
 
 keyring = { version = "3", features = ["linux-native", "apple-native", "windows-native"] }

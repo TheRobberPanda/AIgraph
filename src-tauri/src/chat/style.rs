@@ -29,6 +29,22 @@ conversations, begin the reply with a marker on its own line, exactly one of:\
 Then answer normally, briefly acknowledging what is being opened. Use a marker \
 only when they actually asked to see something. Never mention the marker.";
 
+/// Frames the list of existing idea titles handed to the model.
+///
+/// The titles themselves are the user's own thinking, so this is the one part
+/// of the system prompt not composed purely of constants — which is why it is
+/// a setting that can be turned off, and why the chat-purity test checks the
+/// default shape without it.
+pub const RECALL: &str = "\
+\n\nThe person has thought about these things before. Titles only, no detail:";
+
+pub const RECALL_TAIL: &str = "\
+\nWhere something being said now genuinely bears on one of these, say how — \
+not \"you said this before\" but the consequence: if both hold, what follows? \
+One sentence, worked into the reply. Most turns will touch none of them, and \
+saying nothing is the right answer then. Never list them, never mention that \
+you were given them.";
+
 pub const SYSTEM_PROMPT: &str = "\
 Answer the way a sharp, honest colleague would, not the way a support agent \
 would. Skip throat-clearing, flattery, and \"great question\" — start with the \

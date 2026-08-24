@@ -52,8 +52,12 @@ pub struct Settings {
     /// Short answers, read aloud as they arrive — for talking rather than
     /// reading. Nothing is truncated; the model is asked to be brief.
     pub call_mode: bool,
-    /// How a reply is spoken. `off`, or `system` for the machine's own voice.
+    /// How a reply is spoken. `off`, `system` for the machine's own voice, or
+    /// `neural` for the downloaded one.
     pub voice: Voice,
+    /// Hand the model the titles of ideas already recorded, so it can connect
+    /// what is being said now to what was said before.
+    pub recall: bool,
     /// How the model bundled with the app is run, when that is the one in use.
     pub runtime: Runtime,
     /// Whether the map, ideas and conversations sit around the conversation
@@ -81,13 +85,17 @@ pub enum Voice {
     /// The machine's own speech, through whatever it already has installed.
     /// Nothing to download, and it respects the voice already configured.
     System,
+    /// A downloaded neural voice (Piper). Better, at the cost of a download
+    /// and a little CPU. Falls back to `System` if the voice is missing.
+    Neural,
 }
 
 /// Knobs for the model that runs inside the app.
 ///
 /// These are the ones that decide whether a 27B model is pleasant or painful
 /// on a given machine, so they are settings rather than constants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Runtime {
     /// Layers handed to the GPU. 0 keeps everything on the CPU.
     pub gpu_layers: u32,
@@ -100,6 +108,26 @@ pub struct Runtime {
     /// Hold the weights in memory between sessions instead of unloading.
     /// Avoids a reload on every conversation, at the cost of holding the RAM.
     pub keep_in_memory: bool,
+    /// CPU threads. 0 lets llama.cpp decide from the machine.
+    pub threads: u32,
+    /// How many sequences are processed at once. Above one, two conversations
+    /// can be answered in parallel; each costs its own slice of the context.
+    pub parallel: u32,
+    /// Tokens per batch. Larger fills the GPU better and costs memory.
+    pub batch_size: u32,
+    /// Fused attention kernels: faster and lighter on memory where the backend
+    /// has them, and ignored where it does not.
+    pub flash_attention: bool,
+    /// Lock the weights in RAM so the OS cannot page them out. Costly on a
+    /// machine that is already short, and a large win on one that is not.
+    pub mlock: bool,
+    /// How adventurous the wording is. Sampling settings apply to the model
+    /// the app runs; a hosted provider has its own.
+    pub temperature: f32,
+    pub top_p: f32,
+    pub top_k: u32,
+    /// Pressure against repeating itself. 1.0 is off.
+    pub repeat_penalty: f32,
 }
 
 impl Default for Runtime {
@@ -112,6 +140,17 @@ impl Default for Runtime {
             context_length: 8192,
             kv_cache_on_gpu: false,
             keep_in_memory: true,
+            threads: 0,
+            parallel: 1,
+            batch_size: 512,
+            flash_attention: true,
+            mlock: false,
+            // llama.cpp's own defaults. Anything else here would be this app
+            // quietly having an opinion about how every model should sound.
+            temperature: 0.8,
+            top_p: 0.95,
+            top_k: 40,
+            repeat_penalty: 1.1,
         }
     }
 }
@@ -127,6 +166,7 @@ impl Default for Settings {
             extraction: None,
             call_mode: false,
             voice: Voice::Off,
+            recall: true,
             runtime: Runtime::default(),
             layout: Layout::default(),
         }

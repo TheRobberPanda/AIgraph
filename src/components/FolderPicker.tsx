@@ -4,7 +4,6 @@ import {
   deleteFolder,
   folderColor,
   listFolders,
-  moveSession,
   ROOT_FOLDER,
   type Folder,
 } from "../lib/folders";
@@ -28,7 +27,6 @@ export default function FolderPicker({
   const [folders, setFolders] = useState<Folder[]>([]);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [dropOn, setDropOn] = useState<number | null>(null);
   /** Deleting takes two clicks: the first arms it, the second does it. A
    *  folder is easy to hit by accident and there is no undo. */
   const [arming, setArming] = useState<number | null>(null);
@@ -71,25 +69,12 @@ export default function FolderPicker({
             <li key={f.id}>
               <button
                 className={
-                  (f.id === current ? "folder-row on" : "folder-row") +
-                  (dropOn === f.id ? " drop" : "")
+                  f.id === current ? "folder-row on" : "folder-row"
                 }
                 style={{ "--folder-color": folderColor(f.name) } as React.CSSProperties}
                 onClick={() => {
                   onPick(f.id);
                   onClose();
-                }}
-                // Conversations can be dragged here from the list.
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDropOn(f.id);
-                }}
-                onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDropOn(null);
-                  const id = Number(e.dataTransfer.getData("text/session"));
-                  if (Number.isFinite(id) && id > 0) void moveSession(id, f.id).then(refresh);
                 }}
               >
                 <FolderMark name={f.name} id={f.id} />

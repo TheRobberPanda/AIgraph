@@ -107,6 +107,10 @@ CREATE TABLE IF NOT EXISTS relations (
     idea_b     INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
     kind       TEXT NOT NULL CHECK (kind IN ('duplicate','refines','contradicts','related')),
     confidence REAL NOT NULL,
+    -- Why the two relate, in the adjudicator's words. Nullable: a link drawn
+    -- from a similarity score alone has no reason, and a made-up one would be
+    -- worse than none.
+    reasoning  TEXT,
     created_at TEXT NOT NULL,
     UNIQUE (idea_a, idea_b, kind)
 );
@@ -220,6 +224,17 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
              -- comparing incomparable spaces forever.
              DELETE FROM embeddings;",
         )?;
+    }
+
+    let relation_cols: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('relations')")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !relation_cols.iter().any(|c| c == "reasoning") {
+        // Nullable rather than defaulted: existing links were drawn before
+        // anything was asked why, and an empty string would be indistinguishable
+        // from a reason the model declined to give.
+        conn.execute_batch("ALTER TABLE relations ADD COLUMN reasoning TEXT;")?;
     }
 
     let session_cols: Vec<String> = conn

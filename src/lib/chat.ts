@@ -130,3 +130,14 @@ export function deleteSession(sessionId: number): Promise<void> {
 export function onArchived(cb: (a: Archived) => void): Promise<UnlistenFn> {
   return listen<Archived>("session:archived", (e) => cb(e.payload));
 }
+
+
+/**
+ * Pick an archived conversation back up as the live one.
+ *
+ * Anything currently being said is filed first. Returns how many turns were
+ * loaded back in.
+ */
+export function continueSession(sessionId: number): Promise<number> {
+  return invoke<number>("continue_session", { sessionId });
+}

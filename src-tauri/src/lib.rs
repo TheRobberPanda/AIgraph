@@ -21,6 +21,7 @@ pub mod secrets;
 pub mod session;
 pub mod settings;
 pub mod stt;
+pub mod tts;
 pub mod store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -60,6 +61,11 @@ pub fn run() {
             commands::conversation_view,
             commands::idea_view,
             commands::reextract_session,
+            commands::continue_session,
+            commands::install_llama_server,
+            commands::voice_status,
+            commands::install_voice,
+            commands::speak,
             commands::delete_session,
             commands::embedded_status,
             commands::download_embedded_model,

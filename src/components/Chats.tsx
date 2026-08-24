@@ -26,9 +26,12 @@ import { longDate } from "../lib/format";
  */
 export default function Chats({
   onOpen,
+  onContinue,
   folder,
 }: {
   onOpen?: (sessionId: number) => void;
+  /** Picked back up as the live conversation, so the app has to switch to it. */
+  onContinue?: (sessionId: number) => void;
   folder: number | null;
 }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -170,8 +173,6 @@ export default function Chats({
                   <button
                     // Draggable onto a folder in the picker, which is quicker
                     // than a menu once there are more than a few folders.
-                    draggable
-                    onDragStart={(e) => e.dataTransfer.setData("text/session", String(s.id))}
                     onClick={() => onOpen?.(s.id)}
                     onContextMenu={(e) => {
                       e.preventDefault();
@@ -262,6 +263,13 @@ export default function Chats({
               label: "Rename",
               onSelect: () =>
                 setRenaming({ id: menu.session.id, value: menu.session.title || menu.session.opening }),
+            },
+            {
+              // Only ever appends, which is why it is safe: the bytes before
+              // the join do not move, so every quote already recorded still
+              // points at the words it was taken from.
+              label: "Continue this conversation",
+              onSelect: () => onContinue?.(menu.session.id),
             },
             {
               label: menu.session.archived ? "Unarchive" : "Archive",

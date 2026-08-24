@@ -45,7 +45,9 @@ import {
   ROOT_FOLDER,
 } from "./lib/folders";
 import { parseReply, speak, stopSpeaking } from "./lib/voice";
+import { sessionTurns } from "./lib/sessions";
 import {
+  continueSession,
   deleteTurn,
   endSession,
   onArchived,
@@ -174,6 +176,9 @@ export default function App() {
   const [pickingFolder, setPickingFolder] = useState(false);
   /** Read replies out as they finish. Always on in call mode. */
   const [voiceOn, setVoiceOn] = useState(false);
+  /** Which voice reads replies, so the setting chosen in Settings is honoured
+   *  by the button in the composer too. */
+  const [voiceKind, setVoiceKind] = useState<"system" | "neural">("system");
   const [callMode, setCallMode] = useState(false);
   const [idleMinutes, setIdleMinutes] = useState(30);
   const [idleOpen, setIdleOpen] = useState(false);
@@ -194,7 +199,8 @@ export default function App() {
     void getSettings().then((s) => {
       applyTheme(s.theme);
       applyUiScale(s.ui_scale);
-      setVoiceOn(s.voice === "system" || s.call_mode);
+      setVoiceOn(s.voice !== "off" || s.call_mode);
+      if (s.voice === "neural") setVoiceKind("neural");
       setCallMode(s.call_mode);
       setIdleMinutes(s.idle_minutes);
       setLayout(s.layout);
@@ -276,6 +282,27 @@ export default function App() {
     };
   }, []);
 
+  /**
+   * Pick an archived conversation back up.
+   *
+   * The backend files whatever is being said now and loads the old turns into
+   * the live conversation; the front has to catch up by showing them and
+   * getting out of whatever it was looking at.
+   */
+  async function resume(sessionId: number) {
+    try {
+      await continueSession(sessionId);
+      const turns = await sessionTurns(sessionId);
+      setTurns(turns.map((t) => ({ role: t.role as Turn["role"], content: t.text })));
+      setJustArchived(null);
+      setDeep(null);
+      setExpanded(null);
+      setView("chat");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   // Sessions can also end without the user doing anything — an idle timeout, or
   // the app closing. The stream has to clear in those cases too, or the UI would
   // keep showing a conversation the backend has already filed away.
@@ -341,7 +368,7 @@ export default function App() {
         if (layout === "simple") setView(open === "conversations" ? "chats" : open);
         else setExpanded(open);
       }
-      if (voiceOn) speak(clean);
+      if (voiceOn) speak(clean, voiceKind === "neural");
     } catch (e) {
       setError(String(e));
       setTurns((t) => t.slice(0, -1));
@@ -680,7 +707,11 @@ export default function App() {
               </span>
             </button>
             <div className="ws-body">
-              <Chats folder={folderId} onOpen={(id) => setDeep({ kind: "conversation", id })} />
+              <Chats
+                folder={folderId}
+                onOpen={(id) => setDeep({ kind: "conversation", id })}
+                onContinue={(id) => void resume(id)}
+              />
             </div>
           </section>
         </div>
@@ -875,7 +906,7 @@ export default function App() {
               const next = !voiceOn;
               setVoiceOn(next);
               if (!next) stopSpeaking();
-              void patchSetting({ voice: next ? "system" : "off" });
+              void patchSetting({ voice: next ? voiceKind : "off" });
             }}
           >
             <IconSpeaker />

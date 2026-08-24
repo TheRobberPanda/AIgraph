@@ -176,6 +176,25 @@ fn download(
     Ok(())
 }
 
+/// Download a `.tar.bz2` and unpack it, leaving no archive behind.
+///
+/// Shared with the voice download, which is the same shape as the speech
+/// model's — same host, same packaging, same progress channel.
+pub fn fetch_archive(
+    url: &str,
+    into: &Path,
+    what: &str,
+    approx_total: u64,
+    on_progress: &(dyn Fn(DownloadProgress) + Send + Sync),
+) -> Result<()> {
+    std::fs::create_dir_all(into)?;
+    let archive = into.join(format!("{what}.tar.bz2"));
+    download(url, &archive, what, approx_total, on_progress)?;
+    let out = extract(&archive, into);
+    let _ = std::fs::remove_file(&archive);
+    out
+}
+
 fn extract(archive: &Path, into: &Path) -> Result<()> {
     let file = std::fs::File::open(archive)?;
     let decompressed = bzip2::read::BzDecoder::new(file);

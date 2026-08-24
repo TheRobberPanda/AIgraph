@@ -1,7 +1,11 @@
 //! Guards what's left of the product's promise after the chat gained a house
-//! voice: the AI still carries nothing built from the user's own words or from
-//! extraction — only one fixed, unconditional system prompt, identical for
-//! every conversation and every provider.
+//! voice: by default the AI carries nothing built from the user's own words or
+//! from extraction — only fixed, unconditional strings, identical for every
+//! conversation and every provider.
+//!
+//! Recall is the one deliberate exception, and it is off unless someone turns
+//! it on. The test below pins that: nothing user-derived reaches the payload
+//! until `set_recall` is called, and when it is, only titles do.
 //!
 //! If you are here because this test failed, the chat payload gained something
 //! beyond the user's words and that one constant string. That may be
@@ -87,4 +91,31 @@ fn a_fresh_conversation_sends_no_turns() {
     let c = Conversation::new("m");
     let json = serde_json::to_value(c.to_request()).unwrap();
     assert!(json["messages"].as_array().unwrap().is_empty());
+}
+
+
+/// Recall is opt-in, and opting in is the only way anything the user wrote
+/// reaches the system prompt.
+#[test]
+fn recall_adds_nothing_until_it_is_asked_for() {
+    let mut off = Conversation::new("llama3.2");
+    off.push_user("ownership is a debt");
+    let quiet = serde_json::to_value(off.to_request()).unwrap();
+    let sys = quiet["system"].as_str().unwrap().to_string();
+
+    let mut on = Conversation::new("llama3.2");
+    on.push_user("ownership is a debt");
+    on.set_recall(vec!["Entitlement as the source of gratitude".into()]);
+    let loud = serde_json::to_value(on.to_request()).unwrap();
+    let with = loud["system"].as_str().unwrap();
+
+    assert!(
+        !sys.contains("Entitlement"),
+        "nothing recorded reaches the chat unless recall is switched on"
+    );
+    assert!(with.starts_with(&sys), "recall is appended, never woven in");
+    assert!(with.contains("Entitlement as the source of gratitude"));
+    // Titles, and only titles. A claim, a quote, or a transcript reaching the
+    // chat would be a different feature with a different cost.
+    assert!(!with.contains("ownership is a debt\n- "));
 }

@@ -14,6 +14,11 @@ pub struct Judgement {
     /// Required when the verdict is `refines`: the rewritten claim.
     #[serde(default)]
     pub merged_claim: Option<String>,
+    /// One sentence on what the two have to do with each other. Captured here
+    /// because this is the only moment anything knows: reconstructing it later
+    /// means a second call with less to go on.
+    #[serde(default)]
+    pub reason: String,
 }
 
 pub fn json_schema() -> serde_json::Value {
@@ -25,7 +30,7 @@ pub fn json_schema() -> serde_json::Value {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["idea_id", "verdict", "confidence"],
+                    "required": ["idea_id", "verdict", "confidence", "reason"],
                     "properties": {
                         "idea_id": { "type": "integer" },
                         "verdict": {
@@ -33,7 +38,8 @@ pub fn json_schema() -> serde_json::Value {
                             "enum": ["distinct", "duplicate", "refines", "contradicts"]
                         },
                         "confidence": { "type": "number" },
-                        "merged_claim": { "type": "string" }
+                        "merged_claim": { "type": "string" },
+                        "reason": { "type": "string" }
                     }
                 }
             }
@@ -70,6 +76,12 @@ For each existing idea, return one verdict:
 - "contradicts": both cannot be true at once.
 
 Also return "confidence" from 0 to 1.
+
+Also return "reason": one sentence, ten to twenty words, on what the two have
+to do with each other — the thing someone would want to know when they see a
+line drawn between them on a map. Name what is shared or what collides, not the
+verdict: "both treat ownership as a debt owed to the owner", not "these are
+similar". Do not write "the user" or "the speaker".
 
 Judge conservatively. Marking two different thoughts as the same silently
 misrepresents the record, and the mistake may never be spotted. Leaving a

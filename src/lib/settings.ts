@@ -20,6 +20,8 @@ export interface Settings {
   /** Short answers, read aloud — for talking rather than reading. */
   call_mode: boolean;
   voice: Voice;
+  /** Hand the chat the titles of ideas already recorded. */
+  recall: boolean;
   runtime: Runtime;
   layout: Layout;
 }
@@ -27,7 +29,7 @@ export interface Settings {
 /** One place at a time, or everything around the conversation at once. */
 export type Layout = "simple" | "advanced";
 
-export type Voice = "off" | "system";
+export type Voice = "off" | "system" | "neural";
 
 /** How the model that runs inside the app is run. */
 export interface Runtime {
@@ -36,6 +38,16 @@ export interface Runtime {
   context_length: number;
   kv_cache_on_gpu: boolean;
   keep_in_memory: boolean;
+  /** 0 lets llama.cpp decide from the machine. */
+  threads: number;
+  parallel: number;
+  batch_size: number;
+  flash_attention: boolean;
+  mlock: boolean;
+  temperature: number;
+  top_p: number;
+  top_k: number;
+  repeat_penalty: number;
 }
 
 export interface ActiveModels {
@@ -183,4 +195,39 @@ export function modelFiles(repo: string): Promise<RemoteFile[]> {
 
 export function downloadModelFile(repo: string, file: string, size: number): Promise<void> {
   return invoke("download_model_file", { repo, file, size });
+}
+
+
+/** Fetch a llama-server, so a model can run without one installed. */
+export function installLlamaServer(): Promise<void> {
+  return invoke("install_llama_server");
+}
+
+export function onServerDownload(
+  handler: (p: { what: string; received: number; total: number }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ what: string; received: number; total: number }>("server:download", (e) =>
+    handler(e.payload),
+  );
+}
+
+export function voiceStatus(): Promise<{ installed: boolean; download_mb: number }> {
+  return invoke("voice_status");
+}
+
+export function installVoice(): Promise<void> {
+  return invoke("install_voice");
+}
+
+export function onVoiceDownload(
+  handler: (p: { what: string; received: number; total: number }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ what: string; received: number; total: number }>("voice:download", (e) =>
+    handler(e.payload),
+  );
+}
+
+/** Read a reply out in the downloaded voice. */
+export function speakNeural(text: string): Promise<void> {
+  return invoke("speak", { text });
 }

@@ -1,10 +1,13 @@
 /**
  * Speaking replies aloud, and letting a reply open part of the app.
  *
- * The system voice rather than a bundled model: it needs no download, and it
- * uses whatever voice and rate the machine is already set up with, which is
- * usually what someone who relies on speech has already tuned.
+ * Two voices. The machine's own is the default and the fallback: it needs no
+ * download and it uses whatever voice and rate is already configured, which for
+ * anyone who relies on speech is usually what they have already tuned. The
+ * downloaded one sounds better and is synthesised in the backend.
  */
+
+import { speakNeural } from "./settings";
 
 export type OpenTarget = "map" | "ideas" | "conversations";
 
@@ -41,13 +44,27 @@ function forSpeech(text: string): string {
 
 let current: SpeechSynthesisUtterance | null = null;
 
-/** Read a reply out. Any reply already being spoken is cut off first. */
-export function speak(text: string): void {
-  const synth = window.speechSynthesis;
-  if (!synth) return;
+/**
+ * Read a reply out. Any reply already being spoken is cut off first.
+ *
+ * The downloaded voice falls back to the system one on any failure — a missing
+ * voice file or no audio device should cost the neural quality, not the
+ * speech.
+ */
+export function speak(text: string, neural = false): void {
   const said = forSpeech(text);
   if (!said) return;
   stopSpeaking();
+  if (neural) {
+    void speakNeural(said).catch(() => system(said));
+    return;
+  }
+  system(said);
+}
+
+function system(said: string): void {
+  const synth = window.speechSynthesis;
+  if (!synth) return;
   current = new SpeechSynthesisUtterance(said);
   current.onend = () => {
     current = null;

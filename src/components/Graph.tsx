@@ -56,6 +56,8 @@ interface Node extends SimulationNodeDatum {
 
 interface Link extends SimulationLinkDatum<Node> {
   kind: string;
+  /** Why these two relate, in the adjudicator's words. */
+  reasoning?: string;
 }
 
 interface Palette {
@@ -248,9 +250,14 @@ export default function Graph({ folder }: { folder: number | null }) {
   const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
   const [panelSide, setPanelSide] = useState<"left" | "right">("right");
   const [panelWidth, setPanelWidth] = useState<number | null>(null);
-  const [edgeHover, setEdgeHover] = useState<
-    { kind: "related" | "contradicts"; a: GraphNode; b: GraphNode; x: number; y: number } | null
-  >(null);
+  const [edgeHover, setEdgeHover] = useState<{
+    kind: "related" | "contradicts";
+    a: GraphNode;
+    b: GraphNode;
+    reasoning?: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const openIdea = useRef((id: number) =>
     setPanel((p) => (p?.kind === "idea" && p.id === id ? null : { kind: "idea", id })),
   );
@@ -567,6 +574,7 @@ export default function Graph({ folder }: { folder: number | null }) {
         source: byId.get(e.source)!,
         target: byId.get(e.target)!,
         kind: e.kind,
+        reasoning: e.reasoning,
       }));
 
     nodesRef.current = nodes;
@@ -968,6 +976,7 @@ export default function Graph({ folder }: { folder: number | null }) {
               kind: edge.kind as "related" | "contradicts",
               a: (edge.source as Node).data,
               b: (edge.target as Node).data,
+              reasoning: edge.reasoning,
               x: rect ? e.clientX - rect.left : 0,
               y: rect ? e.clientY - rect.top : 0,
             });
@@ -1109,6 +1118,10 @@ export default function Graph({ folder }: { folder: number | null }) {
           </div>
           <div className="relation-side">{edgeHover.a.label}</div>
           <div className="relation-side">{edgeHover.b.label}</div>
+          {/* Captured when the pair was judged, not reconstructed now — the
+              only moment anything knew. Absent on the older links, and on the
+              ones drawn from a similarity score alone. */}
+          {edgeHover.reasoning && <div className="relation-why">{edgeHover.reasoning}</div>}
         </div>
       )}
 

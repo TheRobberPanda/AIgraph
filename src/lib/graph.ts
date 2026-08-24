@@ -23,8 +23,11 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string;
   target: string;
-  kind: "from" | "related" | "contradicts";
+  kind: "from" | "related" | "contradicts" | "category";
   weight: number;
+  /** Why the two relate, where reconciliation said so. Absent on structural
+   *  edges and on links drawn from a similarity score alone. */
+  reasoning?: string;
 }
 
 export interface GraphData {

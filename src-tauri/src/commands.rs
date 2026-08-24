@@ -71,6 +71,9 @@ pub struct AppState {
     retry_after: Mutex<std::collections::HashMap<i64, (chrono::DateTime<chrono::Utc>, u32)>>,
     /// Where the plain-markdown copies go. The user owns these.
     md_dir: PathBuf,
+    /// The archived conversation being added to, if one was picked back up.
+    /// Set by `continue_session` and cleared when the session ends.
+    continuing: Mutex<Option<i64>>,
 }
 
 impl AppState {
@@ -99,6 +102,7 @@ impl AppState {
                 .unwrap_or(std::path::Path::new("."))
                 .join("embeddings"),
             current_folder: Mutex::new(crate::store::ROOT_FOLDER),
+            continuing: Mutex::new(None),
             embedded: Mutex::new(crate::llm::embedded::Embedded::new(
                 db_path.parent().unwrap_or(std::path::Path::new(".")),
             )),
@@ -250,6 +254,11 @@ async fn set_active(state: &State<'_, AppState>, kind: LocalKind, host: &str, mo
     *state.session.lock().await = None;
 }
 
+/// How many idea titles the chat is handed. Past a few hundred this stops
+/// being a prompt and starts being a retrieval problem — the same
+/// embedding-shortlist machinery reconciliation already uses.
+const RECALL_LIMIT: usize = 200;
+
 #[tauri::command]
 pub async fn send_message(
     app: tauri::AppHandle,
@@ -279,11 +288,24 @@ pub async fn send_message(
         }
     }
 
-    let call_mode = state.settings.lock().await.call_mode;
+    let (call_mode, recall) = {
+        let s = state.settings.lock().await;
+        (s.call_mode, s.recall)
+    };
+    // What has already been thought, by title, so the reply can connect the
+    // two. Read fresh each turn rather than cached: an idea recorded five
+    // minutes ago is exactly the one worth connecting to.
+    let titles = if recall {
+        let folder = *state.current_folder.lock().await;
+        state.store.lock().await.idea_titles(Some(folder), RECALL_LIMIT).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let request = {
         let mut guard = state.conversation.lock().await;
         let convo = guard.as_mut().ok_or("no conversation")?;
         convo.set_call_mode(call_mode);
+        convo.set_recall(titles);
         convo.push_user(&text);
         convo.to_request()
     };
@@ -331,6 +353,57 @@ pub async fn rewind_conversation(state: State<'_, AppState>, index: usize) -> Re
     Ok(())
 }
 
+/// Pick an archived conversation back up.
+///
+/// The turns are loaded into the live conversation and the session is
+/// remembered, so pressing Done again grows it rather than filing a second one
+/// beside it. Anything already being said is archived first — losing it to a
+/// button press would be the worst kind of bug this app could have.
+///
+/// Safe for provenance because it can only add at the end: the bytes before the
+/// join do not move, so every span already recorded still points at the words
+/// it was taken from. Editing an earlier turn would not be, and this does not
+/// offer to.
+#[tauri::command]
+pub async fn continue_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: i64,
+) -> Result<usize, String> {
+    if let Some(a) = end_session_inner(&state, EndReason::Done).await? {
+        let _ = app.emit("session:archived", a);
+    }
+
+    let turns = state.store.lock().await.turns(session_id).map_err(|e| e.to_string())?;
+    let model = state
+        .active
+        .lock()
+        .await
+        .as_ref()
+        .map(|a| a.model.clone())
+        .unwrap_or_default();
+
+    let mut convo = Conversation::new(&model);
+    convo.set_call_mode(state.settings.lock().await.call_mode);
+    for turn in &turns {
+        if turn.role == "assistant" {
+            convo.push_assistant(turn.text.clone());
+        } else {
+            convo.push_user(turn.text.clone());
+        }
+    }
+    let n = turns.len();
+    *state.conversation.lock().await = Some(convo);
+    *state.continuing.lock().await = Some(session_id);
+
+    // The folder follows the conversation being continued, not whatever was
+    // last chosen — this is that conversation again, wherever it was filed.
+    if let Ok(folder) = state.store.lock().await.session_folder(session_id) {
+        *state.current_folder.lock().await = folder;
+    }
+    Ok(n)
+}
+
 #[derive(Serialize, Clone)]
 pub struct Archived {
     pub session_id: i64,
@@ -371,14 +444,28 @@ pub async fn end_session_inner(
         .map(|s| s.started_at)
         .unwrap_or_else(chrono::Utc::now);
 
-    let session_id = {
-        let mut store = state.store.lock().await;
-        store
-            .archive_session(&rendered, &model, started_at, Some(&state.md_dir))
-            .map_err(|e| e.to_string())?
+    // Picked back up rather than started fresh: the same session grows instead
+    // of a second one appearing beside it. Every offset already recorded points
+    // into the part that has not moved.
+    let resumed = state.continuing.lock().await.take();
+
+    let session_id = match resumed {
+        Some(id) => {
+            let mut store = state.store.lock().await;
+            store
+                .extend_session(id, &rendered, &model, Some(&state.md_dir))
+                .map_err(|e| e.to_string())?;
+            id
+        }
+        None => {
+            let mut store = state.store.lock().await;
+            store
+                .archive_session(&rendered, &model, started_at, Some(&state.md_dir))
+                .map_err(|e| e.to_string())?
+        }
     };
 
-    {
+    if resumed.is_none() {
         let folder = *state.current_folder.lock().await;
         let mut store = state.store.lock().await;
         let _ = store.set_session_folder(session_id, folder);
@@ -744,6 +831,24 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
         }
     }
     let _ = app.emit("ideas:changed", ());
+    release_model_if_asked(state).await;
+}
+
+/// Put the embedded model down once there is nothing left to read.
+///
+/// This is where `keep_in_memory` finally means something. It runs after the
+/// queue is drained rather than when Done is pressed, because Done is
+/// immediately followed by an extraction that would only load it again —
+/// several gigabytes off disk to do the work we were already doing.
+async fn release_model_if_asked(state: &AppState) {
+    if state.settings.lock().await.runtime.keep_in_memory {
+        return;
+    }
+    let mut embedded = state.embedded.lock().await;
+    if embedded.is_running() {
+        tracing::info!("releasing the embedded model — keep in memory is off");
+        embedded.stop();
+    }
 }
 
 #[tauri::command]
@@ -1146,6 +1251,58 @@ pub async fn download_embedded_model(
 }
 
 /// Start the bundled model and point both roles at it.
+/// Fetch a `llama-server` so the app can run a model without one installed.
+#[tauri::command]
+pub async fn voice_status(state: State<'_, AppState>) -> Result<crate::tts::VoiceStatus, String> {
+    Ok(crate::tts::Voices::new(&state.data_dir).status())
+}
+
+#[tauri::command]
+pub async fn install_voice(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let voices = crate::tts::Voices::new(&state.data_dir);
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        voices.install(&move |p| {
+            let _ = handle.emit("voice:download", p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// Read a reply out in the downloaded voice.
+///
+/// Blocking work on a blocking thread: synthesis is a second or two of CPU and
+/// playback runs for as long as the sentence takes, neither of which belongs on
+/// the async runtime.
+#[tauri::command]
+pub async fn speak(state: State<'_, AppState>, text: String) -> Result<(), String> {
+    let voices = crate::tts::Voices::new(&state.data_dir);
+    tauri::async_runtime::spawn_blocking(move || voices.speak(&text, 1.0))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn install_llama_server(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let handle = app.clone();
+    let embedded = crate::llm::embedded::Embedded::new(&state.data_dir);
+    tauri::async_runtime::spawn_blocking(move || {
+        embedded.install_server(&move |p| {
+            let _ = handle.emit("server:download", p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn start_embedded(
     state: State<'_, AppState>,

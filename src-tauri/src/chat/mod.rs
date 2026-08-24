@@ -26,11 +26,17 @@ pub struct Conversation {
     messages: Vec<Message>,
     /// Short answers, because they are being spoken rather than read.
     call_mode: bool,
+    /// Titles of ideas already recorded, when the setting asks for them.
+    ///
+    /// The only user-derived thing that ever reaches the system prompt. It is
+    /// off by construction unless someone turns it on, and the purity test
+    /// checks the shape without it.
+    recall: Vec<String>,
 }
 
 impl Conversation {
     pub fn new(model: impl Into<String>) -> Self {
-        Self { model: model.into(), messages: Vec::new(), call_mode: false }
+        Self { model: model.into(), messages: Vec::new(), call_mode: false, recall: Vec::new() }
     }
 
     pub fn push_user(&mut self, content: impl Into<String>) {
@@ -43,6 +49,15 @@ impl Conversation {
 
     pub fn set_call_mode(&mut self, on: bool) {
         self.call_mode = on;
+    }
+
+    /// Hand the model what has already been thought, by title.
+    ///
+    /// Titles scale linearly, so this is capped. Past the cap it becomes a
+    /// retrieval problem — an embedding shortlist over titles, which is the
+    /// same machinery reconciliation already uses.
+    pub fn set_recall(&mut self, titles: Vec<String>) {
+        self.recall = titles;
     }
 
     pub fn messages(&self) -> &[Message] {
@@ -87,6 +102,14 @@ impl Conversation {
                 sys.push_str(style::NAVIGATION);
                 if self.call_mode {
                     sys.push_str(style::CALL_MODE);
+                }
+                if !self.recall.is_empty() {
+                    sys.push_str(style::RECALL);
+                    for title in &self.recall {
+                        sys.push_str("\n- ");
+                        sys.push_str(title);
+                    }
+                    sys.push_str(style::RECALL_TAIL);
                 }
                 sys
             }),
