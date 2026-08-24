@@ -1,0 +1,64 @@
+import { useEffect, useState } from "react";
+import { runtimeStatus, type RuntimeStatus } from "../lib/settings";
+
+/**
+ * What the model is doing, for anyone who wants to know.
+ *
+ * A local model can spend a minute reading a long prompt before it writes a
+ * word, and with nothing on screen that is indistinguishable from being hung.
+ * This is the difference between "it is slow" and "it is broken", which are
+ * the same picture without it.
+ *
+ * Off by default and out of the way. Every number here comes from
+ * `llama-server`'s own `/slots` rather than from anything the app infers, so
+ * it is worth trusting when something is wrong.
+ */
+export default function Vitals() {
+  const [open, setOpen] = useState(false);
+  const [s, setS] = useState<RuntimeStatus | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    // Only while it is being looked at. A poll nobody reads is a request per
+    // second against a server that is busy doing the actual work.
+    let alive = true;
+    const tick = () =>
+      runtimeStatus()
+        .then((r) => alive && setS(r))
+        .catch(() => {});
+    void tick();
+    const id = setInterval(tick, 700);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [open]);
+
+  if (!open) {
+    return (
+      <button className="status-toggle" data-tip="What the model is doing" onClick={() => setOpen(true)}>
+        details
+      </button>
+    );
+  }
+
+  const pct =
+    s && s.prompt_total > 0 ? Math.round((s.prompt_done / s.prompt_total) * 100) : null;
+
+  return (
+    <button className="status-toggle on vitals" onClick={() => setOpen(false)}>
+      {!s?.reachable ? (
+        "no local server"
+      ) : s.phase === "reading" ? (
+        <>
+          reading the prompt {pct}% · {s.prompt_done}/{s.prompt_total} tokens
+          {s.prompt_cached > 0 && ` · ${s.prompt_cached} cached`}
+        </>
+      ) : s.phase === "writing" ? (
+        <>writing · {s.prompt_total} tokens of prompt read</>
+      ) : (
+        <>idle · {s.context ? `${Math.round(s.context / 1024)}K context` : "loaded"}</>
+      )}
+    </button>
+  );
+}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Fold from "./Fold";
+import { useNoWheel } from "../lib/noWheel";
 import {
   applyTheme,
   applyUiScale,
@@ -28,6 +29,8 @@ const THEMES: { value: Theme; label: string }[] = [
 ];
 
 export default function Settings() {
+  const scaleRef = useNoWheel<HTMLInputElement>();
+  const silenceRef = useNoWheel<HTMLInputElement>();
   const [s, setS] = useState<S | null>(null);
   const [dir, setDir] = useState("");
   const [speech, setSpeech] = useState<{ installed: boolean; mb: number } | null>(null);
@@ -103,6 +106,7 @@ export default function Settings() {
       <Fold title="Interface size" summary={`${s.ui_scale}%`} {...fold("scale")}>
                 <div className="row scale-row">
           <input
+            ref={scaleRef}
             type="range"
             className="scale-slider"
             min={85}
@@ -165,6 +169,7 @@ export default function Settings() {
           <div className="knob">
             <label className="knob-name">Pause before sending</label>
             <input
+              ref={silenceRef}
               type="range"
               className="scale-slider"
               min={1}

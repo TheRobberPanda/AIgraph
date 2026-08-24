@@ -1291,6 +1291,70 @@ pub async fn download_embedded_model(
 
 /// Start the bundled model and point both roles at it.
 /// Fetch a `llama-server` so the app can run a model without one installed.
+/// What the model is doing right now, in numbers.
+///
+/// Straight from `llama-server`'s own `/slots`, not from anything this app
+/// infers. A local model can spend a minute reading a long prompt before it
+/// writes a word, and with nothing on screen that is indistinguishable from
+/// being hung — which is what makes "it is slow" impossible to tell apart from
+/// "it is broken" without this.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct RuntimeStatus {
+    /// `reading` while the prompt is being processed, `writing` once tokens
+    /// are coming out, `idle` otherwise.
+    pub phase: String,
+    pub prompt_done: u64,
+    pub prompt_total: u64,
+    /// Prompt tokens that were already cached, and so cost nothing.
+    pub prompt_cached: u64,
+    pub context: u64,
+    /// Present only when the server is ours and answering.
+    pub reachable: bool,
+}
+
+#[tauri::command]
+pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
+    let host = state.embedded.lock().await.host();
+    let Ok(resp) = reqwest::Client::new()
+        .get(format!("{host}/slots"))
+        .timeout(std::time::Duration::from_millis(700))
+        .send()
+        .await
+    else {
+        return Ok(RuntimeStatus::default());
+    };
+    let Ok(slots) = resp.json::<Vec<serde_json::Value>>().await else {
+        return Ok(RuntimeStatus { reachable: true, ..Default::default() });
+    };
+    let num = |v: &serde_json::Value, k: &str| v.get(k).and_then(|n| n.as_u64()).unwrap_or(0);
+
+    // The busy slot, if any. With several slots only one is usually working,
+    // and the idle ones have nothing worth reporting.
+    let busy = slots
+        .iter()
+        .find(|s| s.get("is_processing").and_then(|b| b.as_bool()).unwrap_or(false));
+    let Some(slot) = busy else {
+        return Ok(RuntimeStatus {
+            phase: "idle".into(),
+            context: slots.first().map(|s| num(s, "n_ctx")).unwrap_or(0),
+            reachable: true,
+            ..Default::default()
+        });
+    };
+    let total = num(slot, "n_prompt_tokens");
+    let done = num(slot, "n_prompt_tokens_processed");
+    Ok(RuntimeStatus {
+        // Reading the prompt and writing the answer are different waits, and
+        // only one of them has an end you can see coming.
+        phase: if total > 0 && done < total { "reading" } else { "writing" }.into(),
+        prompt_done: done,
+        prompt_total: total,
+        prompt_cached: num(slot, "n_prompt_tokens_cache"),
+        context: num(slot, "n_ctx"),
+        reachable: true,
+    })
+}
+
 #[tauri::command]
 pub async fn voice_status(state: State<'_, AppState>) -> Result<crate::tts::VoiceStatus, String> {
     Ok(crate::tts::Voices::new(&state.data_dir).status())

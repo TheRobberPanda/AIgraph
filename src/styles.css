@@ -1371,6 +1371,14 @@ blockquote {
 }
 .remember input { accent-color: var(--accent); }
 
+/* The live readout, beside the model that is producing it. */
+.vitals { font-variant-numeric: tabular-nums; }
+.blurb.warn {
+  border-left: 2px solid var(--gold);
+  padding-left: 0.6rem;
+  color: var(--fg);
+}
+
 .digest-group { gap: 0.25rem; align-items: center; }
 .queue-btn { padding: 0.2rem 0.5rem; font-size: 0.9rem; line-height: 1; }
 

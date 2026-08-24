@@ -127,8 +127,15 @@ pub struct Runtime {
     /// How many sequences are processed at once. Above one, two conversations
     /// can be answered in parallel; each costs its own slice of the context.
     pub parallel: u32,
-    /// Tokens per batch. Larger fills the GPU better and costs memory.
+    /// Logical batch: how many prompt tokens are handed to the backend at
+    /// once. This is the one that decides how fast a long prompt is read.
     pub batch_size: u32,
+    /// Physical batch: how many of those are actually computed in one pass.
+    /// Bounded by memory rather than by throughput, and rarely worth raising.
+    pub ubatch_size: u32,
+    /// One KV cache shared across slots instead of one each. With several
+    /// slots this is the difference between the cache fitting and not.
+    pub kv_unified: bool,
     /// Fused attention kernels: faster and lighter on memory where the backend
     /// has them, and ignored where it does not.
     pub flash_attention: bool,
@@ -152,11 +159,20 @@ impl Default for Runtime {
             // a crash rather than as slowness.
             gpu_layers: 0,
             context_length: 8192,
-            kv_cache_on_gpu: false,
+            // On. The cache is several gigabytes at a large context, and left
+            // in system memory every token of it crosses the bus. It was off
+            // out of caution about VRAM and the caution cost more than it
+            // saved.
+            kv_cache_on_gpu: true,
             keep_in_memory: true,
             threads: 0,
-            parallel: 1,
-            batch_size: 512,
+            parallel: 4,
+            // llama.cpp's own defaults. The previous 512 was this app halving
+            // the logical batch for no reason, which quartered how fast a long
+            // prompt was read.
+            batch_size: 2048,
+            ubatch_size: 512,
+            kv_unified: true,
             flash_attention: true,
             mlock: false,
             // llama.cpp's own defaults. Anything else here would be this app

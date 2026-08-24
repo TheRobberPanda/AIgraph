@@ -21,6 +21,7 @@ import Sheet from "./components/Sheet";
 import Select from "./components/Select";
 import Call from "./components/Call";
 import Queue from "./components/Queue";
+import Vitals from "./components/Vitals";
 import FolderMark from "./components/FolderMark";
 import ContextMenu from "./components/ContextMenu";
 import Tooltip from "./components/Tooltip";
@@ -968,6 +969,12 @@ export default function App() {
                 onSelect: () => void navigator.clipboard.writeText(turnMenu.text),
               },
               {
+                // Useful for a long answer half-heard in a call, and the only
+                // way to hear one again at all.
+                label: "Read it aloud",
+                onSelect: () => speak(turnMenu.text, voiceKind === "neural"),
+              },
+              {
                 label: "Delete this message",
                 danger: true,
                 onSelect: () => setTurnAction({ index: turnMenu.index, kind: "delete" }),
@@ -1198,6 +1205,7 @@ export default function App() {
 
       <div className="statusbar">
         {provider ? `${provider.label} · ${modelName(provider.model)}` : "no model"}
+        {provider?.kind === "embedded" && <Vitals />}
         <button
           className="status-toggle"
           onClick={() => void setLayoutMode(layout === "simple" ? "advanced" : "simple")}

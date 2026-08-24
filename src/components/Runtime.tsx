@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNoWheel } from "../lib/noWheel";
 import {
   embeddedStatus,
   getSettings,
@@ -50,10 +51,12 @@ function Slider({
   onInput: (v: number) => void;
   onCommit: () => void;
 }) {
+  const ref = useNoWheel<HTMLInputElement>();
   return (
     <div className="knob">
       <label className="knob-name">{label}</label>
       <input
+        ref={ref}
         type="range"
         className="scale-slider"
         min={min}
@@ -74,7 +77,8 @@ function Slider({
 }
 
 const SWITCHES: { key: keyof R; label: string; hint: string }[] = [
-  { key: "kv_cache_on_gpu", label: "KV cache on the GPU", hint: "faster, at the cost of VRAM the model wants" },
+  { key: "kv_cache_on_gpu", label: "KV cache on the GPU", hint: "several GB at a large context — left in system memory, every token of it crosses the bus" },
+  { key: "kv_unified", label: "Unified KV cache", hint: "one cache shared across slots instead of one each" },
   { key: "flash_attention", label: "Flash attention", hint: "fused kernels where the backend has them" },
   { key: "mlock", label: "Lock in RAM", hint: "stops the OS paging the weights out" },
   { key: "keep_in_memory", label: "Keep loaded", hint: "hold the weights between sessions instead of reloading" },
@@ -120,8 +124,32 @@ export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) 
       });
   }
 
+  /**
+   * The settings LM Studio uses for a model this size on a card this size,
+   * which is a well-tested answer to a question this app should not make
+   * anyone research. Everything except how many layers fit, which depends on
+   * the card and is left where it is.
+   */
+  function tune() {
+    set({
+      kv_cache_on_gpu: true,
+      keep_in_memory: true,
+      kv_unified: true,
+      flash_attention: true,
+      batch_size: 2048,
+      ubatch_size: 512,
+      parallel: 4,
+    });
+  }
+
   if (!s) return null;
   const r = s.runtime;
+  const tuned =
+    r.kv_cache_on_gpu &&
+    r.kv_unified &&
+    r.flash_attention &&
+    r.batch_size >= 2048 &&
+    r.parallel >= 4;
 
   return (
     <section className="model-role">
@@ -171,6 +199,31 @@ export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) 
         build pinned a year ago cannot read a model published last month.
       </p>
 
+      {/* The trap: the CPU build ignores `-ngl` entirely, so the offload
+          slider reads as if the card is being used when nothing is. Prompt
+          processing at CPU speed is the symptom, and there is no way to tell
+          from the slider. */}
+      {status?.server_build?.includes("cpu") && r.gpu_layers > 0 && (
+        <p className="blurb warn">
+          This is the CPU build, so GPU offload does nothing — the slider says
+          {" "}{r.gpu_layers} layers and none of them are on the card. Install
+          the GPU build to use it.
+        </p>
+      )}
+
+      {!tuned && (
+        <>
+          <p className="blurb">
+            These are not set for speed. Where the key/value cache lives and how
+            big a batch is read at once are, together, usually the difference
+            between a model that answers and one you wait for.
+          </p>
+          <button className="btn on" onClick={tune}>
+            Set them for speed
+          </button>
+        </>
+      )}
+
       <h3 className="section sub">How much of the machine it gets</h3>
       <div className="knobs">
         <Slider
@@ -217,13 +270,24 @@ export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) 
           <div className="knobs">
             <Slider
               label="Batch"
-              hint="tokens per pass; larger fills a GPU better"
+              hint="prompt tokens read at once — the one that decides how fast a long prompt is read"
               min={0}
               max={BATCHES.length - 1}
               step={1}
               value={Math.max(0, BATCHES.indexOf(r.batch_size))}
               display={String(r.batch_size)}
               onInput={(i) => set({ batch_size: BATCHES[i] }, false)}
+              onCommit={commit}
+            />
+            <Slider
+              label="Micro-batch"
+              hint="how many of those are computed in one pass; bounded by memory, rarely worth raising"
+              min={0}
+              max={BATCHES.length - 1}
+              step={1}
+              value={Math.max(0, BATCHES.indexOf(r.ubatch_size))}
+              display={String(r.ubatch_size)}
+              onInput={(i) => set({ ubatch_size: BATCHES[i] }, false)}
               onCommit={commit}
             />
             <Slider

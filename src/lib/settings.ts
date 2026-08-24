@@ -46,6 +46,8 @@ export interface Runtime {
   threads: number;
   parallel: number;
   batch_size: number;
+  ubatch_size: number;
+  kv_unified: boolean;
   flash_attention: boolean;
   mlock: boolean;
   temperature: number;
@@ -238,4 +240,19 @@ export function onVoiceDownload(
 /** Read a reply out in the downloaded voice. */
 export function speakNeural(text: string): Promise<void> {
   return invoke("speak", { text });
+}
+
+
+/** What the embedded model is doing right now, from llama-server's own /slots. */
+export interface RuntimeStatus {
+  phase: "idle" | "reading" | "writing" | "";
+  prompt_done: number;
+  prompt_total: number;
+  prompt_cached: number;
+  context: number;
+  reachable: boolean;
+}
+
+export function runtimeStatus(): Promise<RuntimeStatus> {
+  return invoke<RuntimeStatus>("runtime_status");
 }

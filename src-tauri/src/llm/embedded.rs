@@ -412,6 +412,8 @@ impl Embedded {
             .arg(rt.parallel.max(1).to_string())
             .arg("--batch-size")
             .arg(rt.batch_size.max(32).to_string())
+            .arg("--ubatch-size")
+            .arg(rt.ubatch_size.max(32).min(rt.batch_size.max(32)).to_string())
             .arg("--temp")
             .arg(rt.temperature.to_string())
             .arg("--top-p")
@@ -438,6 +440,7 @@ impl Embedded {
         if rt.mlock {
             cmd.arg("--mlock");
         }
+        cmd.arg(if rt.kv_unified { "--kv-unified" } else { "--no-kv-unified" });
         // llama.cpp's flag is the negative one. Off by default there, so it is
         // only passed when the setting says to keep the cache on the CPU.
         if !rt.kv_cache_on_gpu {
@@ -709,6 +712,13 @@ fn explain(tail: &[String], code: Option<i32>) -> String {
             "this llama-server does not understand one of the settings — {arg}. \
              Installing the current build usually fixes it."
         );
+    }
+    if joined.contains("OutOfDeviceMemory") || joined.contains("out of memory") {
+        return "the graphics card does not have room for this. Close whatever \
+                else is using it — another model loaded in LM Studio or Ollama \
+                holds its memory until it is unloaded — or lower the context, \
+                which is what most of it goes on."
+            .into();
     }
     if joined.contains("invalid ggml type") || joined.contains("failed to load model") {
         return "this llama-server is too old to read that model. Install the current \
