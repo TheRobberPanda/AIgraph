@@ -1358,6 +1358,9 @@ blockquote {
 .knob-hint { grid-column: 2 / -1; font-size: 0.7rem; color: var(--faint); }
 .source-tabs.sub .btn { font-size: 0.8rem; }
 /* The one recommended answer, and everything else beside it. */
+.digest-group { gap: 0.25rem; align-items: center; }
+.queue-btn { padding: 0.2rem 0.5rem; font-size: 0.9rem; line-height: 1; }
+
 /* Call mode. The whole window, because a call is not a screen you read. */
 .call {
   position: fixed;

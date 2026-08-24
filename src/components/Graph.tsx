@@ -224,9 +224,17 @@ export default function Graph({ folder }: { folder: number | null }) {
   /** A view in flight, stepped by the draw loop. Retargeted every frame from
    *  the node's live position, so it lands centred even though the layout is
    *  still moving underneath it. */
-  const travelRef = useRef<
-    { node: Node; fromX: number; fromY: number; fromScale: number; toScale: number; t0: number } | null
-  >(null);
+  const travelRef = useRef<{
+    node: Node;
+    fromX: number;
+    fromY: number;
+    fromScale: number;
+    toScale: number;
+    /** Where the node was when the travel began, in world units. */
+    toX: number;
+    toY: number;
+    t0: number;
+  } | null>(null);
   /** Whether idea titles currently fit without overlapping. Held in a ref with
    *  a dead band so it does not blink on and off while the layout settles. */
   const labelsFitRef = useRef(true);
@@ -302,9 +310,18 @@ export default function Graph({ folder }: { folder: number | null }) {
       const scale = travel.fromScale + (travel.toScale - travel.fromScale) * e;
       const v = viewRef.current;
       v.scale = scale;
-      v.x = travel.fromX + (-(travel.node.x ?? 0) * scale - travel.fromX) * e;
-      v.y = travel.fromY + (-(travel.node.y ?? 0) * scale - travel.fromY) * e;
-      if (t >= 1) travelRef.current = null;
+      // Aimed at where the node was when it was clicked, not at where it is
+      // this frame. Re-aiming every frame chased a target the simulation was
+      // still moving, and easing toward a moving point oscillates — which is
+      // what the shaking was. The node is pinned for the duration instead, so
+      // the destination and the thing at it agree.
+      v.x = travel.fromX + (-travel.toX * scale - travel.fromX) * e;
+      v.y = travel.fromY + (-travel.toY * scale - travel.fromY) * e;
+      if (t >= 1) {
+        travel.node.fx = null;
+        travel.node.fy = null;
+        travelRef.current = null;
+      }
     }
 
     const hover = hoverRef.current;
@@ -730,19 +747,8 @@ export default function Graph({ folder }: { folder: number | null }) {
         // framing that opening it had just set up. Re-aim at what is being
         // looked at instead, so it ends up centred in the space that is left.
         const focused = focusNodeRef.current;
-        if (focused) {
-          const v = viewRef.current;
-          travelRef.current = {
-            node: focused,
-            fromX: v.x,
-            fromY: v.y,
-            fromScale: v.scale,
-            toScale: Math.min(2.2, Math.max(v.scale, 1.15)),
-            t0: performance.now(),
-          };
-        } else {
-          fitToView();
-        }
+        if (focused) travelTo(focused);
+        else fitToView();
       }, 180);
     });
     ro.observe(canvas);
@@ -778,7 +784,7 @@ export default function Graph({ folder }: { folder: number | null }) {
     if (focusNodeRef.current === n) {
       focusNodeRef.current = null;
       revealRef.current = new Set();
-      travelRef.current = null;
+      cancelTravel();
       return;
     }
     focusNodeRef.current = n;
@@ -792,7 +798,25 @@ export default function Graph({ folder }: { folder: number | null }) {
     }
     revealRef.current = near;
 
+    travelTo(n);
+  }
+
+  /** Stop a flight in progress, releasing whatever it had pinned. */
+  function cancelTravel() {
+    const travel = travelRef.current;
+    if (!travel) return;
+    travel.node.fx = null;
+    travel.node.fy = null;
+    travelRef.current = null;
+  }
+
+  /** Fly the view to a node and hold it still while doing so. */
+  function travelTo(n: Node) {
     const v = viewRef.current;
+    // Pinned for the flight. Without this the node drifts under the simulation
+    // while the view is moving toward it, and the whole map appears to shake.
+    n.fx = n.x ?? 0;
+    n.fy = n.y ?? 0;
     travelRef.current = {
       node: n,
       fromX: v.x,
@@ -801,6 +825,8 @@ export default function Graph({ folder }: { folder: number | null }) {
       // Close enough to read, without throwing away the surroundings. Already
       // closer than that, and the zoom is left where it was.
       toScale: Math.min(2.2, Math.max(v.scale, 1.15)),
+      toX: n.fx,
+      toY: n.fy,
       t0: performance.now(),
     };
   }
@@ -896,7 +922,7 @@ export default function Graph({ folder }: { folder: number | null }) {
         className="graph"
         onMouseDown={(e) => {
           // Any deliberate move of the view takes it over from the animation.
-          travelRef.current = null;
+          cancelTravel();
           const hit = nodeAt(e.clientX, e.clientY);
           if (hit) {
             // Pinned while held, so the rest of the map reorganises around it.
@@ -1020,7 +1046,7 @@ export default function Graph({ folder }: { folder: number | null }) {
           if (panelRef.current?.kind === kind && panelRef.current.id === id) {
             focusNodeRef.current = null;
             revealRef.current = new Set();
-            travelRef.current = null;
+            cancelTravel();
             setPanel(null);
             return;
           }
@@ -1030,7 +1056,7 @@ export default function Graph({ folder }: { folder: number | null }) {
         onWheel={(e) => {
           const canvas = canvasRef.current;
           if (!canvas) return;
-          travelRef.current = null;
+          cancelTravel();
           const rect = canvas.getBoundingClientRect();
           const px = e.clientX - rect.left - rect.width / 2;
           const py = e.clientY - rect.top - rect.height / 2;
@@ -1057,7 +1083,7 @@ export default function Graph({ folder }: { folder: number | null }) {
         <button
           className="graph-reset"
           onClick={() => {
-            travelRef.current = null;
+            cancelTravel();
             focusNodeRef.current = null;
             revealRef.current = new Set();
             fitToView();

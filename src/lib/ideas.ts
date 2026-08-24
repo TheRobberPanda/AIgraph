@@ -117,3 +117,9 @@ export function sourceView(evidenceId: number): Promise<SourceView> {
 export function reextractSession(sessionId: number): Promise<unknown> {
   return invoke("reextract_session", { sessionId });
 }
+
+
+/** The conversations waiting to be read, in the order they will be. */
+export function pendingSessions(): Promise<import("./chat").SessionSummary[]> {
+  return invoke("pending_sessions");
+}

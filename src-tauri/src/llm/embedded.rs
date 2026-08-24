@@ -313,11 +313,38 @@ impl Embedded {
 
     /// Still alive? `try_wait` rather than a flag, so a server that died on its
     /// own is not reported as running.
+    ///
+    /// A server we did not start counts too. The app can be killed — closed
+    /// while frozen, logged out, crashed — and `Drop` does not run then, so the
+    /// server outlives it and keeps the port. The next launch would try to
+    /// bind a port its own orphan was holding and report a failure that reads
+    /// like a broken install. Finding it and using it is the honest answer:
+    /// it is our process, running our model, on our port.
     pub fn is_running(&mut self) -> bool {
-        match self.child.as_mut() {
-            Some(c) => matches!(c.try_wait(), Ok(None)),
-            None => false,
+        if let Some(c) = self.child.as_mut() {
+            if matches!(c.try_wait(), Ok(None)) {
+                return true;
+            }
+            self.child = None;
         }
+        self.orphan().is_some()
+    }
+
+    /// A `llama-server` of ours from a previous run, if one is still up.
+    ///
+    /// Both halves are checked: the port has to be answering *and* the pid we
+    /// recorded has to still be a llama-server. Either alone is a way to
+    /// mistake somebody else's server for ours and then kill it.
+    fn orphan(&self) -> Option<u32> {
+        if !port_answering() {
+            return None;
+        }
+        let pid: u32 = std::fs::read_to_string(self.pid_path()).ok()?.trim().parse().ok()?;
+        is_llama_server(pid).then_some(pid)
+    }
+
+    fn pid_path(&self) -> PathBuf {
+        self.engine_dir().join("server.pid")
     }
 
     /// Fetch the weights. Resumable only in the sense that a failed attempt
@@ -403,6 +430,8 @@ impl Embedded {
         }
 
         let mut child = cmd.spawn().map_err(|e| format!("could not start llama-server: {e}"))?;
+        let _ = std::fs::create_dir_all(self.engine_dir());
+        let _ = std::fs::write(self.pid_path(), child.id().to_string());
 
         // Drained on a thread so a full pipe cannot block the server, keeping
         // only the tail — enough to say what went wrong, not a log file.
@@ -448,6 +477,15 @@ impl Embedded {
         if let Some(mut c) = self.child.take() {
             let _ = c.kill();
             let _ = c.wait();
+            let _ = std::fs::remove_file(self.pid_path());
+            return;
+        }
+        // Nothing of ours in this process, but possibly one from a previous
+        // run. Stopping has to reach that too, or the button says "stop" and
+        // the model stays loaded.
+        if let Some(pid) = self.orphan() {
+            kill(pid);
+            let _ = std::fs::remove_file(self.pid_path());
         }
     }
 }
@@ -578,6 +616,45 @@ fn find_server(dir: &Path, depth: usize) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Is anything listening on our port?
+fn port_answering() -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    let addr: SocketAddr = format!("{HOST}:{PORT}").parse().expect("loopback address");
+    TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250)).is_ok()
+}
+
+/// Is this pid a live `llama-server`?
+#[cfg(unix)]
+fn is_llama_server(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
+        .map(|c| c.contains("llama-server"))
+        .unwrap_or(false)
+}
+
+/// Elsewhere, take the pid file's word for it. A stale pid whose number has
+/// been reused is possible in theory; the port check above already makes it
+/// unlikely, and the alternative is a platform-specific process listing for a
+/// case that resolves itself the moment someone presses stop.
+#[cfg(not(unix))]
+fn is_llama_server(_pid: u32) -> bool {
+    true
+}
+
+#[cfg(unix)]
+fn kill(pid: u32) {
+    // SAFETY: `kill` with a pid we recorded ourselves and just verified is a
+    // llama-server. SIGTERM so it can close its socket rather than leaving it
+    // in TIME_WAIT for the next launch to trip over.
+    unsafe {
+        libc::kill(pid as i32, libc::SIGTERM);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill(pid: u32) {
+    let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).status();
 }
 
 /// Turn the server's parting words into something worth reading.

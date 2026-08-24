@@ -20,6 +20,7 @@ import Confirm from "./components/Confirm";
 import Sheet from "./components/Sheet";
 import Select from "./components/Select";
 import Call from "./components/Call";
+import Queue from "./components/Queue";
 import FolderMark from "./components/FolderMark";
 import ContextMenu from "./components/ContextMenu";
 import Tooltip from "./components/Tooltip";
@@ -171,6 +172,7 @@ export default function App() {
   const [waitTick, setWaitTick] = useState(0);
   const [digesting, setDigesting] = useState<ExtractionProgress | null>(null);
   const [digestBusy, setDigestBusy] = useState(false);
+  const [showQueue, setShowQueue] = useState(false);
   // A pending delete or rewind, waiting on confirmation — losing a message is
   // not something a stray click should be able to do.
   const [turnAction, setTurnAction] = useState<{ index: number; kind: "delete" | "rewind" } | null>(
@@ -718,16 +720,27 @@ export default function App() {
         <div className="topbar-spacer" />
 
         {pending > 0 && (
-          <button
-            className="digest-btn"
-            disabled={digestBusy || !!digesting?.running}
-            onClick={() => {
-              setDigestBusy(true);
-              void extractNow().finally(() => setDigestBusy(false));
-            }}
-          >
-            {digesting?.running ? "Digesting…" : `Digest (${pending})`}
-          </button>
+          <span className="row digest-group">
+            <button
+              className="digest-btn"
+              disabled={digestBusy || !!digesting?.running}
+              onClick={() => {
+                setDigestBusy(true);
+                void extractNow().finally(() => setDigestBusy(false));
+              }}
+            >
+              {digesting?.running ? "Digesting…" : `Digest (${pending})`}
+            </button>
+            {/* The count says how many; this says which, and lets one be
+                thrown away before it costs a reading. */}
+            <button
+              className="digest-btn queue-btn"
+              data-tip="What is waiting to be read"
+              onClick={() => setShowQueue(true)}
+            >
+              ⋯
+            </button>
+          </span>
         )}
 
         <div className="topbar-tabs topbar-setup">
@@ -1067,6 +1080,13 @@ export default function App() {
             void setCurrentFolder(id);
           }}
           onClose={() => setPickingFolder(false)}
+        />
+      )}
+
+      {showQueue && (
+        <Queue
+          onClose={() => setShowQueue(false)}
+          onChanged={() => void extractionProgress().then(setDigesting)}
         />
       )}
 

@@ -50,6 +50,8 @@ pub fn run() {
             commands::diagnostics,
             commands::extract_now,
             commands::extraction_progress,
+            commands::pending_sessions,
+            commands::pending_sessions,
             commands::source_view,
             commands::speech_model_status,
             commands::download_speech_model,

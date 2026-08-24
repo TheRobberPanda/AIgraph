@@ -769,6 +769,24 @@ pub async fn extract_now(app: tauri::AppHandle, state: State<'_, AppState>) -> R
     Ok(true)
 }
 
+/// The conversations waiting to be read, in the order they will be.
+///
+/// The queue is invisible otherwise: the count in the corner says how many are
+/// waiting and nothing says *which*, so the only way to stop one being read is
+/// to find it in the list and guess.
+#[tauri::command]
+pub async fn pending_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::store::SessionSummary>, String> {
+    let store = state.store.lock().await;
+    let ids = store.pending_extraction().map_err(|e| e.to_string())?;
+    let all = store.list_sessions(500, None).map_err(|e| e.to_string())?;
+    Ok(ids
+        .iter()
+        .filter_map(|id| all.iter().find(|s| s.id == *id).cloned())
+        .collect())
+}
+
 #[tauri::command]
 pub async fn extraction_progress(
     state: State<'_, AppState>,
