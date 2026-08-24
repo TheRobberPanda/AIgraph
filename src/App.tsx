@@ -20,6 +20,7 @@ import {
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
 import Sheet from "./components/Sheet";
+import Select from "./components/Select";
 import FolderMark from "./components/FolderMark";
 import ContextMenu from "./components/ContextMenu";
 import Tooltip from "./components/Tooltip";
@@ -520,54 +521,75 @@ export default function App() {
               <div className="setup">
                 <h1>Pick a model</h1>
 
-                {usable.length === 0 ? (
+                {/* One question with one recommended answer, rather than a
+                    list of things to go and install. Running it here is the
+                    only option that works with nothing else on the machine, so
+                    it is the button; everything else is the dropdown beside
+                    it. */}
+                <p className="blurb">
+                  Idea Graph needs a model to talk to. It can run one itself —
+                  nothing else to install, and nothing said to it leaves this
+                  machine.
+                </p>
+
+                <div className="row setup-choice">
+                  <button className="btn on big" onClick={() => setSetupModels(true)}>
+                    Run a model in the app
+                  </button>
+                  <Select
+                    value=""
+                    placeholder="I have my own"
+                    options={[
+                      { value: "lmstudio", label: "LM Studio" },
+                      { value: "ollama", label: "Ollama" },
+                      { value: "cloud", label: "An API key or Claude" },
+                    ]}
+                    onChange={() => setSetupModels(true)}
+                  />
+                </div>
+
+                {usable.length > 0 && (
                   <>
-                    <p className="blurb">
-                      {idle
-                        ? "A model server is running, but nothing is loaded in it. Load a model and look again."
-                        : "Nothing to talk to yet. Idea Graph needs a model — local by default, so your thinking stays on this machine."}
-                    </p>
-                    <ul className="plain-list">
-                      <li>
-                        <strong>LM Studio</strong> — start it and load a model.
-                      </li>
-                      <li>
-                        <strong>Ollama</strong> — <code>ollama pull llama3.2</code>, then{" "}
-                        <code>ollama serve</code>.
-                      </li>
-                      <li>
-                        Prefer a remote model, or already pay for Claude? Set that up in{" "}
-                        <strong>Models</strong>.
-                      </li>
-                    </ul>
+                    <h2 className="section">Already running</h2>
+                    {usable.map((srv) => (
+                      <section key={srv.kind}>
+                        <ul className="list">
+                          {chatModels(srv)
+                            // Ready models first — those start answering immediately.
+                            .sort((a, b) => Number(b.loaded ?? true) - Number(a.loaded ?? true))
+                            .map((m) => (
+                              <li key={m.id}>
+                                <button
+                                  className="row-btn"
+                                  onClick={() =>
+                                    selectProvider(srv.kind, srv.host, m.id)
+                                      .then(setProvider)
+                                      .catch((e) => setError(String(e)))
+                                  }
+                                >
+                                  <span className="row-main">{m.id}</span>
+                                  <span className="row-meta">
+                                    {srv.kind === "lmstudio"
+                                      ? "LM Studio"
+                                      : srv.kind === "embedded"
+                                        ? "In the app"
+                                        : "Ollama"}
+                                  </span>
+                                  {m.loaded === false && <span className="tag">needs loading</span>}
+                                  {m.loaded === true && <span className="tag ready">ready</span>}
+                                </button>
+                              </li>
+                            ))}
+                        </ul>
+                      </section>
+                    ))}
                   </>
-                ) : (
-                  usable.map((s) => (
-                    <section key={s.kind}>
-                      <h2 className="section">{s.kind === "lmstudio" ? "LM Studio" : "Ollama"}</h2>
-                      <ul className="list">
-                        {chatModels(s)
-                          // Ready models first — those start answering immediately.
-                          .sort((a, b) => Number(b.loaded ?? true) - Number(a.loaded ?? true))
-                          .map((m) => (
-                            <li key={m.id}>
-                              <button
-                                className="row-btn"
-                                onClick={() =>
-                                  selectProvider(s.kind, s.host, m.id)
-                                    .then(setProvider)
-                                    .catch((e) => setError(String(e)))
-                                }
-                              >
-                                <span className="row-main">{m.id}</span>
-                                {m.loaded === false && <span className="tag">needs loading</span>}
-                                {m.loaded === true && <span className="tag ready">ready</span>}
-                              </button>
-                            </li>
-                          ))}
-                      </ul>
-                    </section>
-                  ))
+                )}
+
+                {usable.length === 0 && idle && (
+                  <p className="blurb">
+                    A model server is running, but nothing is loaded in it.
+                  </p>
                 )}
 
                 <div className="row setup-bar">

@@ -23,6 +23,10 @@ use super::{ChatProvider, IdeaExtractor};
 pub enum LocalKind {
     Ollama,
     LmStudio,
+    /// The `llama-server` the app started for itself. Speaks the same API as
+    /// LM Studio, so it is a provider like any other rather than a special
+    /// case threaded through the app.
+    Embedded,
     Anthropic,
     ClaudeCli,
 }
@@ -32,6 +36,7 @@ impl LocalKind {
         match self {
             LocalKind::Ollama => "Ollama",
             LocalKind::LmStudio => "LM Studio",
+            LocalKind::Embedded => "In the app",
             LocalKind::Anthropic => "Anthropic",
             LocalKind::ClaudeCli => "Claude CLI",
         }
@@ -73,6 +78,14 @@ impl Detected {
 /// app appears to hang with no explanation. Better to ask than to guess wrong:
 /// the model shapes what ends up in the diagram.
 pub fn obvious_choice(servers: &[Detected]) -> Option<(&Detected, &ModelInfo)> {
+    // The one exception to being conservative: a model the app started itself
+    // was started deliberately, by someone pressing a button, with one model
+    // named on it. There is nothing left to ask.
+    if let Some(own) = servers.iter().find(|s| s.kind == LocalKind::Embedded) {
+        if let [model] = own.ready_models()[..] {
+            return Some((own, model));
+        }
+    }
     let with_ready: Vec<&Detected> = servers.iter().filter(|s| !s.ready_models().is_empty()).collect();
     let [server] = with_ready[..] else { return None };
     let ready = server.ready_models();
@@ -84,7 +97,28 @@ pub fn obvious_choice(servers: &[Detected]) -> Option<(&Detected, &ModelInfo)> {
 ///
 /// Returns every one that responded — if the user runs both, that is their
 /// business and the UI should show the choice rather than pick silently.
+/// Where the app's own `llama-server` listens. Loopback only.
+pub const EMBEDDED_HOST: &str = "http://127.0.0.1:8127";
+
 pub async fn probe_local() -> Vec<Detected> {
+    let embedded = async {
+        let e = OpenAiCompat::new(EMBEDDED_HOST, "", None, "embedded");
+        if !e.is_available().await {
+            return None;
+        }
+        let models = match e.list_models_detailed().await {
+            Some(detailed) => detailed,
+            None => e
+                .list_models()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|id| ModelInfo { id, loaded: Some(true), kind: ModelKind::Chat })
+                .collect(),
+        };
+        Some(Detected { kind: LocalKind::Embedded, host: EMBEDDED_HOST.to_string(), models })
+    };
+
     let ollama = async {
         let o = Ollama::new(OLLAMA_HOST, "");
         if !o.is_available().await {
@@ -163,11 +197,16 @@ pub async fn probe_local() -> Vec<Detected> {
         })
     };
 
-    let (a, b, c, d) = tokio::join!(ollama, lm_studio, anthropic, claude_cli);
+    let (e, a, b, c, d) = tokio::join!(embedded, ollama, lm_studio, anthropic, claude_cli);
     // Servers with nothing usable are kept in the list so the UI can say
     // "running, but load a model" instead of "not found", which would send the
     // user hunting the wrong problem.
-    [a, b, c, d].into_iter().flatten().collect()
+    //
+    // The app's own server comes first, and everything downstream that picks
+    // "the first usable one" therefore prefers it — which is the right default:
+    // it is the one the app is responsible for and the one that needs nothing
+    // else installed.
+    [e, a, b, c, d].into_iter().flatten().collect()
 }
 
 /// Build a chat provider.
@@ -175,6 +214,8 @@ pub fn chat_provider(kind: LocalKind, host: &str, model: &str) -> Arc<dyn ChatPr
     match kind {
         LocalKind::Ollama => Arc::new(Ollama::new(host, model)),
         LocalKind::LmStudio => Arc::new(OpenAiCompat::new(host, model, None, "lmstudio")),
+        LocalKind::Embedded => Arc::new(OpenAiCompat::new(host, model, None, "embedded")),
+        LocalKind::Embedded => Arc::new(OpenAiCompat::new(host, model, None, "embedded")),
         LocalKind::Anthropic => Arc::new(AnthropicProvider::new(
             crate::secrets::get(crate::secrets::ANTHROPIC).unwrap_or_default(),
             model,
@@ -191,6 +232,7 @@ pub fn extractor(kind: LocalKind, host: &str, model: &str) -> Arc<dyn IdeaExtrac
     match kind {
         LocalKind::Ollama => Arc::new(Ollama::new(host, model)),
         LocalKind::LmStudio => Arc::new(OpenAiCompat::new(host, model, None, "lmstudio")),
+        LocalKind::Embedded => Arc::new(OpenAiCompat::new(host, model, None, "embedded")),
         LocalKind::Anthropic => Arc::new(AnthropicProvider::new(
             crate::secrets::get(crate::secrets::ANTHROPIC).unwrap_or_default(),
             model,

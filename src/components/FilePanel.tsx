@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef } from "react";
 
-/** How much of the split the panel takes when first opened. */
-const DEFAULT_SHARE = 0.4;
+/**
+ * How much of the split the panel takes when first opened.
+ *
+ * Two thirds. A file is opened to be read, and the map behind it only has to
+ * show where the thing being read sits — a third is enough for that, and less
+ * than that for the words is not enough to read them in.
+ */
+const DEFAULT_SHARE = 0.65;
 /**
  * Narrower than this and the transcript and the list of ideas cannot both fit
  * beside each other at a readable width — 15rem for the words, the list's

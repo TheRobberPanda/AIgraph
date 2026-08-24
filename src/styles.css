@@ -1132,6 +1132,16 @@ blockquote {
   border-radius: 2px; padding: 0.03em 0.12em; cursor: pointer;
 }
 .extracted:hover { background: color-mix(in srgb, var(--gold) 38%, transparent); }
+/* Pointed at from the list beside it. Brighter than hover and outlined, so it
+   is findable at a glance after the scroll lands rather than needing to be
+   hunted among the other highlights. */
+.extracted.lit {
+  background: color-mix(in srgb, var(--gold) 52%, transparent);
+  box-shadow:
+    inset 0 -1px 0 var(--gold),
+    0 0 0 2px color-mix(in srgb, var(--gold) 45%, transparent);
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
 .why {
   display: none; position: absolute; left: 0; top: calc(100% + 0.35rem); z-index: 5;
   width: min(28rem, 70vw); padding: 0.55rem 0.7rem;
@@ -1347,6 +1357,9 @@ blockquote {
 }
 .knob-hint { grid-column: 2 / -1; font-size: 0.7rem; color: var(--faint); }
 .source-tabs.sub .btn { font-size: 0.8rem; }
+/* The one recommended answer, and everything else beside it. */
+.setup-choice { align-items: center; gap: 0.6rem; margin: 0.6rem 0 1.4rem; }
+.btn.big { padding: 0.6rem 1.1rem; font-size: 1rem; }
 
 /* A settings section, closed until asked for. */
 .fold { border-bottom: 1px solid var(--line); }

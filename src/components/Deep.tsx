@@ -74,6 +74,7 @@ export function ConversationFile({
   const [error, setError] = useState<string | null>(null);
   /** Which recorded idea is being pointed at, so its source can be shown. */
   const [trace, setTrace] = useState<number | null>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
   /**
    * An idea opened over this file rather than instead of it.
    *
@@ -97,6 +98,32 @@ export function ConversationFile({
       });
       return acc;
     }, []);
+
+  /**
+   * Bring the words an idea came from into view, in the middle of the pane.
+   *
+   * Pointing at an entry is asking "where did this come from"; answering with
+   * a highlight somewhere off-screen is not an answer. Centred rather than
+   * merely scrolled into view, because a span that lands hard against the top
+   * edge has no surrounding sentence to read it against — and the surrounding
+   * sentence is the point.
+   */
+  function show(ideaId: number) {
+    const box = transcriptRef.current;
+    const mark = box?.querySelector<HTMLElement>(`mark[data-idea="${ideaId}"]`);
+    if (!box || !mark) return;
+    // The nearest scrolling ancestor is the pane, not the transcript, so the
+    // offset is worked out by hand rather than left to scrollIntoView — which
+    // would scroll the whole file and take the list off screen with it.
+    const scroller = box.closest<HTMLElement>(".pane-inner");
+    if (!scroller) return;
+    const top =
+      mark.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top +
+      scroller.scrollTop -
+      scroller.clientHeight / 2;
+    scroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+  }
 
   useEffect(() => {
     setView(null);
@@ -133,7 +160,7 @@ export function ConversationFile({
           <div className="deep-split">
           <div className="deep-main">
           <h3 className="section">The conversation</h3>
-          <div className="deep-transcript">
+          <div className="deep-transcript" ref={transcriptRef}>
             {view.turns.map((turn) =>
               turn.role === "user" ? (
                 <p key={turn.id} className="turn user">
@@ -144,7 +171,8 @@ export function ConversationFile({
                     ) : (
                       <mark
                         key={i}
-                        className="extracted"
+                        className={seg.idea_id === trace ? "extracted lit" : "extracted"}
+                        data-idea={seg.idea_id ?? undefined}
                         onClick={() => seg.idea_id && setOpenIdea(seg.idea_id)}
                       >
                         {seg.text}
@@ -183,6 +211,7 @@ export function ConversationFile({
                     onMouseEnter={() => {
                       setTrace(t.ideaId);
                       onTrace?.(t.ideaId);
+                      show(t.ideaId);
                     }}
                     onMouseLeave={() => {
                       setTrace(null);
