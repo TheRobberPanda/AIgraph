@@ -83,6 +83,9 @@ export default function Ideas({ folder }: { folder: number | null }) {
   const [moving, setMoving] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
+  /** Subjects being shown. Empty means all of them — the same toggle the map's
+   *  legend uses, so a subject is picked out the same way in both places. */
+  const [subjects, setSubjects] = useState<Set<string>>(new Set());
   // Re-renders once a second purely so the elapsed counter advances between
   // phase events — which can be minutes apart on a local model.
   const [, tick] = useState(0);
@@ -102,10 +105,26 @@ export default function Ideas({ folder }: { folder: number | null }) {
    * and repeating it under every conversation that touched it would turn one
    * idea into several list entries.
    */
+  /** Every subject in view, commonest first, so the filter is ordered by how
+   *  much of the list each one accounts for. */
+  const tags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const i of ideas) {
+      if (!i.category) continue;
+      counts.set(i.category, (counts.get(i.category) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [ideas]);
+
+  const shown = useMemo(
+    () => (subjects.size === 0 ? ideas : ideas.filter((i) => subjects.has(i.category))),
+    [ideas, subjects],
+  );
+
   const groups = useMemo(() => {
     const bySession = new Map<number, Idea[]>();
     const orphaned: Idea[] = [];
-    for (const idea of ideas) {
+    for (const idea of shown) {
       const first = idea.evidence.reduce<Evidence | null>(
         (min, e) => (min === null || e.id < min.id ? e : min),
         null,
@@ -169,7 +188,7 @@ export default function Ideas({ folder }: { folder: number | null }) {
       );
 
     return { foldered, orphaned };
-  }, [ideas, sessions, folders]);
+  }, [shown, sessions, folders]);
 
   function toggle(sessionId: number) {
     setOpened((prev) => {
@@ -235,7 +254,8 @@ export default function Ideas({ folder }: { folder: number | null }) {
               as soon as a folder is chosen, and showing the global count
               beside an empty list reads as a bug. */}
           <span>
-            <strong>{ideas.length}</strong> ideas
+            <strong>{shown.length}</strong> ideas
+            {subjects.size > 0 && <span className="muted"> of {ideas.length}</span>}
           </span>
           {/* The honesty metric. Shown rather than logged, because a drop rate
               nobody looks at is a drop rate nobody fixes. */}
@@ -255,8 +275,38 @@ export default function Ideas({ folder }: { folder: number | null }) {
         </div>
       )}
 
+      {tags.length > 1 && (
+        <div className="tag-filter">
+          {tags.map(([name, n]) => (
+            <button
+              type="button"
+              key={name}
+              className={subjects.has(name) ? "on" : undefined}
+              aria-pressed={subjects.has(name)}
+              onClick={() =>
+                setSubjects((prev) => {
+                  const next = new Set(prev);
+                  if (!next.delete(name)) next.add(name);
+                  return next;
+                })
+              }
+            >
+              <i style={{ background: categoryColor(name) }} /> {name}
+              <span className="row-meta">{n}</span>
+            </button>
+          ))}
+          {subjects.size > 0 && (
+            <button type="button" className="tag-filter-clear" onClick={() => setSubjects(new Set())}>
+              Show all
+            </button>
+          )}
+        </div>
+      )}
+
       {ideas.length === 0 ? (
         <p className="empty">No ideas yet.</p>
+      ) : shown.length === 0 ? (
+        <p className="empty">Nothing filed under that subject.</p>
       ) : (
         <div className="tree">
           {groups.foldered.map((folder) => (

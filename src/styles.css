@@ -486,12 +486,13 @@ input, textarea {
    floor rather than being squeezed into a column two words wide. The panel
    cannot be dragged narrower than the two of them need. */
 .deep-split { display: flex; gap: 1.6rem; align-items: flex-start; }
-/* Both sides carry an explicit basis rather than sizing from their content:
-   with `auto`, the transcript's own width won the shrink and pushed the list
-   off the edge of the panel. Spare room goes mostly to the words, and pressure
-   comes mostly off the titles, which wrap happily. */
-.deep-main { flex: 3 1 22rem; min-width: 15rem; }
-.deep-aside { flex: 1 2 14rem; min-width: 9rem; max-width: 22rem; position: sticky; top: 0; }
+/* The list is a fixed column and the transcript takes whatever is left, so
+   widening the panel widens the words. The transcript's basis is zero rather
+   than `auto`: sized from its content it competed with the list for the
+   shrink, and the fixed column turned out not to be fixed at all. The panel's
+   own minimum width is what guarantees the transcript still has room. */
+.deep-main { flex: 1 1 0; min-width: 15rem; }
+.deep-aside { flex: 0 0 18rem; position: sticky; top: 0; }
 .taken-head {
   margin: 0 0 0.6rem;
   font-size: 1rem;
@@ -1176,7 +1177,10 @@ blockquote {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  /* The transcript's floor plus the list's fixed column, in rem so it tracks
+     the interface-scale setting — a pixel minimum stops guaranteeing anything
+     the moment the text gets bigger. */
+  min-width: 37rem;
   background: var(--surface);
   border-left: 1px solid var(--line);
   /* Scrolling happens on .pane-inner inside, not here — a second scrollbar on
@@ -1299,6 +1303,34 @@ blockquote {
 .graph-key button.pinned { border-color: var(--line); }
 .graph-key .conv-key { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.1rem 0.3rem; }
 .graph-key i { width: 7px; height: 7px; border-radius: 50%; }
+
+/* Picking a subject out of the idea list, the same toggle the map's legend
+   uses. Several can be on at once: two subjects that keep coming up together
+   are worth seeing side by side. */
+.tag-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0 0 0.9rem;
+}
+.tag-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.tag-filter button:hover { background: var(--surface); }
+.tag-filter button.on { background: var(--surface-lift); color: var(--fg); border-color: var(--faint); }
+.tag-filter i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.tag-filter .row-meta { font-size: 0.7rem; }
+.tag-filter-clear { color: var(--accent); border-style: dashed; }
 
 .nudge-layer { position: absolute; inset: 0; pointer-events: none; }
 .wash { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg) 82%, transparent); animation: wash-in 140ms ease forwards; }

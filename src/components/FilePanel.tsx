@@ -4,10 +4,10 @@ import { useCallback, useEffect, useRef } from "react";
 const DEFAULT_SHARE = 0.4;
 /**
  * Narrower than this and the transcript and the list of ideas cannot both fit
- * beside each other at a readable width — 17rem for the words, 9rem for the
- * titles, the gap between them, and the pane's own padding.
+ * beside each other at a readable width — 15rem for the words, the list's
+ * fixed 18rem, the gap between them, and the pane's own padding.
  */
-const MIN_WIDTH = 490;
+const MIN_WIDTH = 610;
 
 /**
  * A node or row's file, opened beside whatever it was opened from — the map,
