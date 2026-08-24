@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { runtimeStatus, type RuntimeStatus } from "../lib/settings";
+import {
+  embeddedStatus,
+  runtimeStatus,
+  startEmbedded,
+  stopEmbedded,
+  type EmbeddedStatus,
+  type RuntimeStatus,
+} from "../lib/settings";
+import { IconPlay, IconStop } from "./Icons";
 
 /**
  * What the model is doing, for anyone who wants to know.
@@ -13,9 +21,35 @@ import { runtimeStatus, type RuntimeStatus } from "../lib/settings";
  * `llama-server`'s own `/slots` rather than from anything the app infers, so
  * it is worth trusting when something is wrong.
  */
-export default function Vitals() {
+export default function Vitals({ onChanged }: { onChanged?: () => void }) {
   const [open, setOpen] = useState(false);
   const [s, setS] = useState<RuntimeStatus | null>(null);
+  const [engine, setEngine] = useState<EmbeddedStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Whether the model is up is worth knowing wherever you are — it is the
+  // difference between "slow" and "not running", and hunting for it in a tab
+  // is the wrong moment to be navigating.
+  useEffect(() => {
+    const tick = () => void embeddedStatus().then(setEngine).catch(() => {});
+    tick();
+    const id = setInterval(tick, 4000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function toggle() {
+    setBusy(true);
+    try {
+      if (engine?.running) await stopEmbedded();
+      else await startEmbedded();
+      setEngine(await embeddedStatus());
+      onChanged?.();
+    } catch {
+      /* the panel that owns this says why */
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -34,11 +68,32 @@ export default function Vitals() {
     };
   }, [open]);
 
+  const run = (
+    <button
+      className={busy ? "status-toggle busy" : engine?.running ? "status-toggle on" : "status-toggle"}
+      disabled={busy || !engine?.model_ready}
+      data-tip={engine?.running ? "Stop the model and free the memory" : "Start the model"}
+      onClick={() => void toggle()}
+    >
+      {busy ? (
+        <span className="spinner" aria-hidden="true" />
+      ) : engine?.running ? (
+        <IconStop />
+      ) : (
+        <IconPlay />
+      )}
+      {busy ? "…" : engine?.running ? "running" : "stopped"}
+    </button>
+  );
+
   if (!open) {
     return (
-      <button className="status-toggle" data-tip="What the model is doing" onClick={() => setOpen(true)}>
-        details
-      </button>
+      <>
+        {run}
+        <button className="status-toggle" data-tip="What the model is doing" onClick={() => setOpen(true)}>
+          details
+        </button>
+      </>
     );
   }
 
@@ -46,6 +101,8 @@ export default function Vitals() {
     s && s.prompt_total > 0 ? Math.round((s.prompt_done / s.prompt_total) * 100) : null;
 
   return (
+    <>
+      {run}
     <button className="status-toggle on vitals" onClick={() => setOpen(false)}>
       {!s?.reachable ? (
         "no local server"
@@ -60,5 +117,6 @@ export default function Vitals() {
         <>idle · {s.context ? `${Math.round(s.context / 1024)}K context` : "loaded"}</>
       )}
     </button>
+    </>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Fold from "./Fold";
 import { useNoWheel } from "../lib/noWheel";
+import Engine from "./Engine";
 import {
   applyTheme,
   applyUiScale,
@@ -9,8 +10,10 @@ import {
   onServerDownload,
   onVoiceDownload,
   saveSettings,
+  embeddedStatus,
   transcriptsDir,
   voiceStatus,
+  type EmbeddedStatus,
   type Settings as S,
   type Theme,
 } from "../lib/settings";
@@ -35,6 +38,7 @@ export default function Settings() {
   const [dir, setDir] = useState("");
   const [speech, setSpeech] = useState<{ installed: boolean; mb: number } | null>(null);
   const [voice, setVoice] = useState<{ installed: boolean; download_mb: number } | null>(null);
+  const [server, setServer] = useState<EmbeddedStatus | null>(null);
   const [fetching, setFetching] = useState<{ what: string; received: number; total: number } | null>(
     null,
   );
@@ -59,6 +63,7 @@ export default function Settings() {
       .then((x) => setSpeech({ installed: x.installed, mb: x.download_mb }))
       .catch(() => {});
     void voiceStatus().then(setVoice).catch(() => {});
+    void embeddedStatus().then(setServer).catch(() => {});
     const p = onDownloadProgress(setDownloading);
     const q = onServerDownload(setFetching);
     const r = onVoiceDownload(setFetching);
@@ -288,6 +293,19 @@ export default function Settings() {
             </button>
           </>
         )}
+      </Fold>
+
+      <Fold
+        title="The engine"
+        summary={server?.server_ready ? server.server_build ?? "installed" : "none"}
+        {...fold("engine")}
+      >
+        <p className="blurb">
+          What actually runs a model the app holds itself. The CPU build works
+          everywhere; the GPU build uses whatever graphics card is here,
+          whoever made it, and is several times faster where there is one.
+        </p>
+        <Engine onChanged={() => void embeddedStatus().then(setServer).catch(() => {})} />
       </Fold>
 
       <Fold title="How this app uses AI" {...fold("ai")}>

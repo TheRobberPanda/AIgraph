@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import RuntimePanel from "./Runtime";
 import { modelName } from "../lib/format";
+import { IconDownload } from "./Icons";
 import { startup, type Detected, type ModelInfo } from "../lib/chat";
 import {
   activeModels,
@@ -54,9 +55,9 @@ const SOURCES: { id: Source; label: string; blurb: string }[] = [
   },
   {
     id: "cloud",
-    label: "Claude",
+    label: "Cloud API",
     blurb:
-      "Anthropic's API, or a subscription through the claude command. Transcripts leave this machine.",
+      "Claude, and anything else that speaks the same API. Transcripts leave this machine.",
   },
 ];
 
@@ -424,8 +425,16 @@ export default function Models() {
                     Download Bonsai ({embedded?.download_gb.toFixed(1) ?? "3.8"} GB)
                   </button>
                 )}
-                <button className={browse ? "btn on" : "btn"} onClick={() => setBrowse((b) => !b)}>
-                  {browse ? "Close the browser" : "Browse Hugging Face"}
+                {/* An icon beside the model rather than a sentence under it:
+                    fetching a different one is the same kind of act as
+                    fetching this one, and reads better as a button than as a
+                    proposal. */}
+                <button
+                  className={browse ? "icon-btn on" : "icon-btn"}
+                  data-tip={browse ? "Close the browser" : "Find another model on Hugging Face"}
+                  onClick={() => setBrowse((b) => !b)}
+                >
+                  <IconDownload />
                 </button>
               </div>
             )}
@@ -539,7 +548,7 @@ export default function Models() {
             ) : null}
           </section>
 
-          <RuntimePanel onChanged={() => void refresh()} />
+          <RuntimePanel />
         </>
       )}
     </div>

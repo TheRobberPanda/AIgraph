@@ -21,6 +21,7 @@ import Sheet from "./components/Sheet";
 import Select from "./components/Select";
 import Call from "./components/Call";
 import Queue from "./components/Queue";
+import Drawer from "./components/Drawer";
 import Vitals from "./components/Vitals";
 import FolderMark from "./components/FolderMark";
 import ContextMenu from "./components/ContextMenu";
@@ -966,6 +967,19 @@ export default function App() {
         <IconModels className="nav-icon" />
         <span>{provider ? modelName(provider.model) : "no model"}</span>
       </button>
+
+      {showModels && (
+        <Drawer
+          title="Which model is answering"
+          onClose={() => {
+            setShowModels(false);
+            // Whatever was chosen in there is the answer now.
+            void recheck();
+          }}
+        >
+          <Models />
+        </Drawer>
+      )}
       <div className="stream">
         {turns.length === 0 && !justArchived && (
           <p className="empty">
@@ -1259,18 +1273,6 @@ export default function App() {
         />
       )}
 
-      {showModels && (
-        <Sheet
-          onClose={() => {
-            setShowModels(false);
-            // Whatever was chosen in there is the answer now.
-            void recheck();
-          }}
-        >
-          <Models />
-        </Sheet>
-      )}
-
       {showQueue && (
         <Queue
           onClose={() => setShowQueue(false)}
@@ -1325,7 +1327,7 @@ export default function App() {
 
       <div className="statusbar">
         {provider ? `${provider.label} · ${modelName(provider.model)}` : "no model"}
-        {provider?.kind === "embedded" && <Vitals />}
+        {provider?.kind === "embedded" && <Vitals onChanged={() => void recheck()} />}
         <button
           className="status-toggle"
           onClick={() => void setLayoutMode(layout === "simple" ? "advanced" : "simple")}

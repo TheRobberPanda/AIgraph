@@ -1373,6 +1373,8 @@ blockquote {
 
 /* The live readout, beside the model that is producing it. */
 .vitals { font-variant-numeric: tabular-nums; }
+.statusbar .status-toggle { display: inline-flex; align-items: center; gap: 0.3rem; }
+.statusbar .status-toggle svg { width: 10px; height: 10px; }
 
 /* A download in progress. The bar answers "how far", which a spinner cannot. */
 .installing { display: flex; flex-direction: column; gap: 0.4rem; margin: 0.4rem 0 0.8rem; max-width: 34rem; }
@@ -1390,10 +1392,43 @@ blockquote {
   color: var(--fg);
 }
 
+/* A panel over one side of the pane, leaving the rest of it readable. */
+.drawer-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+.drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(34rem, 82%);
+  min-width: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  box-shadow: 8px 0 32px rgba(0, 0, 0, 0.35);
+  animation: drawer-in 160ms ease forwards;
+}
+@keyframes drawer-in { from { transform: translateX(-16px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .drawer { animation: none; } }
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-title { flex: 1; margin: 0; font-size: 0.95rem; font-weight: 600; }
+.drawer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.drawer-body .pane-inner { padding-top: 0.8rem; }
+
 /* The model, at the left edge of the conversation it is answering in. */
 .model-chip {
   position: absolute;
-  top: 0.6rem;
+  /* Bottom rather than top: it sits with the other things you reach for while
+     talking, not over the first thing you read. */
+  bottom: 0.6rem;
   left: 0.6rem;
   z-index: 3;
   display: inline-flex;

@@ -220,3 +220,30 @@ export function IconClock(props: SVGProps<SVGSVGElement>) {
     </Base>
   );
 }
+
+export function IconDownload(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+         strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M8 2v8" />
+      <path d="M4.5 7.5 8 11l3.5-3.5" />
+      <path d="M2.5 13.5h11" />
+    </svg>
+  );
+}
+
+export function IconStop(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" {...props}>
+      <rect x="4" y="4" width="8" height="8" rx="1.5" />
+    </svg>
+  );
+}
+
+export function IconPlay(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" {...props}>
+      <path d="M5 3.6v8.8a.6.6 0 0 0 .92.5l6.5-4.4a.6.6 0 0 0 0-1L5.92 3.1A.6.6 0 0 0 5 3.6Z" />
+    </svg>
+  );
+}

@@ -3,8 +3,6 @@ import { useNoWheel } from "../lib/noWheel";
 import {
   embeddedStatus,
   getSettings,
-  installLlamaServer,
-  onServerDownload,
   saveSettings,
   type EmbeddedStatus,
   type Runtime as R,
@@ -84,21 +82,15 @@ const SWITCHES: { key: keyof R; label: string; hint: string }[] = [
   { key: "keep_in_memory", label: "Keep loaded", hint: "hold the weights between sessions instead of reloading" },
 ];
 
-export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) {
+export default function RuntimePanel() {
   const [s, setS] = useState<S | null>(null);
   const [status, setStatus] = useState<EmbeddedStatus | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [fetching, setFetching] = useState<{ received: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState(false);
 
   useEffect(() => {
     void getSettings().then(setS);
     void embeddedStatus().then(setStatus).catch(() => {});
-    const p = onServerDownload(setFetching);
-    return () => {
-      void p.then((un) => un());
-    };
   }, []);
 
   function set(patch: Partial<R>, save = true) {
@@ -111,19 +103,6 @@ export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) 
     if (s) void saveSettings(s).catch((e) => setError(String(e)));
   };
 
-  function install(flavour: string) {
-    setBusy(flavour);
-    setFetching(null);
-    setError(null);
-    installLlamaServer(flavour)
-      .then(() => embeddedStatus().then(setStatus))
-      .then(() => onChanged?.())
-      .catch((e) => setError(String(e)))
-      .finally(() => {
-        setBusy(null);
-        setFetching(null);
-      });
-  }
 
   /**
    * The settings LM Studio uses for a model this size on a card this size,
@@ -143,11 +122,6 @@ export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) 
     });
   }
 
-  const pct =
-    fetching && fetching.total > 0
-      ? Math.min(100, Math.round((fetching.received / fetching.total) * 100))
-      : null;
-
   if (!s) return null;
   const r = s.runtime;
   const tuned =
@@ -159,69 +133,13 @@ export default function RuntimePanel({ onChanged }: { onChanged?: () => void }) 
 
   return (
     <section className="model-role">
-      <h3 className="section">The engine</h3>
       {error && <p className="error">{error}</p>}
-
-      {/* Shown whether or not one is installed already. It used to be an
-          alternative to the "ready" line, so pressing Reinstall — which is only
-          ever pressed when one *is* installed — showed nothing at all, and a
-          twenty-second download looked like a dead button. */}
-      {busy ? (
-        <div className="installing">
-          <div className="row">
-            <span className="spinner" aria-hidden="true" />
-            <span>
-              Fetching the {busy === "vulkan" ? "GPU" : "CPU"} build
-              {pct !== null ? ` — ${pct}%` : "…"}
-            </span>
-            <span className="row-meta">
-              {fetching ? `${(fetching.received / 1e6).toFixed(0)} MB` : "starting"}
-            </span>
-          </div>
-          <div className="bar-track">
-            <div
-              className={pct === null ? "bar-fill idle" : "bar-fill"}
-              style={pct === null ? undefined : { width: `${pct}%` }}
-            />
-          </div>
-        </div>
-      ) : status?.server_ready ? (
-        <div className="row">
-          <span className="tag ready">{status.server_build ?? "found on PATH"}</span>
-          <span className="row-meta">{status.server_path}</span>
-        </div>
-      ) : (
-        <p className="blurb">
-          Nothing to run a model with yet. The CPU build works everywhere; the
-          Vulkan build uses whatever graphics card is here, whoever made it.
+      {!status?.server_ready && (
+        <p className="blurb warn">
+          Nothing to run a model with yet. Install an engine in{" "}
+          <b>Settings → The engine</b>.
         </p>
       )}
-
-      <div className="row wrap">
-        <button
-          className={busy === "cpu" ? "btn busy" : "btn"}
-          disabled={busy !== null}
-          onClick={() => install("cpu")}
-        >
-          {busy === "cpu" && <span className="spinner" aria-hidden="true" />}
-          {status?.server_ready ? "Reinstall · CPU" : "Install · CPU"}
-        </button>
-        {status?.vulkan_available && (
-          <button
-            className={busy === "vulkan" ? "btn busy" : "btn"}
-            disabled={busy !== null}
-            onClick={() => install("vulkan")}
-          >
-            {busy === "vulkan" && <span className="spinner" aria-hidden="true" />}
-            {status?.server_ready ? "Reinstall · GPU" : "Install · GPU (Vulkan)"}
-          </button>
-        )}
-      </div>
-      <p className="blurb">
-        Always the current build, resolved when you press it rather than fixed
-        when this was written — quantisations move faster than releases, and a
-        build pinned a year ago cannot read a model published last month.
-      </p>
 
       {/* The trap: the CPU build ignores `-ngl` entirely, so the offload
           slider reads as if the card is being used when nothing is. Prompt
