@@ -215,6 +215,27 @@ export default function Settings() {
           ))}
       </Fold>
 
+      <Fold
+        title="Thinking out loud"
+        summary={s.reasoning ? "on" : "off"}
+        {...fold("reasoning")}
+      >
+        <p className="blurb">
+          Some models deliberate at length before answering. None of it is shown
+          or recorded here — it is time between asking and hearing, and on a
+          local model it is usually most of the wait. Off unless what you are
+          asking is genuinely hard.
+        </p>
+        <div className="row">
+          <button
+            className={s.reasoning ? "btn on" : "btn"}
+            onClick={() => void update({ reasoning: !s.reasoning })}
+          >
+            {s.reasoning ? "Thinking before answering" : "Answering directly"}
+          </button>
+        </div>
+      </Fold>
+
       <Fold title="Recall" summary={s.recall ? "on" : "off"} {...fold("recall")}>
                 <p className="blurb">
           Hands the conversation the titles of ideas already recorded in this

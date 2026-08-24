@@ -66,6 +66,13 @@ pub struct Settings {
     /// the box on the picker, which is the point at which someone has actually
     /// decided.
     pub ask_provider: bool,
+    /// Let the model think out loud before answering.
+    ///
+    /// Off. A reasoning model will spend thousands of tokens deliberating over
+    /// a sentence, and none of it is shown or recorded — it is pure latency
+    /// between asking and hearing. Worth turning on for something genuinely
+    /// hard, which is not most of what gets said to this app.
+    pub reasoning: bool,
     /// Seconds of quiet in a call before what you said is sent.
     ///
     /// Thinking out loud has pauses in it, and a short wait cuts people off
@@ -198,6 +205,7 @@ impl Default for Settings {
             voice: Voice::Off,
             recall: true,
             ask_provider: true,
+            reasoning: false,
             call_silence_seconds: 5,
             runtime: Runtime::default(),
             layout: Layout::default(),

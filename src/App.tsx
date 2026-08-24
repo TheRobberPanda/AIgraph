@@ -47,7 +47,7 @@ import {
   setCurrentFolder,
   ROOT_FOLDER,
 } from "./lib/folders";
-import { parseReply, speak, stopSpeaking } from "./lib/voice";
+import { parseReply, speak, speakNext, stopSpeaking, takeSentences } from "./lib/voice";
 import { modelName } from "./lib/format";
 import { runtimeStatus } from "./lib/settings";
 import { sessionTurns } from "./lib/sessions";
@@ -211,6 +211,8 @@ export default function App() {
   const [held, setHeld] = useState(false);
   /** How far the model has got reading the prompt, when it can say. */
   const [readProgress, setReadProgress] = useState<number | null>(null);
+  /** Reply text that has arrived but has not yet completed a sentence. */
+  const pendingSpeech = useRef("");
   const [callMode, setCallMode] = useState(false);
   const [idleMinutes, setIdleMinutes] = useState(30);
   const [idleOpen, setIdleOpen] = useState(false);
@@ -494,6 +496,7 @@ export default function App() {
 
     setDraft("");
     setError(null);
+    pendingSpeech.current = "";
     setStreaming(true);
     setThinking(false);
     setThoughtChars(0);
@@ -510,6 +513,18 @@ export default function App() {
             next[next.length - 1] = { role: "assistant", content: last.content + chunk };
             return next;
           });
+          // Spoken a sentence at a time as it arrives, rather than after the
+          // whole answer. At twenty tokens a second, waiting for the end is
+          // several seconds of silence at exactly the moment a call feels
+          // broken; this way the wait is the first sentence.
+          if (!voiceOn) return;
+          pendingSpeech.current += chunk;
+          const { spoken, rest } = takeSentences(pendingSpeech.current);
+          pendingSpeech.current = rest;
+          // The navigation marker is on the front of the first sentence and
+          // must not be read out. `speakNext` strips it, but only if it is
+          // still at the start of the piece it is given.
+          for (const piece of spoken) speakNext(piece, voiceKind === "neural");
         },
         // The scratchpad itself is never rendered — putting the model's thinking
         // in front of the user's own is exactly backwards for this app. Only the
@@ -536,7 +551,12 @@ export default function App() {
         if (layout === "simple") setView(open === "conversations" ? "ideas" : open);
         else setExpanded(open);
       }
-      if (voiceOn) speak(clean, voiceKind === "neural");
+      // Whatever did not end in a full stop — the last clause of the answer.
+      if (voiceOn) {
+        const tail = pendingSpeech.current.trim();
+        pendingSpeech.current = "";
+        if (tail) speakNext(tail, voiceKind === "neural");
+      }
     } catch (e) {
       setError(String(e));
       setTurns((t) => t.slice(0, -1));

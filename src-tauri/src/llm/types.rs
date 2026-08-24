@@ -24,6 +24,11 @@ pub struct ChatRequest {
     pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// Whether the model may think out loud first. Off means the answer starts
+    /// arriving immediately rather than after a page of deliberation nobody
+    /// reads.
+    #[serde(default)]
+    pub reasoning: bool,
 }
 
 /// One idea as the model reported it — before verification.

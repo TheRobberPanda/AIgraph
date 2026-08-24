@@ -201,11 +201,20 @@ impl ChatProvider for OpenAiCompat {
                 "content": m.content,
             })
         }));
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": req.model,
             "messages": messages,
             "stream": true,
         });
+        // Two spellings because two families of server read different ones and
+        // both ignore the other: llama.cpp takes `reasoning`, and the
+        // `enable_thinking` template argument is what LM Studio and vLLM pass
+        // through to the chat template. Sending both is how one request works
+        // against either.
+        if !req.reasoning {
+            body["reasoning"] = serde_json::json!("off");
+            body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+        }
 
         let resp = self
             .post("/chat/completions")

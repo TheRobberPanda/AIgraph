@@ -309,24 +309,37 @@ pub async fn send_message(
         }
     }
 
-    let (call_mode, recall) = {
+    let (call_mode, recall, reasoning) = {
         let s = state.settings.lock().await;
-        (s.call_mode, s.recall)
+        (s.call_mode, s.recall, s.reasoning)
     };
+
     // What has already been thought, by title, so the reply can connect the
-    // two. Read fresh each turn rather than cached: an idea recorded five
-    // minutes ago is exactly the one worth connecting to.
-    let titles = if recall {
-        let folder = *state.current_folder.lock().await;
-        state.store.lock().await.idea_titles(Some(folder), RECALL_LIMIT).unwrap_or_default()
-    } else {
-        Vec::new()
+    // two. Fetched once per conversation rather than every turn: the system
+    // prompt is the beginning of every request, and a changing one throws away
+    // the work the server already did on the prefix. Nothing new can appear
+    // here mid-conversation anyway — extraction runs when one ends.
+    let needs_recall = {
+        let guard = state.conversation.lock().await;
+        guard.as_ref().map(|c| !c.recall_decided()).unwrap_or(false)
     };
+    let titles = if recall && needs_recall {
+        let folder = *state.current_folder.lock().await;
+        Some(state.store.lock().await.idea_titles(Some(folder), RECALL_LIMIT).unwrap_or_default())
+    } else if needs_recall {
+        Some(Vec::new())
+    } else {
+        None
+    };
+
     let request = {
         let mut guard = state.conversation.lock().await;
         let convo = guard.as_mut().ok_or("no conversation")?;
         convo.set_call_mode(call_mode);
-        convo.set_recall(titles);
+        convo.set_reasoning(reasoning);
+        if let Some(titles) = titles {
+            convo.set_recall(titles);
+        }
         convo.push_user(&text);
         convo.to_request()
     };

@@ -45,6 +45,84 @@ function forSpeech(text: string): string {
 let current: SpeechSynthesisUtterance | null = null;
 
 /**
+ * Sentences waiting to be spoken, and whether one is being spoken now.
+ *
+ * A reply is generated at twenty-odd tokens a second, so waiting for all of it
+ * before saying any of it is several seconds of silence at the exact moment a
+ * call feels broken. Spoken a sentence at a time as they arrive, the wait is
+ * the first sentence rather than the whole answer — and speech is slower than
+ * generation, so after the first one the queue is never the thing you are
+ * waiting for.
+ */
+const queue: string[] = [];
+let draining = false;
+/** Bumped on stop, so a drain in flight knows it has been cancelled. */
+let generation = 0;
+
+/** Split off whatever complete sentences are at the front of a growing text. */
+export function takeSentences(buffer: string): { spoken: string[]; rest: string } {
+  const spoken: string[] = [];
+  let rest = buffer;
+  // A sentence ends at .?!… or a newline, followed by space or end. Decimals
+  // and abbreviations get through occasionally; the cost of that is a pause in
+  // the wrong place, against seconds of silence for the alternative.
+  const end = /([.!?\u2026]+["')\]]?\s|\n+)/;
+  for (;;) {
+    const m = rest.match(end);
+    if (!m || m.index === undefined) break;
+    const cut = m.index + m[0].length;
+    const piece = rest.slice(0, cut).trim();
+    rest = rest.slice(cut);
+    if (piece) spoken.push(piece);
+  }
+  return { spoken, rest };
+}
+
+/** Say one piece now, or as soon as whatever is being said finishes. */
+export function speakNext(text: string, neural = false): void {
+  const said = forSpeech(text);
+  if (!said) return;
+  queue.push(said);
+  if (!draining) void drain(neural);
+}
+
+async function drain(neural: boolean) {
+  draining = true;
+  const mine = generation;
+  while (queue.length && generation === mine) {
+    const next = queue.shift()!;
+    try {
+      if (neural) await speakNeural(next);
+      else await sayWithSystemVoice(next);
+    } catch {
+      // A voice that fails should not take the rest of the answer with it.
+      try {
+        await sayWithSystemVoice(next);
+      } catch {
+        /* nothing left to fall back to */
+      }
+    }
+  }
+  draining = false;
+}
+
+/** Resolves when the utterance has finished, so the queue paces itself. */
+function sayWithSystemVoice(said: string): Promise<void> {
+  return new Promise((resolve) => {
+    const synth = window.speechSynthesis;
+    if (!synth) return resolve();
+    const u = new SpeechSynthesisUtterance(said);
+    current = u;
+    u.onend = () => {
+      if (current === u) current = null;
+      resolve();
+    };
+    u.onerror = () => resolve();
+    synth.speak(u);
+  });
+}
+
+/**
  * Read a reply out. Any reply already being spoken is cut off first.
  *
  * The downloaded voice falls back to the system one on any failure — a missing
@@ -73,6 +151,8 @@ function system(said: string): void {
 }
 
 export function stopSpeaking(): void {
+  generation += 1;
+  queue.length = 0;
   window.speechSynthesis?.cancel();
   current = null;
 }

@@ -32,11 +32,23 @@ pub struct Conversation {
     /// off by construction unless someone turns it on, and the purity test
     /// checks the shape without it.
     recall: Vec<String>,
+    /// Whether recall has been decided for this conversation. Distinct from
+    /// the list being empty, which is a legitimate answer.
+    recall_set: bool,
+    /// Whether the model may think out loud before answering.
+    reasoning: bool,
 }
 
 impl Conversation {
     pub fn new(model: impl Into<String>) -> Self {
-        Self { model: model.into(), messages: Vec::new(), call_mode: false, recall: Vec::new() }
+        Self {
+            model: model.into(),
+            messages: Vec::new(),
+            call_mode: false,
+            recall: Vec::new(),
+            recall_set: false,
+            reasoning: false,
+        }
     }
 
     pub fn push_user(&mut self, content: impl Into<String>) {
@@ -58,6 +70,23 @@ impl Conversation {
     /// same machinery reconciliation already uses.
     pub fn set_recall(&mut self, titles: Vec<String>) {
         self.recall = titles;
+        self.recall_set = true;
+    }
+
+    /// Whether recall has already been decided for this conversation.
+    ///
+    /// It is decided once and then left alone. The system prompt is the
+    /// beginning of every request, and a server keeps the work it did on a
+    /// prefix it has seen before — so a prompt that changes between turns
+    /// throws that away from the first token and every turn pays to re-read
+    /// the whole conversation. Nothing new can appear in the list mid-way
+    /// regardless: extraction runs when a conversation ends.
+    pub fn recall_decided(&self) -> bool {
+        self.recall_set
+    }
+
+    pub fn set_reasoning(&mut self, on: bool) {
+        self.reasoning = on;
     }
 
     pub fn messages(&self) -> &[Message] {
@@ -97,6 +126,7 @@ impl Conversation {
         ChatRequest {
             model: self.model.clone(),
             messages: self.messages.clone(),
+            reasoning: self.reasoning,
             system: Some({
                 let mut sys = String::from(style::SYSTEM_PROMPT);
                 sys.push_str(style::NAVIGATION);
@@ -145,12 +175,17 @@ mod tests {
 
         let mut keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
         keys.sort();
+        // `reasoning` is a switch the person set, carrying nothing of theirs
+        // and saying nothing about the subject — it decides whether the model
+        // deliberates before answering, not what it answers. Anything beyond
+        // these four is a field steering the model per-request, which is what
+        // the promise is about.
         assert_eq!(
             keys,
-            vec!["messages", "model", "system"],
-            "the chat payload grew a field beyond the conversation and the one \
-             fixed system prompt — if that field steers the model per-request, \
-             the purity promise is broken"
+            vec!["messages", "model", "reasoning", "system"],
+            "the chat payload grew a field beyond the conversation, the one \
+             fixed system prompt, and the reasoning switch — if that field \
+             steers the model per-request, the purity promise is broken"
         );
         assert_eq!(req.messages.len(), 2);
         // Composed from compile-time constants only — never from anything the

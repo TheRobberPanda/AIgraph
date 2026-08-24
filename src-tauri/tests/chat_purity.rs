@@ -37,7 +37,9 @@ fn outgoing_payload_carries_only_the_conversation_and_the_fixed_house_voice() {
 
     let mut keys: Vec<_> = obj.keys().map(String::as_str).collect();
     keys.sort_unstable();
-    assert_eq!(keys, vec!["messages", "model", "system"]);
+    // `reasoning` is a switch the person set, not content: it decides whether
+    // the model deliberates before answering, not what it answers.
+    assert_eq!(keys, vec!["messages", "model", "reasoning", "system"]);
 
     let sys = json["system"].as_str().expect("system prompt is a string");
     assert!(
