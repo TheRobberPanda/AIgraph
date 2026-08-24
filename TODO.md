@@ -18,17 +18,26 @@ This is a fork rather than a task. The current behaviour is arguably better —
 nothing is rebuilt, and the map never covers what you're typing. Worth deciding
 together before building the alternative.
 
-## 2. GPU builds of llama-server
+## 2. CUDA on Linux, for the last twenty per cent
 
-Settings installs the CPU build. The GPU ones are per-vendor — CUDA, ROCm,
-Vulkan, Metal — and picking between them from inside the app means owning the
-whole matrix, which the licensing report identified as the real cost of
-embedding a model at all.
+Measured on an RTX 3060, Bonsai 27B Q1_0, 2351-token prompt:
 
-For now a `llama-server` on PATH is preferred over the one we fetch, so anyone
-who has built their own gets their GPU build without a setting. Detecting the
-vendor and fetching the matching archive is the version of this worth building,
-if it is built at all.
+| build | prompt | generation |
+|---|---|---|
+| CPU | 12 tok/s | 8.8 tok/s |
+| Vulkan | 268 tok/s | 22.1 tok/s |
+| LM Studio (CUDA) | — | ~28 tok/s |
+
+Vulkan gets most of the way there and is one archive for AMD, Nvidia and Intel.
+The remaining gap is CUDA, and llama.cpp **publishes no prebuilt CUDA tarball
+for Linux** — Windows gets `win-cuda-x64`, Linux gets CPU, Vulkan, ROCm, SYCL
+and OpenVINO. So CUDA on Linux means building from source, with the toolchain
+that implies.
+
+Worth doing only if the gap starts mattering. Two cheaper things first: offer
+the Windows CUDA build on Windows, where it costs nothing but a filename, and
+say in the app that Vulkan is the general answer and CUDA is faster on Nvidia
+if you have your own build on PATH.
 
 ## 3. Recall past a few hundred ideas
 
