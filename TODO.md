@@ -41,6 +41,58 @@ safely by dropping the oldest.
 
 ---
 
+# To try
+
+Not "build this" — "find out what this looks like". Worth a throwaway branch and
+a real folder of thinking before any of it becomes a feature.
+
+## T1. Deductive mode: one node everything hangs from
+
+Right now the map is flat: every idea is a peer, and structure comes from
+conversations and shared subjects. This is the opposite arrangement — a folder
+gets a **root claim**, and every other idea is somewhere on a chain beneath it.
+
+The shape being tested:
+
+1. Each recorded idea generates its own *why* — not "what does this mean" but
+   "why would this be true".
+2. The model answers that why in one claim.
+3. That answer gets asked why in turn, and so on, and chains that arrive at the
+   same answer merge.
+4. Whatever the chains converge on is the root: the most general thing that,
+   if true, would account for the rest.
+
+The bet is that the root gets sharper the more you put in — that it starts as a
+platitude and, after fifty conversations, is a sentence that actually says what
+you think. That is the whole thing worth finding out, and it cannot be reasoned
+about in advance: it either happens or the root stays a fortune cookie.
+
+What to build for the test, and no more:
+
+- A one-off command that walks a folder's ideas and produces the chains. Not
+  wired into extraction — it can take minutes and cost a hundred calls.
+- A second map layout that draws the tree: root at the centre, chains radiating
+  out, ideas as leaves.
+- Nothing written to `ideas` or `relations`. A separate table, or a JSON file,
+  so a bad run is deleted rather than migrated away from.
+
+Known problems to watch for rather than solve up front:
+
+- **The model will happily invent a root.** A convergence that comes from the
+  model's own priors rather than from what was said is the failure mode, and it
+  will look exactly like success. The check is whether the intermediate claims
+  can still be traced to something in a transcript — the same provenance rule
+  the rest of the app runs on, applied one level up.
+- **Why-chains do not terminate on their own.** They bottom out in "because
+  people are like that" unless something stops them. A depth cap is the crude
+  answer; a better one might be stopping when the answer stops being about
+  anything the person actually said.
+- **One root per folder may be wrong.** Two or three attractors would be a more
+  honest result than one, and forcing a single root would hide that. Let the
+  chains converge where they converge and draw however many roots come out.
+
+---
+
 ## Decided against, so they stop coming back
 
 - **Ideas moving between folders on their own.** A folder holds conversations;

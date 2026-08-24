@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Fold from "./Fold";
 import {
   applyTheme,
   applyUiScale,
@@ -94,6 +95,17 @@ export default function Settings({
   const [error, setError] = useState<string | null>(null);
   /** Null while nothing is pending, otherwise the scope being confirmed. */
   const [confirming, setConfirming] = useState<"folder" | "all" | null>(null);
+  /** What is being fetched right now, so a button that has been pressed says
+   *  so. A download with no sign of life reads as a dead button, and the
+   *  second press is someone giving up on the first. */
+  const [busy, setBusy] = useState<"server" | "voice" | null>(null);
+  /** One section open at a time. Two open sections is most of the way back to
+   *  the wall this replaced. */
+  const [open, setOpen] = useState<string | null>(null);
+  const fold = (id: string) => ({
+    open: open === id,
+    onToggle: () => setOpen((cur) => (cur === id ? null : id)),
+  });
 
   useEffect(() => {
     void getSettings().then(setS);
@@ -137,9 +149,8 @@ export default function Settings({
     <div className="pane-inner">
       {error && <p className="error">{error}</p>}
 
-      <section>
-        <h2 className="section">Appearance</h2>
-        <div className="row">
+      <Fold title="Appearance" summary={THEMES.find((t) => t.value === s.theme)!.label} {...fold("appearance")}>
+                <div className="row">
           {THEMES.map((t) => (
             <button
               key={t.value}
@@ -150,11 +161,10 @@ export default function Settings({
             </button>
           ))}
         </div>
-      </section>
+      </Fold>
 
-      <section>
-        <h2 className="section">Interface size</h2>
-        <div className="row scale-row">
+      <Fold title="Interface size" summary={`${s.ui_scale}%`} {...fold("scale")}>
+                <div className="row scale-row">
           <input
             type="range"
             className="scale-slider"
@@ -179,11 +189,10 @@ export default function Settings({
             </button>
           )}
         </div>
-      </section>
+      </Fold>
 
-      <section>
-        <h2 className="section">Talking rather than reading</h2>
-        <p className="blurb">
+      <Fold title="Talking rather than reading" summary={s.call_mode ? "call mode" : s.voice === "off" ? "silent" : s.voice === "neural" ? "downloaded voice" : "system voice"} {...fold("voice")}>
+                <p className="blurb">
           Call mode keeps answers to a few sentences and reads them out, so a
           conversation can happen without looking at the screen. Asking to see
           the map or the ideas opens them.
@@ -223,21 +232,27 @@ export default function Settings({
             </p>
           ) : (
             <button
-              className="btn"
-              onClick={() =>
+              className={busy === "voice" ? "btn busy" : "btn"}
+              disabled={busy !== null}
+              onClick={() => {
+                setBusy("voice");
+                setError(null);
                 installVoice()
                   .then(() => voiceStatus().then(setVoice))
                   .catch((e) => setError(String(e)))
-              }
+                  .finally(() => setBusy(null));
+              }}
             >
-              Download the voice · {voice?.download_mb ?? 78}MB
+              {busy === "voice" && <span className="spinner" aria-hidden="true" />}
+              {busy === "voice"
+                ? "Downloading…"
+                : `Download the voice · ${voice?.download_mb ?? 78}MB`}
             </button>
           ))}
-      </section>
+      </Fold>
 
-      <section>
-        <h2 className="section">Recall</h2>
-        <p className="blurb">
+      <Fold title="Recall" summary={s.recall ? "on" : "off"} {...fold("recall")}>
+                <p className="blurb">
           Hands the conversation the titles of ideas already recorded in this
           folder, so it can say how what you are saying now bears on what you
           said before. Titles only — never the claims, the quotes, or the
@@ -252,11 +267,10 @@ export default function Settings({
             {s.recall ? "Connecting to earlier ideas" : "Answering each turn on its own"}
           </button>
         </div>
-      </section>
+      </Fold>
 
-      <section>
-        <h2 className="section">Ending a session</h2>
-        <p className="blurb">Idle timeout before a session is filed.</p>
+      <Fold title="Ending a session" summary={s.idle_minutes < 60 ? `${s.idle_minutes} min` : `${s.idle_minutes / 60} hr`} {...fold("idle")}>
+                <p className="blurb">Idle timeout before a session is filed.</p>
         <div className="row">
           {[10, 30, 60, 120].map((m) => (
             <button
@@ -268,16 +282,14 @@ export default function Settings({
             </button>
           ))}
         </div>
-      </section>
+      </Fold>
 
-      <section>
-        <h2 className="section">Transcripts</h2>
-        <p className="path">{dir}</p>
-      </section>
+      <Fold title="Transcripts" {...fold("transcripts")}>
+                <p className="path">{dir}</p>
+      </Fold>
 
-      <section>
-        <h2 className="section">Dictation</h2>
-        {speech?.installed ? (
+      <Fold title="Dictation" summary={speech?.installed ? "installed" : "not installed"} {...fold("dictation")}>
+                {speech?.installed ? (
           <p className="blurb">Installed, runs on the CPU.</p>
         ) : downloading ? (
           <p className="blurb">
@@ -291,11 +303,10 @@ export default function Settings({
             </button>
           </>
         )}
-      </section>
+      </Fold>
 
-      <section>
-        <h2 className="section">The model this app runs</h2>
-        <p className="blurb">
+      <Fold title="The model this app runs" summary={server?.server_ready ? "engine ready" : "no engine"} {...fold("runtime")}>
+                <p className="blurb">
           These apply to the model the app starts itself. A model reached
           through LM Studio, Ollama, or an API is configured where it lives.
         </p>
@@ -315,14 +326,19 @@ export default function Settings({
               <code> llama-server</code> on your PATH is preferred over this one.
             </p>
             <button
-              className="btn"
-              onClick={() =>
+              className={busy === "server" ? "btn busy" : "btn"}
+              disabled={busy !== null}
+              onClick={() => {
+                setBusy("server");
+                setError(null);
                 installLlamaServer()
                   .then(() => embeddedStatus().then(setServer))
                   .catch((e) => setError(String(e)))
-              }
+                  .finally(() => setBusy(null));
+              }}
             >
-              Install llama-server
+              {busy === "server" && <span className="spinner" aria-hidden="true" />}
+              {busy === "server" ? "Installing…" : "Install llama-server"}
             </button>
           </>
         )}
@@ -392,11 +408,10 @@ export default function Settings({
           Changes take effect the next time the model starts. Stop and start it
           in Models to apply them now.
         </p>
-      </section>
+      </Fold>
 
-      <section>
-        <h2 className="section">Re-read conversations</h2>
-        <p className="blurb">
+      <Fold title="Re-read conversations" {...fold("reread")}>
+                <p className="blurb">
           Discards the ideas and reads the conversations again — worth doing
           after the app has learned to read better. The conversations
           themselves are untouched.
@@ -432,11 +447,10 @@ export default function Settings({
           </div>
         )}
         {note && <p className="blurb">{note}</p>}
-      </section>
+      </Fold>
 
-      <section>
-        <h2 className="section">How this app uses AI</h2>
-        {/* Stated in the app, not only in a README. Someone using this to think
+      <Fold title="How this app uses AI" {...fold("ai")}>
+                {/* Stated in the app, not only in a README. Someone using this to think
             through something that matters deserves to know what is machine-made
             without going looking for it. */}
         <ul className="plain-list">
@@ -447,7 +461,7 @@ export default function Settings({
           <li>With Recall on, the chat is also handed the <i>titles</i> of ideas already recorded in the folder you are in. Nothing else of yours reaches it, and turning Recall off removes even that.</li>
           <li>Nothing leaves this machine unless a remote model is chosen in Models.</li>
         </ul>
-      </section>
+      </Fold>
     </div>
   );
 }

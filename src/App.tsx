@@ -19,6 +19,7 @@ import {
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
+import Sheet from "./components/Sheet";
 import FolderMark from "./components/FolderMark";
 import ContextMenu from "./components/ContextMenu";
 import Tooltip from "./components/Tooltip";
@@ -1009,23 +1010,17 @@ export default function App() {
       )}
 
       {deep && (
-        <div className="sheet-overlay" onClick={() => setDeep(null)}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()}>
-            {deep.kind === "idea" ? (
-              <IdeaFile
-                ideaId={deep.id}
-                onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
-                onClose={() => setDeep(null)}
-              />
-            ) : (
-              <ConversationFile
-                sessionId={deep.id}
-                onOpenIdea={(id) => setDeep({ kind: "idea", id })}
-                onClose={() => setDeep(null)}
-              />
-            )}
-          </div>
-        </div>
+        <Sheet onClose={() => setDeep(null)}>
+          {deep.kind === "idea" ? (
+            <IdeaFile
+              ideaId={deep.id}
+              onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
+              onClose={() => setDeep(null)}
+            />
+          ) : (
+            <ConversationFile sessionId={deep.id} onClose={() => setDeep(null)} />
+          )}
+        </Sheet>
       )}
 
       <Tooltip />

@@ -492,7 +492,12 @@ input, textarea {
    shrink, and the fixed column turned out not to be fixed at all. The panel's
    own minimum width is what guarantees the transcript still has room. */
 .deep-main { flex: 1 1 0; min-width: 15rem; }
-.deep-aside { flex: 0 0 18rem; position: sticky; top: 0; }
+.deep-aside { flex: 0 0 22rem; position: sticky; top: 0; }
+/* The list is the answer to "what came out of this", so it is read, not
+   glanced at. Set at the size of the transcript beside it rather than as a
+   caption to it. */
+.deep-aside .row-btn { padding: 0.5rem 0.4rem; font-size: 0.95rem; line-height: 1.4; }
+.deep-aside .taken-head { font-size: 1.15rem; }
 .taken-head {
   margin: 0 0 0.6rem;
   font-size: 1rem;
@@ -1178,8 +1183,9 @@ blockquote {
   flex-direction: column;
   /* The transcript's floor plus the list's fixed column, in rem so it tracks
      the interface-scale setting — a pixel minimum stops guaranteeing anything
-     the moment the text gets bigger. */
-  min-width: 37rem;
+     the moment the text gets bigger. 22 for the list, 15 for the words, 1.6
+     between them and 3 of padding, plus a little so rounding cannot tip it. */
+  min-width: 43rem;
   background: var(--surface);
   border-left: 1px solid var(--line);
   /* Scrolling happens on .pane-inner inside, not here — a second scrollbar on
@@ -1314,6 +1320,35 @@ blockquote {
 /* Picking a subject out of the idea list, the same toggle the map's legend
    uses. Several can be on at once: two subjects that keep coming up together
    are worth seeing side by side. */
+/* A settings section, closed until asked for. */
+.fold { border-bottom: 1px solid var(--line); }
+.fold-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.75rem 0.2rem;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fold-head:hover { background: var(--surface); }
+.fold-caret { flex: none; width: 0.8rem; color: var(--faint); font-size: 0.7rem; }
+.fold-title { font-size: 0.95rem; font-weight: 600; }
+/* The answer, beside the question — so most sections never need opening. */
+.fold-summary {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: right;
+}
+.fold-body { padding: 0.2rem 0.2rem 1.1rem 1.4rem; }
+.fold-body > .section:first-child { margin-top: 0; }
+
 /* Every knob the embedded model takes, laid out as a grid so the names line
    up and the numbers can be scanned down a column. */
 .params {

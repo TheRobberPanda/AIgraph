@@ -4,13 +4,10 @@ import {
   activeModels,
   chooseModel,
   clearAnthropicKey,
-  getSettings,
   keyStatus,
-  saveSettings,
   setAnthropicKey,
   type ActiveModels,
   type KeyStatus,
-  type Settings,
   downloadEmbeddedModel,
   embeddedStatus,
   startEmbedded,
@@ -51,9 +48,6 @@ const SOURCES: { id: Source; label: string; blurb: string }[] = [
 ];
 
 /** The model the app will run itself. Apache 2.0, so it can be built on. */
-/** The context sizes offered, as slider stops. */
-const CONTEXTS = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
-
 const BUNDLED = {
   name: "Bonsai 27B",
   repo: "prism-ml/Bonsai-27B-gguf",
@@ -88,7 +82,6 @@ export default function Models() {
   const [keyInput, setKeyInput] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [source, setSource] = useState<Source>("local");
-  const [settings, setSettings] = useState<Settings | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [embedded, setEmbedded] = useState<EmbeddedStatus | null>(null);
   const [pulling, setPulling] = useState<{ received: number; total: number } | null>(null);
@@ -110,7 +103,6 @@ export default function Models() {
       setServers(s.servers);
       setActive(await activeModels());
       setKeys(await keyStatus());
-      setSettings(await getSettings());
       setEmbedded(await embeddedStatus());
     } catch (e) {
       setError(String(e));
@@ -228,18 +220,6 @@ export default function Models() {
     })[kind] ?? kind;
 
   const isRemote = (kind: string) => kind === "anthropic" || kind === "claudecli";
-
-  /** Runtime knobs for the bundled model. Saved as they are changed. */
-  async function patchRuntime(patch: Partial<Settings["runtime"]>) {
-    if (!settings) return;
-    const next = { ...settings, runtime: { ...settings.runtime, ...patch } };
-    setSettings(next);
-    try {
-      await saveSettings(next);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
 
   async function saveKey() {
     setKeyBusy(true);
@@ -578,95 +558,9 @@ export default function Models() {
             ) : null}
           </section>
 
-          {settings && (
-            <section className="model-role">
-              <h2 className="section">How it runs</h2>
-              <p className="blurb">
-                These decide whether a 27B model is pleasant or painful on a
-                given machine. They are read when the model is started, so
-                change them before starting it rather than during.
-              </p>
-
-              <div className="row runtime-row">
-                <label htmlFor="ctx">Context length</label>
-                <input
-                  id="ctx"
-                  type="range"
-                  className="scale-slider"
-                  min={0}
-                  max={CONTEXTS.length - 1}
-                  step={1}
-                  value={Math.max(0, CONTEXTS.indexOf(settings.runtime.context_length))}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      runtime: {
-                        ...settings.runtime,
-                        context_length: CONTEXTS[Number(e.target.value)],
-                      },
-                    })
-                  }
-                  onMouseUp={() => void patchRuntime({})}
-                  onKeyUp={() => void patchRuntime({})}
-                />
-                <span className="scale-value">
-                  {settings.runtime.context_length >= 1024
-                    ? `${settings.runtime.context_length / 1024}K`
-                    : settings.runtime.context_length}
-                </span>
-              </div>
-
-              <div className="row runtime-row">
-                <label htmlFor="gpu">GPU offload</label>
-                <input
-                  id="gpu"
-                  type="range"
-                  className="scale-slider"
-                  min={0}
-                  max={64}
-                  step={1}
-                  value={settings.runtime.gpu_layers}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      runtime: { ...settings.runtime, gpu_layers: Number(e.target.value) },
-                    })
-                  }
-                  onMouseUp={() => void patchRuntime({})}
-                  onKeyUp={() => void patchRuntime({})}
-                />
-                <span className="scale-value">
-                  {settings.runtime.gpu_layers === 0
-                    ? "CPU only"
-                    : `${settings.runtime.gpu_layers} layers`}
-                </span>
-              </div>
-
-              <div className="row">
-                <button
-                  className={settings.runtime.kv_cache_on_gpu ? "btn on" : "btn"}
-                  onClick={() =>
-                    void patchRuntime({ kv_cache_on_gpu: !settings.runtime.kv_cache_on_gpu })
-                  }
-                >
-                  KV cache in GPU memory
-                </button>
-                <button
-                  className={settings.runtime.keep_in_memory ? "btn on" : "btn"}
-                  onClick={() =>
-                    void patchRuntime({ keep_in_memory: !settings.runtime.keep_in_memory })
-                  }
-                >
-                  Keep model loaded
-                </button>
-              </div>
-              <p className="blurb">
-                The KV cache is faster on the GPU but takes memory the conversation
-                model may want. Keeping the model loaded avoids a reload each
-                session and holds the memory meanwhile.
-              </p>
-            </section>
-          )}
+          {/* The runtime knobs used to be repeated here. They live in Settings
+              now, all of them together — two partial copies of the same panel
+              is how a settings screen becomes unreadable. */}
         </>
       )}
     </div>

@@ -248,6 +248,10 @@ export default function Graph({ folder }: { folder: number | null }) {
   // the same node again closes it, clicking a different one swaps the panel's
   // content, rather than navigating away and losing the map's state.
   const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
+  /** The open file, readable from the canvas handlers without making them
+   *  depend on a re-render. */
+  const panelRef = useRef(panel);
+  panelRef.current = panel;
   const [panelSide, setPanelSide] = useState<"left" | "right">("right");
   const [panelWidth, setPanelWidth] = useState<number | null>(null);
   const [edgeHover, setEdgeHover] = useState<{
@@ -258,9 +262,8 @@ export default function Graph({ folder }: { folder: number | null }) {
     x: number;
     y: number;
   } | null>(null);
-  const openIdea = useRef((id: number) =>
-    setPanel((p) => (p?.kind === "idea" && p.id === id ? null : { kind: "idea", id })),
-  );
+  /** Following a link out of an idea's file to the conversation it came from,
+   *  which swaps the panel rather than stacking. */
   const openConversation = useRef((id: number) =>
     setPanel((p) => (p?.kind === "conversation" && p.id === id ? null : { kind: "conversation", id })),
   );
@@ -1004,11 +1007,22 @@ export default function Graph({ folder }: { folder: number | null }) {
             revealRef.current = new Set();
             return;
           }
+          // The file and the framing are one thing. A node whose file is
+          // already open closes it and stays where it is — flying the map
+          // somewhere while taking away what you were reading is the worst of
+          // both. Anything else opens and travels together.
+          const id = hit.data.kind === "idea" ? hit.data.idea_id : hit.data.session_id;
+          if (id === null) return;
+          const kind = hit.data.kind === "idea" ? "idea" : "conversation";
+          if (panelRef.current?.kind === kind && panelRef.current.id === id) {
+            focusNodeRef.current = null;
+            revealRef.current = new Set();
+            travelRef.current = null;
+            setPanel(null);
+            return;
+          }
           focusOn(hit);
-          if (hit.data.kind === "idea" && hit.data.idea_id !== null)
-            openIdea.current(hit.data.idea_id);
-          if (hit.data.kind === "conversation" && hit.data.session_id !== null)
-            openConversation.current(hit.data.session_id);
+          setPanel({ kind, id });
         }}
         onWheel={(e) => {
           const canvas = canvasRef.current;
@@ -1021,8 +1035,11 @@ export default function Graph({ folder }: { folder: number | null }) {
           const scale = Math.min(4, Math.max(0.15, v.scale * Math.exp(-e.deltaY * 0.0015)));
           // Pulling back is a way of saying you are done with what you were
           // looking at, the same as clicking away from it. Zooming further in
-          // is not — that is still looking.
-          if (scale < v.scale && focusNodeRef.current) {
+          // is not — that is still looking. Neither is pulling back while a
+          // file is open: that is reading one thing and glancing at where it
+          // sits, and dropping the focus there would leave the open file with
+          // nothing lit on the map.
+          if (scale < v.scale && focusNodeRef.current && !panelRef.current) {
             focusNodeRef.current = null;
             revealRef.current = new Set();
           }
@@ -1138,7 +1155,6 @@ export default function Graph({ folder }: { folder: number | null }) {
           ) : (
             <ConversationFile
               sessionId={panel.id}
-              onOpenIdea={(id) => openIdea.current(id)}
               onTrace={(id) => {
                 tracedRef.current = id;
               }}

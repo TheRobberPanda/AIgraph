@@ -495,7 +495,6 @@ export default function Ideas({ folder }: { folder: number | null }) {
         ) : (
           <ConversationFile
             sessionId={panel.id}
-            onOpenIdea={(id) => openIdea(id)}
             onClose={() => setPanel(null)}
           />
         )}

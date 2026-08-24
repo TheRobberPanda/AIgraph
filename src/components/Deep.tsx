@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown";
+import Sheet from "./Sheet";
 import { dateTime, plainDate } from "../lib/format";
 import {
   conversationView,
@@ -61,12 +62,10 @@ function Nudges({ strong, weak }: { strong: string[]; weak: string[] }) {
  */
 export function ConversationFile({
   sessionId,
-  onOpenIdea,
   onTrace,
   onClose,
 }: {
   sessionId: number;
-  onOpenIdea: (id: number) => void;
   /** Pointing at one of these picks it out on the map behind the panel. */
   onTrace?: (ideaId: number | null) => void;
   onClose: () => void;
@@ -75,6 +74,14 @@ export function ConversationFile({
   const [error, setError] = useState<string | null>(null);
   /** Which recorded idea is being pointed at, so its source can be shown. */
   const [trace, setTrace] = useState<number | null>(null);
+  /**
+   * An idea opened over this file rather than instead of it.
+   *
+   * Reading an idea and reading the conversation it came from is one act, and
+   * swapping the panel's contents made it two — you lost your place in the
+   * transcript to look at something that was meant to sit beside it.
+   */
+  const [openIdea, setOpenIdea] = useState<number | null>(null);
 
   // One entry per idea, with the words it came from.
   const taken = (view?.turns ?? [])
@@ -138,7 +145,7 @@ export function ConversationFile({
                       <mark
                         key={i}
                         className="extracted"
-                        onClick={() => seg.idea_id && onOpenIdea(seg.idea_id)}
+                        onClick={() => seg.idea_id && setOpenIdea(seg.idea_id)}
                       >
                         {seg.text}
                         {seg.reasoning && (
@@ -172,7 +179,7 @@ export function ConversationFile({
                 <li key={t.ideaId}>
                   <button
                     className="row-btn"
-                    onClick={() => onOpenIdea(t.ideaId)}
+                    onClick={() => setOpenIdea(t.ideaId)}
                     onMouseEnter={() => {
                       setTrace(t.ideaId);
                       onTrace?.(t.ideaId);
@@ -204,6 +211,18 @@ export function ConversationFile({
           </aside>
           </div>
         </>
+      )}
+
+      {openIdea !== null && (
+        // Stacked over this file, not in place of it — closing it puts you back
+        // exactly where you were reading.
+        <Sheet depth={1} onClose={() => setOpenIdea(null)}>
+          <IdeaFile
+            ideaId={openIdea}
+            onOpenConversation={() => setOpenIdea(null)}
+            onClose={() => setOpenIdea(null)}
+          />
+        </Sheet>
       )}
     </div>
   );
