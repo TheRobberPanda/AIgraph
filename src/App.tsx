@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
-import Chats from "./components/Chats";
 import {
   IconThink,
   IconMap,
   IconIdeas,
-  IconChats,
   IconModels,
   IconSettings,
   IconSend,
@@ -21,6 +19,7 @@ import { ConversationFile, IdeaFile } from "./components/Deep";
 import Confirm from "./components/Confirm";
 import Sheet from "./components/Sheet";
 import Select from "./components/Select";
+import Call from "./components/Call";
 import FolderMark from "./components/FolderMark";
 import ContextMenu from "./components/ContextMenu";
 import Tooltip from "./components/Tooltip";
@@ -48,6 +47,7 @@ import {
 } from "./lib/folders";
 import { parseReply, speak, stopSpeaking } from "./lib/voice";
 import { sessionTurns } from "./lib/sessions";
+import { startDictation, stopDictation } from "./lib/dictation";
 import {
   continueSession,
   deleteTurn,
@@ -64,15 +64,22 @@ import {
   type Turn,
 } from "./lib/chat";
 
-type Tab = "chat" | "map" | "ideas" | "chats" | "models" | "settings";
-const TABS: Tab[] = ["chat", "map", "ideas", "chats", "models", "settings"];
+/**
+ * Where you can be.
+ *
+ * There is no separate Conversations tab. A conversation and the ideas taken
+ * from it are the same thing seen from two ends, and keeping them apart meant
+ * the same list twice — once with the ideas hidden and once with the
+ * conversations reduced to headings.
+ */
+type Tab = "chat" | "map" | "ideas" | "models" | "settings";
+const TABS: Tab[] = ["chat", "map", "ideas", "models", "settings"];
 
 /** What each place is called. One map, so the rail and the URL agree. */
 const TAB_NAMES: Record<Tab, string> = {
   chat: "Think",
   map: "Map",
   ideas: "Ideas",
-  chats: "Conversations",
   models: "Models",
   settings: "Settings",
 };
@@ -84,12 +91,11 @@ const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>>
   chat: IconThink,
   map: IconMap,
   ideas: IconIdeas,
-  chats: IconChats,
   models: IconModels,
   settings: IconSettings,
 };
 
-const MAIN: Tab[] = ["chat", "map", "ideas", "chats"];
+const MAIN: Tab[] = ["chat", "map", "ideas"];
 const SETUP: Tab[] = ["models", "settings"];
 
 type Deep = { kind: "idea"; id: number } | { kind: "conversation"; id: number } | null;
@@ -104,7 +110,7 @@ type Deep = { kind: "idea"; id: number } | { kind: "conversation"; id: number } 
 function tabFromHash(): Tab {
   const raw = window.location.hash.replace(/^#\/?/, "").split("/")[0];
   if (raw === "idea") return "ideas";
-  if (raw === "conversation") return "chats";
+  if (raw === "conversation") return "ideas";
   return (TABS as string[]).includes(raw) ? (raw as Tab) : "chat";
 }
 
@@ -181,6 +187,11 @@ export default function App() {
   /** Which voice reads replies, so the setting chosen in Settings is honoured
    *  by the button in the composer too. */
   const [voiceKind, setVoiceKind] = useState<"system" | "neural">("system");
+  /** Whether the microphone is hearing anything, for the waveform. */
+  const [hearing, setHearing] = useState(false);
+  /** Words dictated since the last silence, waiting to be sent. */
+  const heardRef = useRef("");
+  const quietRef = useRef<number | undefined>(undefined);
   const [callMode, setCallMode] = useState(false);
   const [idleMinutes, setIdleMinutes] = useState(30);
   const [idleOpen, setIdleOpen] = useState(false);
@@ -323,8 +334,60 @@ export default function App() {
   // person is waiting for has not arrived yet. It clears when they start
   // talking again instead.
 
+  /**
+   * Turn call mode on, and everything it needs with it.
+   *
+   * One press rather than three. Call mode without the microphone open is a
+   * setting nobody asked for, and a microphone open without a voice reading
+   * the answer back is half a phone call — so pressing the button does all of
+   * it, and pressing it again undoes all of it.
+   */
+  async function toggleCall(on: boolean) {
+    setCallMode(on);
+    setVoiceOn(on || voiceOn);
+    void patchSetting({ call_mode: on, voice: on ? voiceKind : undefined });
+    try {
+      if (on) await startDictation();
+      else await stopDictation();
+    } catch (e) {
+      setError(String(e));
+      if (on) setCallMode(false);
+    }
+    if (!on) {
+      window.clearTimeout(quietRef.current);
+      heardRef.current = "";
+      setHearing(false);
+      stopSpeaking();
+    }
+  }
+
+  /**
+   * In a call, finishing a sentence sends it.
+   *
+   * There is no keyboard in a call, so waiting for one would be waiting
+   * forever. Held for a beat after the last phrase rather than sent on it: a
+   * pause mid-thought is not the end of a thought, and cutting someone off at
+   * the first comma is worse than a second of latency.
+   */
+  function heard(text: string) {
+    if (!callMode) {
+      setDraft((d) => (d ? `${d.trimEnd()} ${text}` : text));
+      return;
+    }
+    heardRef.current = heardRef.current ? `${heardRef.current} ${text}` : text;
+    window.clearTimeout(quietRef.current);
+    quietRef.current = window.setTimeout(() => {
+      const said = heardRef.current.trim();
+      heardRef.current = "";
+      if (said) void sendText(said);
+    }, 1200);
+  }
+
   async function send() {
-    const text = draft.trim();
+    await sendText(draft.trim());
+  }
+
+  async function sendText(text: string) {
     if (!text || streaming || !provider) return;
 
     setDraft("");
@@ -367,7 +430,8 @@ export default function App() {
       }
       if (open) {
         // In simple mode there is nothing to expand — it is a different page.
-        if (layout === "simple") setView(open === "conversations" ? "chats" : open);
+        // "conversations" and "ideas" are one place now.
+        if (layout === "simple") setView(open === "conversations" ? "ideas" : open);
         else setExpanded(open);
       }
       if (voiceOn) speak(clean, voiceKind === "neural");
@@ -403,7 +467,11 @@ export default function App() {
   async function patchSetting(patch: Record<string, unknown>) {
     try {
       const current = await getSettings();
-      await saveSettings({ ...current, ...patch });
+      // Undefined entries are dropped rather than spread: `{ voice: undefined }`
+      // overwrites the saved voice with nothing, which is not what "leave this
+      // one alone" should do.
+      const set = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+      await saveSettings({ ...current, ...set });
     } catch (e) {
       setError(String(e));
     }
@@ -697,7 +765,7 @@ export default function App() {
         className={
           layout === "simple"
             ? `workspace expanded expanded-${
-                view === "map" ? "map" : view === "ideas" ? "ideas" : view === "chats" ? "conversations" : "chat"
+                view === "map" ? "map" : view === "ideas" ? "ideas" : "chat"
               }`
             : `workspace${expanded ? ` expanded expanded-${expanded}` : ""}`
         }
@@ -717,26 +785,6 @@ export default function App() {
             </div>
           </section>
 
-          <section className="ws-panel ws-convos">
-            <button
-              className="ws-head"
-              onClick={() => toggleExpand("conversations")}
-              hidden={layout === "simple"}
-            >
-              <IconChats className="nav-icon" />
-              Conversations
-              <span className="ws-grow" aria-hidden="true">
-                {expanded === "conversations" ? "Close" : "Open"}
-              </span>
-            </button>
-            <div className="ws-body">
-              <Chats
-                folder={folderId}
-                onOpen={(id) => setDeep({ kind: "conversation", id })}
-                onContinue={(id) => void resume(id)}
-              />
-            </div>
-          </section>
         </div>
 
         <div className="ws-center">
@@ -896,15 +944,11 @@ export default function App() {
           autoFocus
         />
         <div className="bar">
-          <Mic
-            onPhrase={(text) =>
-              // Dictation fills the box; it never sends. The user edits before
-              // anything becomes a turn, which keeps a misheard word from
-              // becoming a quote that looks authoritative.
-              setDraft((d) => (d ? `${d.trimEnd()} ${text}` : text))
-            }
-            disabled={streaming}
-          />
+          {/* Outside a call, dictation fills the box and never sends: the user
+              edits before anything becomes a turn, which keeps a misheard word
+              from becoming a quote that looks authoritative. In a call there is
+              nowhere to edit, so `heard` sends after a pause instead. */}
+          <Mic onPhrase={heard} onSpeaking={setHearing} disabled={streaming} />
           <button
             className={callMode ? "icon-btn on" : "icon-btn"}
             data-tip={
@@ -912,12 +956,7 @@ export default function App() {
                 ? "Call mode on — short answers, read aloud"
                 : "Call mode — short answers, read aloud"
             }
-            onClick={() => {
-              const next = !callMode;
-              setCallMode(next);
-              setVoiceOn(next || voiceOn);
-              void patchSetting({ call_mode: next });
-            }}
+            onClick={() => void toggleCall(!callMode)}
           >
             <IconCall />
           </button>
@@ -1013,7 +1052,7 @@ export default function App() {
             </span>
           </button>
           <div className="ws-body">
-            <Ideas folder={folderId} />
+            <Ideas folder={folderId} onContinue={(id) => void resume(id)} />
           </div>
         </aside>
       </div>
@@ -1028,6 +1067,21 @@ export default function App() {
             void setCurrentFolder(id);
           }}
           onClose={() => setPickingFolder(false)}
+        />
+      )}
+
+      {callMode && (
+        <Call
+          speaking={hearing}
+          thinking={streaming}
+          status={
+            streaming
+              ? "Thinking…"
+              : hearing
+                ? "Listening"
+                : "Say something — it sends when you stop"
+          }
+          onHangUp={() => void toggleCall(false)}
         />
       )}
 

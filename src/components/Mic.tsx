@@ -19,9 +19,12 @@ import {
  */
 export default function Mic({
   onPhrase,
+  onSpeaking,
   disabled,
 }: {
   onPhrase: (text: string) => void;
+  /** Whether anything is being said right now, for whoever is drawing it. */
+  onSpeaking?: (on: boolean) => void;
   disabled?: boolean;
 }) {
   const [installed, setInstalled] = useState<boolean | null>(null);
@@ -41,6 +44,8 @@ export default function Mic({
   // Held in a ref so the event subscription never needs re-creating mid-session.
   const phraseRef = useRef(onPhrase);
   phraseRef.current = onPhrase;
+  const speakingRef = useRef(onSpeaking);
+  speakingRef.current = onSpeaking;
 
   useEffect(() => {
     speechModelStatus()
@@ -54,7 +59,10 @@ export default function Mic({
   useEffect(() => {
     const p = onDictation({
       phrase: (t) => phraseRef.current(t),
-      speaking: setSpeaking,
+      speaking: (on) => {
+        setSpeaking(on);
+        speakingRef.current?.(on);
+      },
       error: (e) => {
         setError(e);
         setPhase("idle");

@@ -492,12 +492,12 @@ input, textarea {
    shrink, and the fixed column turned out not to be fixed at all. The panel's
    own minimum width is what guarantees the transcript still has room. */
 .deep-main { flex: 1 1 0; min-width: 15rem; }
-.deep-aside { flex: 0 0 22rem; position: sticky; top: 0; }
+.deep-aside { flex: 0 0 19rem; position: sticky; top: 0; }
 /* The list is the answer to "what came out of this", so it is read, not
    glanced at. Set at the size of the transcript beside it rather than as a
    caption to it. */
-.deep-aside .row-btn { padding: 0.5rem 0.4rem; font-size: 0.95rem; line-height: 1.4; }
-.deep-aside .taken-head { font-size: 1.15rem; }
+.deep-aside .row-btn { padding: 0.45rem 0.4rem; font-size: 0.88rem; line-height: 1.4; }
+.deep-aside .taken-head { font-size: 1.05rem; }
 .taken-head {
   margin: 0 0 0.6rem;
   font-size: 1rem;
@@ -1200,9 +1200,9 @@ blockquote {
   flex-direction: column;
   /* The transcript's floor plus the list's fixed column, in rem so it tracks
      the interface-scale setting — a pixel minimum stops guaranteeing anything
-     the moment the text gets bigger. 22 for the list, 15 for the words, 1.6
+     the moment the text gets bigger. 19 for the list, 15 for the words, 1.6
      between them and 3 of padding, plus a little so rounding cannot tip it. */
-  min-width: 43rem;
+  min-width: 40rem;
   background: var(--surface);
   border-left: 1px solid var(--line);
   /* Scrolling happens on .pane-inner inside, not here — a second scrollbar on
@@ -1358,6 +1358,39 @@ blockquote {
 .knob-hint { grid-column: 2 / -1; font-size: 0.7rem; color: var(--faint); }
 .source-tabs.sub .btn { font-size: 0.8rem; }
 /* The one recommended answer, and everything else beside it. */
+/* Call mode. The whole window, because a call is not a screen you read. */
+.call {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  background: var(--bg);
+  animation: call-in 220ms ease forwards;
+}
+@keyframes call-in {
+  from { opacity: 0; transform: scale(1.02); }
+  to { opacity: 1; transform: none; }
+}
+.call-wave { position: absolute; inset: 0; width: 100%; height: 100%; }
+.call-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.6rem;
+  /* Below the wave's midline, so the two never sit on top of each other. */
+  margin-top: 28vh;
+}
+.call-status { margin: 0; font-size: 0.95rem; color: var(--muted); }
+.call-end { padding: 0.55rem 1.6rem; border-radius: 999px; }
+@media (prefers-reduced-motion: reduce) {
+  .call { animation: none; }
+}
+
 .setup-choice { align-items: center; gap: 0.6rem; margin: 0.6rem 0 1.4rem; }
 .btn.big { padding: 0.6rem 1.1rem; font-size: 1rem; }
 
@@ -1613,6 +1646,37 @@ blockquote {
 .tree { display: flex; flex-direction: column; }
 .tree-group { border-bottom: 1px solid var(--line); }
 .tree-group:first-child { border-top: 1px solid var(--line); }
+
+/* The caret and the title are separate targets: one opens what came out of a
+   conversation, the other opens the conversation. */
+.tree-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.tree-toggle:hover { background: var(--surface-lift); border-radius: 5px; }
+.tree-head .tree-title {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.2rem 0.15rem;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.tree-head .tree-title:hover { color: var(--accent); }
+.tree-head .chat-actions { flex: none; }
+.tree-head:hover .chat-actions, .tree-head:focus-within .chat-actions { opacity: 1; }
 
 .tree-head {
   display: flex;

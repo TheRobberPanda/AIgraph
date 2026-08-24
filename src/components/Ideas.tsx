@@ -9,7 +9,9 @@ import {
 import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
 import MoveTo from "./MoveTo";
-import FilePanel from "./FilePanel";
+import Sheet from "./Sheet";
+import { IconArchive, IconPlus, IconRewind, IconTrash } from "./Icons";
+import ImportChat from "./ImportChat";
 import { ConversationFile, IdeaFile } from "./Deep";
 import { categoryColor } from "../lib/categories";
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
@@ -18,6 +20,7 @@ import {
   extractionProgress,
   getDiagnostics,
   listIdeas,
+  reextractSession,
   onExtractionProgress,
   onIdeasChanged,
   type Diagnostics,
@@ -66,7 +69,15 @@ const REASON_LABELS: Record<string, string> = {
  * graph will need to be trustworthy. Getting this right first means the graph
  * is a rendering problem rather than a correctness one.
  */
-export default function Ideas({ folder }: { folder: number | null }) {
+export default function Ideas({
+  folder,
+  onContinue,
+}: {
+  folder: number | null;
+  /** Picking a conversation back up makes it the live one, which the app has
+   *  to switch to — so it is handled above rather than here. */
+  onContinue?: (sessionId: number) => void;
+}) {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
@@ -75,8 +86,6 @@ export default function Ideas({ folder }: { folder: number | null }) {
   // unreadable on its own.
   const [opened, setOpened] = useState<Set<number>>(new Set());
   const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
-  const [panelSide, setPanelSide] = useState<"left" | "right">("right");
-  const [panelWidth, setPanelWidth] = useState<number | null>(null);
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
@@ -86,6 +95,10 @@ export default function Ideas({ folder }: { folder: number | null }) {
   /** Subjects being shown. Empty means all of them — the same toggle the map's
    *  legend uses, so a subject is picked out the same way in both places. */
   const [subjects, setSubjects] = useState<Set<string>>(new Set());
+  /** Carried over from the conversations list, which this replaced. */
+  const [query, setQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [adding, setAdding] = useState(false);
   // Re-renders once a second purely so the elapsed counter advances between
   // phase events — which can be minutes apart on a local model.
   const [, tick] = useState(0);
@@ -138,8 +151,17 @@ export default function Ideas({ folder }: { folder: number | null }) {
       bySession.set(first.session_id, list);
     }
 
-    const known = new Set(sessions.map((s) => s.id));
-    const rows = sessions
+    const q = query.trim().toLowerCase();
+    const visible = sessions.filter(
+      (s) =>
+        s.archived === showArchived &&
+        (!q ||
+          (s.title || "").toLowerCase().includes(q) ||
+          (s.opening || "").toLowerCase().includes(q) ||
+          s.tags.some((t) => t.toLowerCase().includes(q))),
+    );
+    const known = new Set(visible.map((s) => s.id));
+    const rows = visible
       .filter((s) => bySession.has(s.id))
       .map((s) => ({ session: s, ideas: bySession.get(s.id)! }));
 
@@ -188,7 +210,7 @@ export default function Ideas({ folder }: { folder: number | null }) {
       );
 
     return { foldered, orphaned };
-  }, [shown, sessions, folders]);
+  }, [shown, sessions, folders, query, showArchived]);
 
   function toggle(sessionId: number) {
     setOpened((prev) => {
@@ -225,7 +247,7 @@ export default function Ideas({ folder }: { folder: number | null }) {
   }, [running]);
 
   return (
-    <div className={`split${panel && panelSide === "left" ? " panel-left" : ""}`}>
+    <div className="split">
     <div className="split-main">
     <div className="pane-inner">
       {(running || progress?.last?.error) && (
@@ -273,6 +295,38 @@ export default function Ideas({ folder }: { folder: number | null }) {
             </span>
           ))}
         </div>
+      )}
+
+      <div className="row filters">
+        <input
+          className="field filter-input"
+          placeholder="Filter conversations"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button
+          className={adding ? "icon-btn on" : "icon-btn"}
+          data-tip={adding ? "Cancel" : "Add a conversation"}
+          onClick={() => setAdding((a) => !a)}
+        >
+          <IconPlus />
+        </button>
+        <button
+          className={showArchived ? "icon-btn on" : "icon-btn"}
+          data-tip={showArchived ? "Showing archived" : "Show archived"}
+          onClick={() => setShowArchived((a) => !a)}
+        >
+          <IconArchive />
+        </button>
+      </div>
+
+      {adding && (
+        <ImportChat
+          onDone={() => {
+            setAdding(false);
+            refresh();
+          }}
+        />
       )}
 
       {tags.length > 1 && (
@@ -347,28 +401,78 @@ export default function Ideas({ folder }: { folder: number | null }) {
                     />
                   </form>
                 ) : (
-                  <button
+                  <div
                     className="tree-head"
-                    onClick={() => toggle(session.id)}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       setMenu({ x: e.clientX, y: e.clientY, session });
                     }}
-                    aria-expanded={!isCollapsed}
                   >
-                    <span className={`tree-caret${isCollapsed ? " closed" : ""}`} aria-hidden="true" />
-                    <span className="tree-title">{label}</span>
+                    {/* The caret opens the ideas under it; the title opens the
+                        conversation itself. One row, two questions — "what came
+                        out of this" and "what was said" — and giving the whole
+                        row to one of them meant the other had nowhere to go. */}
+                    <button
+                      className="tree-toggle"
+                      aria-expanded={!isCollapsed}
+                      data-tip={isCollapsed ? "Show the ideas" : "Hide the ideas"}
+                      onClick={() => toggle(session.id)}
+                    >
+                      <span className={`tree-caret${isCollapsed ? " closed" : ""}`} aria-hidden="true" />
+                    </button>
+                    <button className="tree-title" onClick={() => openConversation(session.id)}>
+                      {label}
+                      {session.tags.length > 0 && (
+                        <span className="chat-tags">
+                          {session.tags.map((t) => (
+                            <i
+                              key={t}
+                              className="tag-swatch"
+                              style={{ "--tag-color": categoryColor(t) } as React.CSSProperties}
+                              data-tip={t}
+                            />
+                          ))}
+                        </span>
+                      )}
+                    </button>
                     {/* Date and count on hover rather than in the row: they are
                         the same length as the title and were taking half of it. */}
                     <span
                       className="tree-meta"
                       data-tip={`${
                         session.started_at ? longDate(session.started_at) + " · " : ""
-                      }${sessionIdeas.length} idea${sessionIdeas.length === 1 ? "" : "s"}`}
+                      }${session.turn_count} turns · ${sessionIdeas.length} idea${
+                        sessionIdeas.length === 1 ? "" : "s"
+                      }`}
                     >
                       {sessionIdeas.length}
                     </span>
-                  </button>
+                    <span className="chat-actions">
+                      <button
+                        className="icon-btn"
+                        data-tip="Re-read this conversation for ideas"
+                        onClick={() => void reextractSession(session.id).then(refresh)}
+                      >
+                        <IconRewind />
+                      </button>
+                      <button
+                        className="icon-btn"
+                        data-tip={session.archived ? "Unarchive" : "Archive"}
+                        onClick={() =>
+                          void setSessionArchived(session.id, !session.archived).then(refresh)
+                        }
+                      >
+                        <IconArchive />
+                      </button>
+                      <button
+                        className="icon-btn"
+                        data-tip="Delete"
+                        onClick={() => setDeleting(session.id)}
+                      >
+                        <IconTrash />
+                      </button>
+                    </span>
+                  </div>
                 )}
 
                 {!isCollapsed && (
@@ -446,6 +550,13 @@ export default function Ideas({ folder }: { folder: number | null }) {
                 setRenaming({ id: menu.session.id, value: menu.session.title || menu.session.opening }),
             },
             {
+              // Only ever appends, which is why it is safe: the bytes before
+              // the join do not move, so every quote already recorded still
+              // points at the words it was taken from.
+              label: "Continue this conversation",
+              onSelect: () => onContinue?.(menu.session.id),
+            },
+            {
               label: menu.session.archived ? "Unarchive" : "Archive",
               onSelect: () =>
                 setSessionArchived(menu.session.id, !menu.session.archived).then(refresh),
@@ -484,8 +595,10 @@ export default function Ideas({ folder }: { folder: number | null }) {
     </div>
     </div>
 
+    {/* Over the list rather than beside it. The list is what you were reading;
+        opening something from it should not shrink it to a column. */}
     {panel && (
-      <FilePanel side={panelSide} onSideChange={setPanelSide} width={panelWidth} onWidthChange={setPanelWidth}>
+      <Sheet onClose={() => setPanel(null)}>
         {panel.kind === "idea" ? (
           <IdeaFile
             ideaId={panel.id}
@@ -493,12 +606,9 @@ export default function Ideas({ folder }: { folder: number | null }) {
             onClose={() => setPanel(null)}
           />
         ) : (
-          <ConversationFile
-            sessionId={panel.id}
-            onClose={() => setPanel(null)}
-          />
+          <ConversationFile sessionId={panel.id} onClose={() => setPanel(null)} />
         )}
-      </FilePanel>
+      </Sheet>
     )}
     </div>
   );

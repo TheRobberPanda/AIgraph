@@ -529,18 +529,21 @@ export default function Graph({ folder }: { folder: number | null }) {
     const nodes = nodesRef.current;
     if (!canvas || !nodes.length || !canvas.clientWidth) return;
 
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
     const xs = nodes.map((n) => n.x ?? 0);
     const ys = nodes.map((n) => n.y ?? 0);
-    const pad = Math.max(...nodes.map((n) => n.r)) + 80;
+    // Room for the biggest node and the title under it, and nothing more. The
+    // old fixed 80 was a large margin in a side panel and a small one on a wide
+    // screen, so the map filled a big window worse than a small one.
+    const pad = Math.max(...nodes.map((n) => n.r)) + 34;
     const spanX = Math.max(1, Math.max(...xs) - Math.min(...xs) + pad * 2);
     const spanY = Math.max(1, Math.max(...ys) - Math.min(...ys) + pad * 2);
     const midX = (Math.max(...xs) + Math.min(...xs)) / 2;
     const midY = (Math.max(...ys) + Math.min(...ys)) / 2;
-    const scale = Math.min(
-      (canvas.clientWidth - 80) / spanX,
-      (canvas.clientHeight - 80) / spanY,
-      2.2,
-    );
+    // A margin that is a share of the canvas rather than a fixed number of
+    // pixels, so the framing looks the same whatever size the window is.
+    const scale = Math.min(w * 0.94 / spanX, h * 0.94 / spanY, 3.2);
     viewRef.current = { x: -midX * scale, y: -midY * scale, scale };
   }, []);
 

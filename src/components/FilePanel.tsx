@@ -11,9 +11,9 @@ const DEFAULT_SHARE = 0.65;
 /**
  * Narrower than this and the transcript and the list of ideas cannot both fit
  * beside each other at a readable width — 15rem for the words, the list's
- * fixed 22rem, the gap between them, and the pane's own padding.
+ * fixed 19rem, the gap between them, and the pane's own padding.
  */
-const MIN_WIDTH = 680;
+const MIN_WIDTH = 640;
 
 /**
  * A node or row's file, opened beside whatever it was opened from — the map,
