@@ -71,6 +71,12 @@ pub struct AppState {
     retry_after: Mutex<std::collections::HashMap<i64, (chrono::DateTime<chrono::Utc>, u32)>>,
     /// Where the plain-markdown copies go. The user owns these.
     md_dir: PathBuf,
+    /// Position in the current drain: (which one, how many). Read by the
+    /// progress display so "digesting" can say how far along it is.
+    queue_progress: Mutex<(i64, i64)>,
+    /// Set when someone asks a drain to stop. Checked between conversations —
+    /// stopping mid-read would waste the reading already done.
+    stop_drain: Mutex<bool>,
     /// The archived conversation being added to, if one was picked back up.
     /// Set by `continue_session` and cleared when the session ends.
     continuing: Mutex<Option<i64>>,
@@ -103,6 +109,8 @@ impl AppState {
                 .join("embeddings"),
             current_folder: Mutex::new(crate::store::ROOT_FOLDER),
             continuing: Mutex::new(None),
+            queue_progress: Mutex::new((0, 0)),
+            stop_drain: Mutex::new(false),
             embedded: Mutex::new(crate::llm::embedded::Embedded::new(
                 db_path.parent().unwrap_or(std::path::Path::new(".")),
             )),
@@ -138,6 +146,10 @@ pub struct RunningExtraction {
     /// RFC3339. The UI derives elapsed time from this rather than being told,
     /// so the display keeps counting between events.
     pub started_at: String,
+    /// Which of the queued conversations this is, and how many there were.
+    /// A phase name says what is happening; these say how much is left.
+    pub index: i64,
+    pub total: i64,
 }
 
 #[derive(Serialize, Clone)]
@@ -635,6 +647,9 @@ pub async fn extract_session_inner(
             session_id,
             phase: crate::extract::Phase::Asking,
             started_at: started.to_rfc3339(),
+            // Filled in by `set_running` from the drain's own position.
+            index: 0,
+            total: 0,
         }),
     )
     .await;
@@ -749,10 +764,18 @@ pub async fn extract_session_inner(
     }
 }
 
+/// How far through the queue a drain is, so progress is a fraction rather than
+/// a spinner. Reset when a drain finishes.
+async fn set_queue(state: &AppState, index: i64, total: i64) {
+    let mut q = state.queue_progress.lock().await;
+    *q = (index, total);
+}
+
 async fn set_running(app: &tauri::AppHandle, state: &AppState, running: Option<RunningExtraction>) {
+    let (index, total) = *state.queue_progress.lock().await;
     let snapshot = {
         let mut p = state.progress.lock().await;
-        p.running = running;
+        p.running = running.map(|r| RunningExtraction { index, total, ..r });
         p.pending = state.store.lock().await.diagnostics().map(|d| d.sessions_pending).unwrap_or(0);
         p.clone()
     };
@@ -845,8 +868,18 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
     if pending.is_empty() {
         return;
     }
+    *state.stop_drain.lock().await = false;
+    let total = pending.len() as i64;
     let now = chrono::Utc::now();
-    for id in pending {
+    for (i, id) in pending.into_iter().enumerate() {
+        // Between conversations, not during one — stopping mid-read would
+        // throw away the reading already done and leave nothing to show for
+        // the minutes it took.
+        if *state.stop_drain.lock().await {
+            tracing::info!("digest stopped between conversations");
+            break;
+        }
+        set_queue(state, i as i64 + 1, total).await;
         // Skip anything still serving a backoff.
         if let Some((when, _)) = state.retry_after.lock().await.get(&id) {
             if now < *when {
@@ -882,8 +915,19 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
             }
         }
     }
+    set_queue(state, 0, 0).await;
+    *state.stop_drain.lock().await = false;
     let _ = app.emit("ideas:changed", ());
     release_model_if_asked(state).await;
+}
+
+/// Ask a running digest to stop after the conversation it is on.
+#[tauri::command]
+pub async fn stop_digest(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    *state.stop_drain.lock().await = true;
+    let snapshot = state.progress.lock().await.clone();
+    let _ = app.emit("extraction:progress", snapshot);
+    Ok(())
 }
 
 /// Put the embedded model down once there is nothing left to read.

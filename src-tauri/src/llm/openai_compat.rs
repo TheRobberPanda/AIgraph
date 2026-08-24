@@ -377,6 +377,15 @@ impl OpenAiCompat {
             }));
         }
 
+        // Non-empty but cut short. Said plainly here rather than left to the
+        // parser, which can only report that the JSON does not parse.
+        if choice.finish_reason.as_deref() == Some("length") {
+            tracing::warn!(
+                limit = EXTRACT_MAX_TOKENS,
+                "extraction reply was truncated; salvaging whatever completed"
+            );
+        }
+
         Ok(choice.message.content.clone())
     }
 }
@@ -403,7 +412,12 @@ struct CompletionMessage {
 
 /// Generous enough for a long session's worth of ideas, tight enough that a
 /// runaway generation fails in seconds rather than minutes.
-const EXTRACT_MAX_TOKENS: u32 = 4096;
+/// Enough for a long conversation's worth of ideas, in a language that spends
+/// more tokens per word than English does. The old 4096 truncated a Polish
+/// session mid-object, and truncated JSON is indistinguishable from a model
+/// that cannot follow the format — the failure was reported as the wrong
+/// problem entirely.
+const EXTRACT_MAX_TOKENS: u32 = 16_000;
 
 #[async_trait]
 impl IdeaExtractor for OpenAiCompat {

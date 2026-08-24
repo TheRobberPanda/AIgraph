@@ -495,6 +495,10 @@ export default function Graph({ folder }: { folder: number | null }) {
       x1: b.x1 + margin,
       y1: b.y1 + margin,
     });
+    const overlaps = (a: Placed["box"], b: Placed["box"]) =>
+      a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
+    /** Conversation labels already committed this frame, in compact mode. */
+    const drawn: Placed["box"][] = [];
     let clash = false;
     for (let i = 0; i < laid.length && !clash; i++) {
       for (let j = i + 1; j < laid.length; j++) {
@@ -517,14 +521,17 @@ export default function Graph({ folder }: { folder: number | null }) {
     for (const l of laid) {
       // Conversations are the map's landmarks and always keep their names, as
       // does whatever is being pointed at directly.
-      if (
-        !l.isConversation &&
-        clash &&
-        hover !== l.n &&
-        !isTraced(l.n) &&
-        focusNodeRef.current !== l.n
-      )
-        continue;
+      const mustDraw = hover === l.n || isTraced(l.n) || focusNodeRef.current === l.n;
+      if (!l.isConversation && !mustDraw && clash) continue;
+      // Conversations keep their names at full size — they are the map's
+      // landmarks, and all-or-nothing there leaves an unlabelled map. In a
+      // panel narrow enough for compact mode they cannot all fit, so they
+      // yield one at a time to whatever was drawn before them: four names and
+      // two bare dots beats six names on top of each other.
+      if (l.isConversation && compact && !mustDraw) {
+        if (drawn.some((b) => overlaps(b, l.box))) continue;
+        drawn.push(l.box);
+      }
       ctx.font = l.isConversation
         ? `600 ${labelPx * 1.04}px ui-sans-serif, system-ui, sans-serif`
         : `${labelPx}px ui-sans-serif, system-ui, sans-serif`;

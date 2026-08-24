@@ -50,6 +50,7 @@ pub fn run() {
             commands::diagnostics,
             commands::extract_now,
             commands::extraction_progress,
+            commands::stop_digest,
             commands::pending_sessions,
             commands::pending_sessions,
             commands::source_view,

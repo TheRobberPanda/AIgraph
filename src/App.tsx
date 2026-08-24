@@ -35,6 +35,7 @@ import { thinkingMessage } from "./lib/waiting";
 import {
   extractionProgress,
   extractNow,
+  stopDigest,
   onExtractionProgress,
   type ExtractionProgress,
 } from "./lib/ideas";
@@ -723,6 +724,20 @@ export default function App() {
   // answer is one click away from where they already are.
 
   const pending = digesting?.pending ?? 0;
+  /**
+   * How far through the queue the digest is.
+   *
+   * Counted in conversations rather than in tokens: how long one takes is
+   * unknowable in advance, but how many are left is exact, and "three of
+   * eight" is the answer to what someone waiting actually wants to know.
+   */
+  const digestPct = (() => {
+    const r = digesting?.running;
+    if (!r || r.total <= 0) return null;
+    const phases = ["asking", "verifying", "retrying", "saving"];
+    const within = Math.max(0, phases.indexOf(r.phase)) / phases.length;
+    return Math.min(99, Math.round(((r.index - 1 + within) / r.total) * 100));
+  })();
 
   return (
     <main className="app">
@@ -763,15 +778,38 @@ export default function App() {
 
         {pending > 0 && (
           <span className="row digest-group">
+            {/* Running, it becomes the way to stop — the same button, because
+                "digesting" and "stop digesting" are the same thing seen from
+                either side of the decision, and a second button beside it
+                would be dead most of the time. */}
             <button
-              className="digest-btn"
-              disabled={digestBusy || !!digesting?.running}
+              className={digesting?.running ? "digest-btn running" : "digest-btn"}
+              disabled={digestBusy}
               onClick={() => {
+                if (digesting?.running) {
+                  void stopDigest();
+                  return;
+                }
                 setDigestBusy(true);
                 void extractNow().finally(() => setDigestBusy(false));
               }}
             >
-              {digesting?.running ? "Digesting…" : `Digest (${pending})`}
+              {digesting?.running ? (
+                <>
+                  <span className="digest-label">
+                    Digesting
+                    {digesting.running.total > 1 &&
+                      ` ${digesting.running.index}/${digesting.running.total}`}
+                    {digestPct !== null && ` · ${digestPct}%`}
+                  </span>
+                  <span className="digest-hover">Stop</span>
+                  {digestPct !== null && (
+                    <span className="digest-fill" style={{ width: `${digestPct}%` }} />
+                  )}
+                </>
+              ) : (
+                `Digest (${pending})`
+              )}
             </button>
             {/* The count says how many; this says which, and lets one be
                 thrown away before it costs a reading. */}
@@ -807,6 +845,24 @@ export default function App() {
         <WindowControls />
       </nav>
 
+      {/* The folder scopes the map and the ideas as much as it scopes the
+          conversation, and there was no way to see or change it from either —
+          you had to go back to the composer to find out what you were looking
+          at. */}
+      {(view === "map" || view === "ideas") && layout === "simple" && (
+        <div className="row scope-bar">
+          <button
+            className="btn folder-btn"
+            style={{ "--folder-color": folderColor(folderName) } as React.CSSProperties}
+            onClick={() => setPickingFolder(true)}
+          >
+            <FolderMark name={folderName} id={folderId} />
+            {folderName}
+          </button>
+          <span className="row-meta">is what you are looking at</span>
+        </div>
+      )}
+
       <div className="pane">
       {view === "settings" ? (
         <SettingsPanel />
@@ -824,21 +880,18 @@ export default function App() {
         }
       >
 
-        <div className="ws-left">
-          <section className="ws-panel ws-map">
-            <button className="ws-head" onClick={() => toggleExpand("map")} hidden={layout === "simple"}>
-              <IconMap className="nav-icon" />
-              Map
-              <span className="ws-grow" aria-hidden="true">
-                {expanded === "map" ? "Close" : "Open"}
-              </span>
-            </button>
-            <div className="ws-body">
-              <Graph folder={folderId} />
-            </div>
-          </section>
-
-        </div>
+        <section className="ws-panel ws-map">
+          <button className="ws-head" onClick={() => toggleExpand("map")} hidden={layout === "simple"}>
+            <IconMap className="nav-icon" />
+            Map
+            <span className="ws-grow" aria-hidden="true">
+              {expanded === "map" ? "Close" : "Open"}
+            </span>
+          </button>
+          <div className="ws-body">
+            <Graph folder={folderId} />
+          </div>
+        </section>
 
         <div className="ws-center">
       <div className={turns.length === 0 && !justArchived ? "think opening" : "think"}>

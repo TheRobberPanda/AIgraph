@@ -330,11 +330,10 @@ export default function Models() {
           </span>
         </p>
       ) : (
-        ROLES.map(({ role, title, blurb }) => {
+        ROLES.map(({ role, blurb }) => {
           const chosen = role === "chat" ? active?.chat : active?.extraction;
           return (
             <section key={role} className="model-role">
-              <h2 className="section">{title}</h2>
               <p className="blurb">{blurb}</p>
               <p className="current">
                 {chosen ? (

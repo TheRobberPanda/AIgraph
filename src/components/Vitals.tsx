@@ -90,8 +90,12 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
     return (
       <>
         {run}
-        <button className="status-toggle" data-tip="What the model is doing" onClick={() => setOpen(true)}>
-          details
+        <button
+          className="status-toggle"
+          data-tip="Show what the model is doing right now — for working out why something is slow"
+          onClick={() => setOpen(true)}
+        >
+          what it&apos;s doing
         </button>
       </>
     );
@@ -108,13 +112,13 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
         "no local server"
       ) : s.phase === "reading" ? (
         <>
-          reading the prompt {pct}% · {s.prompt_done}/{s.prompt_total} tokens
-          {s.prompt_cached > 0 && ` · ${s.prompt_cached} cached`}
+          reading what you said · {pct}% ({s.prompt_done} of {s.prompt_total} tokens)
+          {s.prompt_cached > 0 && ` · ${s.prompt_cached} already cached`}
         </>
       ) : s.phase === "writing" ? (
-        <>writing · {s.prompt_total} tokens of prompt read</>
+        <>writing the answer · read {s.prompt_total} tokens first</>
       ) : (
-        <>idle · {s.context ? `${Math.round(s.context / 1024)}K context` : "loaded"}</>
+        <>waiting · {s.context ? `${Math.round(s.context / 1024)}K of context` : "loaded"}</>
       )}
     </button>
     </>

@@ -250,7 +250,75 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
         }
     }
 
+    // Cut off mid-object, usually by a token limit. Everything before the cut
+    // is real work the model already did, and throwing away eight good ideas
+    // because a ninth was truncated loses a whole session over the last
+    // sentence of it.
+    if let Some(repaired) = repair(text) {
+        if let Ok(env) = serde_json::from_str::<Envelope>(&repaired) {
+            tracing::warn!("extraction output was truncated; salvaged what completed");
+            return Ok(Extracted { title: env.title, ideas: env.ideas, conversation: env.conversation });
+        }
+    }
+
     Err(LlmError::BadOutput(truncate(text, 300)))
+}
+
+/// Close a JSON object that was cut off part-way through.
+///
+/// Walks the text tracking strings, escapes and bracket depth, remembers the
+/// last point at which everything open could be closed cleanly — the end of a
+/// complete element — then truncates there and appends the closers. A partial
+/// element at the tail is dropped rather than guessed at: half an idea is not
+/// an idea, and inventing the rest of one would put words in someone's mouth.
+fn repair(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let body = &text[start..];
+
+    let mut stack: Vec<char> = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    // Byte index just past the last complete element, with the stack as it was
+    // there. Only a closing bracket counts. A comma looks like a boundary too,
+    // but a comma *inside* an object leaves half an element behind — and since
+    // every field has a default, half an element deserializes happily into an
+    // idea nobody had.
+    let mut safe: Option<(usize, Vec<char>)> = None;
+
+    for (i, c) in body.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if in_string {
+            match c {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '{' | '[' => stack.push(c),
+            '}' | ']' => {
+                stack.pop()?;
+                safe = Some((i + c.len_utf8(), stack.clone()));
+            }
+            _ => {}
+        }
+    }
+
+    // Nothing was cut off, or nothing usable survived.
+    if stack.is_empty() {
+        return None;
+    }
+    let (cut, open) = safe?;
+    let mut out = body[..cut].to_string();
+    for c in open.iter().rev() {
+        out.push(if *c == '{' { '}' } else { ']' });
+    }
+    Some(out)
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -310,6 +378,31 @@ mod tests {
     #[test]
     fn empty_result_is_valid_not_an_error() {
         assert!(parse(r#"{"ideas":[]}"#).unwrap().ideas.is_empty());
+    }
+
+    /// A reply cut off by a token limit keeps the ideas that finished.
+    #[test]
+    fn truncated_output_keeps_what_completed() {
+        let raw = r#"{"title":"Teaching and Income","ideas":[
+            {"title":"Education as time","claim":"a","quote":"q","category":"work","reasoning":"r","notes":[]},
+            {"title":"Local ceilings","claim":"b","quote":"w","category":"work","reasoning":"r","notes":[]},
+            {"title":"Half an idea","claim":"c","quote":"e","categ"#;
+        let out = parse(raw).unwrap();
+        assert_eq!(out.title, "Teaching and Income");
+        assert_eq!(out.ideas.len(), 2, "the two complete ideas survive");
+        // The third is dropped rather than guessed at: half an idea is not an
+        // idea, and completing one would put words in someone's mouth.
+        assert!(out.ideas.iter().all(|i| i.claim != "c"));
+    }
+
+    /// Non-ASCII must not be cut mid-character while repairing.
+    #[test]
+    fn truncation_repair_is_safe_on_accented_text() {
+        let raw = r#"{"ideas":[{"claim":"Edukacja to usługa oparta na moim czasie","quote":"q","notes":[]},
+            {"claim":"myślenie o tym, że lokalny biznes zapewni duży przychód"#;
+        let out = parse(raw).unwrap();
+        assert_eq!(out.ideas.len(), 1);
+        assert!(out.ideas[0].claim.contains("usługa"));
     }
 
     #[test]

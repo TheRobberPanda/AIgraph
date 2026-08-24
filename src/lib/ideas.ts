@@ -61,6 +61,9 @@ export interface RunningExtraction {
   phase: Phase;
   /** RFC3339. Elapsed time is derived from this so the display keeps counting. */
   started_at: string;
+  /** Which of the queued conversations this is, and how many there were. */
+  index: number;
+  total: number;
 }
 
 export interface LastExtraction {
@@ -122,4 +125,10 @@ export function reextractSession(sessionId: number): Promise<unknown> {
 /** The conversations waiting to be read, in the order they will be. */
 export function pendingSessions(): Promise<import("./chat").SessionSummary[]> {
   return invoke("pending_sessions");
+}
+
+
+/** Ask a running digest to stop after the conversation it is on. */
+export function stopDigest(): Promise<void> {
+  return invoke("stop_digest");
 }
