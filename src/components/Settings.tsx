@@ -165,6 +165,11 @@ export default function Settings() {
           </button>
         </div>
         <p className="blurb">
+          Reading replies out is off unless you ask for it here. A call turns it
+          on for the length of the call regardless — there is nothing to read in
+          a call — and hanging up leaves this setting where you left it.
+        </p>
+        <p className="blurb">
           The machine's own voice needs nothing downloaded and honours the rate
           and voice you have already configured — which, if you rely on speech,
           is usually the one you want. The downloaded voice sounds better and

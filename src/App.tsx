@@ -12,7 +12,6 @@ import {
   IconMaximize,
   IconClose,
   IconCall,
-  IconSpeaker,
   IconClock,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
@@ -189,10 +188,16 @@ export default function App() {
   const [folderId, setFolderId] = useState<number>(ROOT_FOLDER);
   const [folderName, setFolderName] = useState("Root");
   const [pickingFolder, setPickingFolder] = useState(false);
-  /** Read replies out as they finish. Always on in call mode. */
-  const [voiceOn, setVoiceOn] = useState(false);
-  /** Which voice reads replies, so the setting chosen in Settings is honoured
-   *  by the button in the composer too. */
+  /**
+   * Whether replies are read out because the setting says so.
+   *
+   * Off unless someone asked for it. A call turns speech on for as long as the
+   * call lasts — there is nothing to read in a call — and hanging up leaves
+   * this exactly where it was, rather than a preference silently changed by a
+   * button that was about something else.
+   */
+  const [voiceSetting, setVoiceSetting] = useState(false);
+  /** Which voice reads replies, chosen in Settings. */
   const [voiceKind, setVoiceKind] = useState<"system" | "neural">("system");
   /** Whether the microphone is hearing anything, for the waveform. */
   const [hearing, setHearing] = useState(false);
@@ -221,6 +226,7 @@ export default function App() {
   /** Something was said while the model was answering, and is still waiting. */
   const queuedRef = useRef(false);
   const [callMode, setCallMode] = useState(false);
+  const voiceOn = voiceSetting || callMode;
   const [idleMinutes, setIdleMinutes] = useState(30);
   const [idleOpen, setIdleOpen] = useState(false);
   /** Which workspace panel is filling the pane, if any. */
@@ -241,7 +247,7 @@ export default function App() {
     void getSettings().then((s) => {
       applyTheme(s.theme);
       applyUiScale(s.ui_scale);
-      setVoiceOn(s.voice !== "off" || s.call_mode);
+      setVoiceSetting(s.voice !== "off");
       if (s.voice === "neural") setVoiceKind("neural");
       setCallMode(s.call_mode);
       setIdleMinutes(s.idle_minutes);
@@ -250,7 +256,9 @@ export default function App() {
     const un = listen<{ voice?: string; call_mode?: boolean; layout?: "simple" | "advanced" }>(
       "settings:changed",
       (e) => {
-        setVoiceOn(e.payload.voice === "system" || !!e.payload.call_mode);
+        // Only the setting. Whether a call is in progress is this window's
+        // business, not something a saved settings file should turn on.
+        if (e.payload.voice !== undefined) setVoiceSetting(e.payload.voice !== "off");
         if (e.payload.layout) setLayout(e.payload.layout);
       },
     );
@@ -411,8 +419,7 @@ export default function App() {
    */
   async function toggleCall(on: boolean) {
     setCallMode(on);
-    setVoiceOn(on || voiceOn);
-    void patchSetting({ call_mode: on, voice: on ? voiceKind : undefined });
+    void patchSetting({ call_mode: on });
     try {
       if (on) await startDictation();
       else await stopDictation();
@@ -1005,19 +1012,6 @@ export default function App() {
             onClick={() => void toggleCall(!callMode)}
           >
             <IconCall />
-          </button>
-
-          <button
-            className={voiceOn ? "icon-btn on" : "icon-btn"}
-            data-tip={voiceOn ? "Reading replies aloud" : "Read replies aloud"}
-            onClick={() => {
-              const next = !voiceOn;
-              setVoiceOn(next);
-              if (!next) stopSpeaking();
-              void patchSetting({ voice: next ? voiceKind : "off" });
-            }}
-          >
-            <IconSpeaker />
           </button>
 
           {turns.length > 0 && (
