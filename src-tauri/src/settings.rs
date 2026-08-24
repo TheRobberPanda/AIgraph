@@ -58,6 +58,14 @@ pub struct Settings {
     /// Hand the model the titles of ideas already recorded, so it can connect
     /// what is being said now to what was said before.
     pub recall: bool,
+    /// Offer the choice of where the model runs on every launch.
+    ///
+    /// On by default. Which model answers shapes what ends up in the map, and
+    /// silently reusing last week's choice — or one made once to get past a
+    /// setup screen — is the app deciding that for you. Turned off by ticking
+    /// the box on the picker, which is the point at which someone has actually
+    /// decided.
+    pub ask_provider: bool,
     /// How the model bundled with the app is run, when that is the one in use.
     pub runtime: Runtime,
     /// Whether the map, ideas and conversations sit around the conversation
@@ -167,6 +175,7 @@ impl Default for Settings {
             call_mode: false,
             voice: Voice::Off,
             recall: true,
+            ask_provider: true,
             runtime: Runtime::default(),
             layout: Layout::default(),
         }

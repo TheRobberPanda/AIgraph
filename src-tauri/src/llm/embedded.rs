@@ -327,20 +327,35 @@ impl Embedded {
             }
             self.child = None;
         }
-        self.orphan().is_some()
+        self.adopted()
     }
 
-    /// A `llama-server` of ours from a previous run, if one is still up.
+    /// Is a server from a previous run still up on our port?
     ///
-    /// Both halves are checked: the port has to be answering *and* the pid we
-    /// recorded has to still be a llama-server. Either alone is a way to
-    /// mistake somebody else's server for ours and then kill it.
-    fn orphan(&self) -> Option<u32> {
-        if !port_answering() {
-            return None;
+    /// The port is the answer, not the pid file. Port 8127 on loopback is this
+    /// app's by convention and nothing else is expected there — and requiring
+    /// a pid file meant a server started before that file existed, or after it
+    /// was cleaned away, was invisible. That is exactly the case that produced
+    /// the failure: an orphan holding the port that the app could not see.
+    fn adopted(&self) -> bool {
+        port_answering()
+    }
+
+    /// The process to signal when stopping one we did not start.
+    ///
+    /// The pid file first, since we wrote it. Failing that, the process table
+    /// — a `llama-server` whose command line names our port is ours, because
+    /// nothing else would be asked to listen there.
+    fn orphan_pid(&self) -> Option<u32> {
+        if let Some(pid) = std::fs::read_to_string(self.pid_path())
+            .ok()
+            .and_then(|p| p.trim().parse::<u32>().ok())
+        {
+            if is_llama_server(pid) {
+                return Some(pid);
+            }
         }
-        let pid: u32 = std::fs::read_to_string(self.pid_path()).ok()?.trim().parse().ok()?;
-        is_llama_server(pid).then_some(pid)
+        find_server_on_port()
     }
 
     fn pid_path(&self) -> PathBuf {
@@ -483,7 +498,7 @@ impl Embedded {
         // Nothing of ours in this process, but possibly one from a previous
         // run. Stopping has to reach that too, or the button says "stop" and
         // the model stays loaded.
-        if let Some(pid) = self.orphan() {
+        if let Some(pid) = self.orphan_pid() {
             kill(pid);
             let _ = std::fs::remove_file(self.pid_path());
         }
@@ -623,6 +638,26 @@ fn port_answering() -> bool {
     use std::net::{SocketAddr, TcpStream};
     let addr: SocketAddr = format!("{HOST}:{PORT}").parse().expect("loopback address");
     TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250)).is_ok()
+}
+
+/// A running `llama-server` told to listen on our port, if there is one.
+#[cfg(unix)]
+fn find_server_on_port() -> Option<u32> {
+    let entries = std::fs::read_dir("/proc").ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+        let Ok(cmdline) = std::fs::read_to_string(format!("/proc/{pid}/cmdline")) else { continue };
+        if cmdline.contains("llama-server") && cmdline.contains(&PORT.to_string()) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+#[cfg(not(unix))]
+fn find_server_on_port() -> Option<u32> {
+    None
 }
 
 /// Is this pid a live `llama-server`?

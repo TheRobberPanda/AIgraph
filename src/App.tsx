@@ -47,6 +47,7 @@ import {
   ROOT_FOLDER,
 } from "./lib/folders";
 import { parseReply, speak, stopSpeaking } from "./lib/voice";
+import { modelName } from "./lib/format";
 import { sessionTurns } from "./lib/sessions";
 import { startDictation, stopDictation } from "./lib/dictation";
 import {
@@ -204,6 +205,15 @@ export default function App() {
   // The no-model screen can drop into the Models tab rather than being a dead
   // end — someone with an API key or the claude CLI had no way through it.
   const [setupModels, setSetupModels] = useState(false);
+  /**
+   * Whether the picker is standing in the way, and whether it should be next
+   * time.
+   *
+   * `null` until settings load, so the app does not flash the picker on its
+   * way to skipping it.
+   */
+  const [asking, setAsking] = useState<boolean | null>(null);
+  const [remember, setRemember] = useState(false);
   const [rechecking, setRechecking] = useState(false);
 
   const endRef = useRef<HTMLDivElement>(null);
@@ -258,7 +268,22 @@ export default function App() {
         setProvider(s.selected);
       })
       .catch((e) => setError(String(e)));
+    void getSettings()
+      .then((s) => setAsking(s.ask_provider))
+      .catch(() => setAsking(false));
   }, []);
+
+  /**
+   * Get past the picker, remembering the answer if asked to.
+   *
+   * The tick is what turns the question off, not the choosing — someone can
+   * pick a model today and still want to be asked tomorrow, and the two are
+   * different decisions.
+   */
+  function settle() {
+    setAsking(false);
+    if (remember) void patchSetting({ ask_provider: false });
+  }
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -491,15 +516,17 @@ export default function App() {
   }
 
   /** Ask the backend to look for models again, so nothing needs restarting. */
-  async function recheck() {
+  async function recheck(): Promise<Selected | null> {
     setRechecking(true);
     setError(null);
     try {
       const s = await startup();
       setServers(s.servers);
       setProvider(s.selected);
+      return s.selected;
     } catch (e) {
       setError(String(e));
+      return null;
     } finally {
       setRechecking(false);
     }
@@ -557,7 +584,11 @@ export default function App() {
     s.models.filter((m) => m.kind === "chat");
   const usable = (servers ?? []).filter((s) => chatModels(s).length > 0);
 
-  if (servers && !provider) {
+  // Shown when there is nothing to talk to, and — unless told not to — on
+  // every launch even when there is. Which model answers shapes what ends up
+  // in the map; reusing last week's choice without saying so is the app
+  // deciding that.
+  if (servers && (!provider || asking === true)) {
     const idle = servers.some((s) => s.models.length === 0);
     return (
       <main className="app">
@@ -577,7 +608,14 @@ export default function App() {
                 <button className="btn" onClick={() => setSetupModels(false)}>
                   ← Back
                 </button>
-                <button className="btn on" disabled={rechecking} onClick={() => void recheck()}>
+                <button
+                  className="btn on"
+                  disabled={rechecking}
+                  // Only gets out of the way if something was actually found;
+                  // otherwise it would dismiss the picker onto a chat with
+                  // nothing to talk to.
+                  onClick={() => void recheck().then((p) => p && settle())}
+                >
                   {rechecking ? "Checking…" : "Done — start thinking"}
                 </button>
               </div>
@@ -633,11 +671,14 @@ export default function App() {
                                   className="row-btn"
                                   onClick={() =>
                                     selectProvider(srv.kind, srv.host, m.id)
-                                      .then(setProvider)
+                                      .then((p) => {
+                                        setProvider(p);
+                                        settle();
+                                      })
                                       .catch((e) => setError(String(e)))
                                   }
                                 >
-                                  <span className="row-main">{m.id}</span>
+                                  <span className="row-main">{modelName(m.id)}</span>
                                   <span className="row-meta">
                                     {srv.kind === "lmstudio"
                                       ? "LM Studio"
@@ -663,6 +704,11 @@ export default function App() {
                 )}
 
                 <div className="row setup-bar">
+                  {provider && (
+                    <button className="btn on" onClick={settle}>
+                      Continue with {modelName(provider.model)}
+                    </button>
+                  )}
                   <button className="btn" disabled={rechecking} onClick={() => void recheck()}>
                     {rechecking ? "Looking…" : "Look again"}
                   </button>
@@ -670,6 +716,17 @@ export default function App() {
                     Models and API keys
                   </button>
                 </div>
+
+                {/* Ticking this is the decision, not choosing a model — someone
+                    can pick one today and still want to be asked tomorrow. */}
+                <label className="remember">
+                  <input
+                    type="checkbox"
+                    checked={remember}
+                    onChange={(e) => setRemember(e.target.checked)}
+                  />
+                  Don&apos;t ask again — use whatever was chosen last
+                </label>
 
                 {error && <p className="error">{error}</p>}
               </div>
@@ -1122,7 +1179,7 @@ export default function App() {
       <Tooltip />
 
       <div className="statusbar">
-        {provider ? `${provider.label} · ${provider.model}` : "no model"}
+        {provider ? `${provider.label} · ${modelName(provider.model)}` : "no model"}
         <button
           className="status-toggle"
           onClick={() => void setLayoutMode(layout === "simple" ? "advanced" : "simple")}

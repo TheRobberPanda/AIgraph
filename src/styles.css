@@ -1358,6 +1358,19 @@ blockquote {
 .knob-hint { grid-column: 2 / -1; font-size: 0.7rem; color: var(--faint); }
 .source-tabs.sub .btn { font-size: 0.8rem; }
 /* The one recommended answer, and everything else beside it. */
+/* The tick that turns the question off. Quiet, under the buttons — it is a
+   preference about being asked, not one of the answers. */
+.remember {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+.remember input { accent-color: var(--accent); }
+
 .digest-group { gap: 0.25rem; align-items: center; }
 .queue-btn { padding: 0.2rem 0.5rem; font-size: 0.9rem; line-height: 1; }
 

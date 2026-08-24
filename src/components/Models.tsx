@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import RuntimePanel from "./Runtime";
+import { modelName } from "../lib/format";
 import { startup, type Detected, type ModelInfo } from "../lib/chat";
 import {
   activeModels,
@@ -400,7 +401,7 @@ export default function Models() {
                               disabled={busy !== null}
                               onClick={() => void pick(role, s, m)}
                             >
-                              <span className="model-name">{m.id}</span>
+                              <span className="model-name">{modelName(m.id)}</span>
                               {m.loaded === true && <span className="tag ready">loaded</span>}
                               {m.loaded === false && (
                                 <span className="tag">needs loading</span>
