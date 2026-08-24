@@ -46,7 +46,14 @@ import {
   setCurrentFolder,
   ROOT_FOLDER,
 } from "./lib/folders";
-import { parseReply, speak, speakNext, stopSpeaking, takeSentences } from "./lib/voice";
+import {
+  onSpeakingChange,
+  parseReply,
+  speak,
+  speakNext,
+  stopSpeaking,
+  takeSentences,
+} from "./lib/voice";
 import { modelName } from "./lib/format";
 import { runtimeStatus } from "./lib/settings";
 import { sessionTurns } from "./lib/sessions";
@@ -212,6 +219,8 @@ export default function App() {
   const [held, setHeld] = useState(false);
   /** How far the model has got reading the prompt, when it can say. */
   const [readProgress, setReadProgress] = useState<number | null>(null);
+  /** Whether a reply is being read out right now. */
+  const [talking, setTalking] = useState(false);
   /** Reply text that has arrived but has not yet completed a sentence. */
   const pendingSpeech = useRef("");
   /**
@@ -325,9 +334,32 @@ export default function App() {
     return () => clearInterval(id);
   }, [streaming]);
 
+  /**
+   * Starting to talk again takes the countdown back.
+   *
+   * The pause was a pause, not the end. Waiting for the next transcribed
+   * phrase to arrive would have let it send in the gap between opening your
+   * mouth and the words being recognised — so this hangs on the voice
+   * detector, which knows as soon as there is sound.
+   */
+  useEffect(() => {
+    if (!hearing) return;
+    window.clearTimeout(quietRef.current);
+    setSendingIn(null);
+    setHeld(false);
+  }, [hearing]);
+
   // The countdown on screen. Its own timer rather than a value derived from
   // the send timeout, because the send has to stay exact whatever the display
   // is doing.
+  // Stopped again, with something waiting: start the countdown over. Not done
+  // when the phrase arrives, because a phrase can land while still talking.
+  useEffect(() => {
+    if (hearing || !callMode || streaming) return;
+    if (!heardRef.current.trim() || held) return;
+    armSend();
+  }, [hearing, callMode, streaming]);
+
   useEffect(() => {
     if (sendingIn === null) return;
     const id = setInterval(() => {
@@ -394,6 +426,8 @@ export default function App() {
   // Sessions can also end without the user doing anything — an idle timeout, or
   // the app closing. The stream has to clear in those cases too, or the UI would
   // keep showing a conversation the backend has already filed away.
+  useEffect(() => onSpeakingChange(setTalking), []);
+
   useEffect(() => {
     const p = onArchived((a) => {
       setTurns([]);
@@ -1125,6 +1159,8 @@ export default function App() {
           sendingIn={streaming || held ? null : sendingIn}
           silence={Math.max(1, callSilence)}
           progress={readProgress}
+          talking={talking}
+          onStopTalking={stopSpeaking}
           status={
             streaming
               ? "Thinking…"

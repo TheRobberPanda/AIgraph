@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import RuntimePanel from "./Runtime";
 import { modelName } from "../lib/format";
-import { IconDownload } from "./Icons";
+import { IconDownload, IconPlay, IconStop } from "./Icons";
 import { startup, type Detected, type ModelInfo } from "../lib/chat";
 import {
   activeModels,
@@ -181,12 +181,12 @@ export default function Models() {
     }
   }
 
-  async function runEmbedded() {
+  async function runEmbedded(file?: string) {
     setStarting(true);
     setError(null);
     try {
       if (embedded?.running) await stopEmbedded();
-      else await startEmbedded(chosenFile);
+      else await startEmbedded(file ?? chosenFile);
       setEmbedded(await embeddedStatus());
       await refresh();
     } catch (e) {
@@ -395,7 +395,9 @@ export default function Models() {
       {source === "local" && (
         <>
           <section className="model-role">
-            <h2 className="section">The model</h2>
+            {/* No heading: the only thing under it now is a download button
+                that appears when there is nothing downloaded, and a heading
+                over an empty space is a heading over nothing. */}
             {pulling ? (
               <div className="pulling">
                 <div className="pulling-head">
@@ -425,17 +427,6 @@ export default function Models() {
                     Download Bonsai ({embedded?.download_gb.toFixed(1) ?? "3.8"} GB)
                   </button>
                 )}
-                {/* An icon beside the model rather than a sentence under it:
-                    fetching a different one is the same kind of act as
-                    fetching this one, and reads better as a button than as a
-                    proposal. */}
-                <button
-                  className={browse ? "icon-btn on" : "icon-btn"}
-                  data-tip={browse ? "Close the browser" : "Find another model on Hugging Face"}
-                  onClick={() => setBrowse((b) => !b)}
-                >
-                  <IconDownload />
-                </button>
               </div>
             )}
 
@@ -504,48 +495,76 @@ export default function Models() {
               </div>
             )}
 
+            {/* One control per model: which one, and whether it is running.
+                They were two sections and two buttons, which made "start" look
+                like a separate thing you had to know to do rather than what
+                picking a model means. */}
             {embedded && embedded.downloaded.length > 0 && (
               <div className="downloaded">
-                <h3 className="section">On this machine</h3>
-                <div className="row">
-                  {embedded.downloaded.map((f) => (
-                    <button
-                      key={f}
-                      className={chosenFile === f ? "btn on" : "btn"}
-                      onClick={() => setChosenFile(chosenFile === f ? null : f)}
-                    >
-                      {f}
-                    </button>
-                  ))}
+                <div className="row section-row">
+                  <h3 className="section">On this machine</h3>
+                  {/* Beside the models rather than in a section of its own:
+                      fetching another one belongs with the ones you have. */}
+                  <button
+                    className={browse ? "icon-btn on" : "icon-btn"}
+                    data-tip={browse ? "Close the browser" : "Find another model on Hugging Face"}
+                    onClick={() => setBrowse((b) => !b)}
+                  >
+                    <IconDownload />
+                  </button>
                 </div>
+                <ul className="list model-list">
+                  {embedded.downloaded.map((f) => {
+                    const isRunning = embedded.running && (chosenFile === null || chosenFile === f);
+                    return (
+                      <li key={f}>
+                        <button
+                          className={isRunning ? "model-run on" : "model-run"}
+                          disabled={starting || !embedded.server_ready}
+                          data-tip={
+                            !embedded.server_ready
+                              ? "No engine yet — install one in Settings"
+                              : isRunning
+                                ? "Stop it and free the memory"
+                                : "Start it"
+                          }
+                          onClick={() => {
+                            setChosenFile(f);
+                            void runEmbedded(f);
+                          }}
+                        >
+                          <span className="model-run-icon" aria-hidden="true">
+                            {starting && chosenFile === f ? (
+                              <span className="spinner" />
+                            ) : isRunning ? (
+                              <IconStop />
+                            ) : (
+                              <IconPlay />
+                            )}
+                          </span>
+                          <span className="row-main">{modelName(f)}</span>
+                          <span className="row-meta">
+                            {starting && chosenFile === f
+                              ? "starting…"
+                              : isRunning
+                                ? "running"
+                                : "stopped"}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {embedded.running && <p className="blurb">{embedded.host}</p>}
               </div>
             )}
 
-            {embedded?.model_ready && !embedded.server_ready ? (
-              <>
-                <p className="blurb">
-                  <span className="tag ready">weights ready</span> Install an
-                  engine below and this can run.
-                </p>
-              </>
-            ) : embedded?.server_ready ? (
-              <div className="row">
-                <button
-                  className={embedded.running ? "btn on" : "btn"}
-                  disabled={starting}
-                  onClick={() => void runEmbedded()}
-                >
-                  {starting
-                    ? "Starting…"
-                    : embedded.running
-                      ? "Running — stop it"
-                      : chosenFile
-                        ? `Start ${chosenFile}`
-                        : "Start it"}
-                </button>
-                <span className="row-meta">{embedded.host}</span>
-              </div>
-            ) : null}
+            {embedded?.model_ready && !embedded.server_ready && (
+              <p className="blurb warn">
+                <span className="tag ready">weights ready</span> Nothing to run
+                them with yet — install an engine in <b>Settings → The engine</b>.
+              </p>
+            )}
           </section>
 
           <RuntimePanel />

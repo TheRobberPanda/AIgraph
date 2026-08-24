@@ -56,6 +56,19 @@ let current: SpeechSynthesisUtterance | null = null;
  */
 const queue: string[] = [];
 let draining = false;
+/** Told when speech starts and stops, so a "stop talking" button can appear
+ *  only while there is something to stop. */
+const listeners = new Set<(on: boolean) => void>();
+
+export function onSpeakingChange(cb: (on: boolean) => void): () => void {
+  listeners.add(cb);
+  cb(draining);
+  return () => listeners.delete(cb);
+}
+
+function announce(on: boolean) {
+  for (const cb of listeners) cb(on);
+}
 /** Bumped on stop, so a drain in flight knows it has been cancelled. */
 let generation = 0;
 
@@ -88,6 +101,7 @@ export function speakNext(text: string, neural = false): void {
 
 async function drain(neural: boolean) {
   draining = true;
+  announce(true);
   const mine = generation;
   while (queue.length && generation === mine) {
     const next = queue.shift()!;
@@ -104,6 +118,7 @@ async function drain(neural: boolean) {
     }
   }
   draining = false;
+  announce(false);
 }
 
 /** Resolves when the utterance has finished, so the queue paces itself. */
@@ -155,6 +170,8 @@ export function stopSpeaking(): void {
   queue.length = 0;
   window.speechSynthesis?.cancel();
   current = null;
+  draining = false;
+  announce(false);
 }
 
 /** Whether this machine can speak at all — the setting is hidden if not. */

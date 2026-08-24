@@ -22,6 +22,8 @@ export default function Call({
   sendingIn,
   silence,
   progress,
+  talking,
+  onStopTalking,
   onHold,
   onSendNow,
   onHangUp,
@@ -39,6 +41,9 @@ export default function Call({
   silence: number;
   /** How far the model has got, 0–1, or null when it cannot say. */
   progress: number | null;
+  /** A reply is being read out right now. */
+  talking: boolean;
+  onStopTalking: () => void;
   /** Stop the countdown and keep listening. */
   onHold: () => void;
   onSendNow: () => void;
@@ -156,9 +161,18 @@ export default function Call({
           </div>
         )}
 
-        <button className="btn call-end" onClick={onHangUp}>
-          End
-        </button>
+        <div className="row call-actions">
+          {/* Only while there is something to stop. A dead button for the
+              other ninety per cent of a call is worse than no button. */}
+          {talking && (
+            <button className="btn" onClick={onStopTalking}>
+              Stop talking
+            </button>
+          )}
+          <button className="btn call-end" onClick={onHangUp}>
+            End
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -670,7 +670,15 @@ input, textarea {
 .pick-option .row-meta { margin-left: auto; }
 
 /* The three places a model can come from. */
-.source-tabs { margin-bottom: 0.4rem; }
+/* Tabs, so the chosen one reads as the page you are on rather than as one more
+   button that happens to be outlined. */
+.source-tabs { margin-bottom: 0.4rem; gap: 0.25rem; }
+.source-tabs .btn { border-color: transparent; }
+.source-tabs .btn.on {
+  background: var(--surface-lift);
+  border-color: var(--line);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
 .bundled-facts { margin: 0 0 0.9rem; }
 .bundled-facts code { font-size: 0.8em; }
 
@@ -825,7 +833,14 @@ button { font-family: inherit; }
 .btn:hover:not(:disabled) { color: var(--fg); border-color: var(--accent); }
 .btn:disabled { opacity: 0.45; cursor: default; }
 .btn:active:not(:disabled) { transform: scale(0.97); }
-.btn.on { color: var(--fg); border-color: var(--accent); }
+/* Chosen, not merely hovered. A border alone was the same weight as the hover
+   state next to it, so a row of buttons gave no answer to "which one is on". */
+.btn.on {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  font-weight: 500;
+}
 .btn.danger { color: var(--danger); border-color: currentColor; }
 .btn.busy { color: var(--fg); border-color: var(--accent); cursor: progress; }
 
@@ -1373,6 +1388,36 @@ blockquote {
 
 /* The live readout, beside the model that is producing it. */
 .vitals { font-variant-numeric: tabular-nums; }
+
+/* One row per model: which one, and whether it is running. */
+.model-list { margin: 0.3rem 0 0.7rem; }
+.model-run {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+.model-run:hover:not(:disabled) { background: var(--surface-lift); border-color: var(--faint); }
+.model-run:disabled { opacity: 0.55; cursor: default; }
+/* Running is a state, not a hover — it reads from across the room. */
+.model-run.on {
+  border-color: var(--verdant);
+  background: color-mix(in srgb, var(--verdant) 12%, transparent);
+}
+.model-run-icon { flex: none; display: inline-flex; width: 1rem; color: var(--muted); }
+.model-run.on .model-run-icon { color: var(--verdant); }
+.model-run .row-meta { margin-left: auto; }
+.section-row { align-items: center; gap: 0.5rem; }
+.section-row .section { margin: 0; }
 .statusbar .status-toggle { display: inline-flex; align-items: center; gap: 0.3rem; }
 .statusbar .status-toggle svg { width: 10px; height: 10px; }
 
@@ -1526,7 +1571,9 @@ blockquote {
   font-variant-numeric: tabular-nums;
 }
 .call-progress { display: flex; flex-direction: column; gap: 0.35rem; width: min(28rem, 70vw); }
+.call-actions { gap: 0.6rem; }
 .call-end { padding: 0.55rem 1.6rem; border-radius: 999px; }
+.call-actions .btn { border-radius: 999px; padding: 0.55rem 1.2rem; }
 @media (prefers-reduced-motion: reduce) {
   .call { animation: none; }
 }
@@ -1658,7 +1705,12 @@ blockquote {
   text-align: left; cursor: pointer;
 }
 .model:hover:not(:disabled) { border-color: var(--accent); background: var(--surface); }
-.model.chosen { border-color: var(--accent); background: var(--surface); }
+.model.chosen {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* A tick, so "in use" is legible without reading the label beside it. */
+.model.chosen .model-name::before { content: "✓ "; color: var(--accent); }
 .model:disabled { opacity: 0.5; cursor: default; }
 .model-name { flex: 1; font-family: var(--mono); font-size: 0.74rem; }
 .current { margin: 0 0 0.5rem; font-family: var(--mono); font-size: 0.68rem; color: var(--faint); }
