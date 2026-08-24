@@ -66,6 +66,12 @@ pub struct Settings {
     /// the box on the picker, which is the point at which someone has actually
     /// decided.
     pub ask_provider: bool,
+    /// Seconds of quiet in a call before what you said is sent.
+    ///
+    /// Thinking out loud has pauses in it, and a short wait cuts people off
+    /// mid-sentence. Five is long enough to gather a thought and short enough
+    /// not to feel stuck.
+    pub call_silence_seconds: u32,
     /// How the model bundled with the app is run, when that is the one in use.
     pub runtime: Runtime,
     /// Whether the map, ideas and conversations sit around the conversation
@@ -176,6 +182,7 @@ impl Default for Settings {
             voice: Voice::Off,
             recall: true,
             ask_provider: true,
+            call_silence_seconds: 5,
             runtime: Runtime::default(),
             layout: Layout::default(),
         }

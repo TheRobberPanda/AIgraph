@@ -212,6 +212,9 @@ pub async fn startup(state: State<'_, AppState>) -> Result<Startup, String> {
         Some((server, model)) => {
             let (kind, host, id) = (server.kind, server.host.clone(), model.id.clone());
             set_active(&state, kind, &host, &id).await;
+            // Written down, not just applied. Leaving the file naming a server
+            // that is gone means every later save tries to go back to it.
+            remember_choice(&state, kind, &host, &id).await;
             Some(Selected { kind, label: kind.label().to_string(), model: id })
         }
         None => None,
@@ -228,7 +231,25 @@ pub async fn select_provider(
     model: String,
 ) -> Result<Selected, String> {
     set_active(&state, kind, &host, &model).await;
+    remember_choice(&state, kind, &host, &model).await;
     Ok(Selected { kind, label: kind.label().to_string(), model })
+}
+
+/// Record which model is in use, so the settings file agrees with reality.
+async fn remember_choice(state: &State<'_, AppState>, kind: LocalKind, host: &str, model: &str) {
+    let mut settings = state.settings.lock().await;
+    let choice = crate::settings::ModelChoice {
+        kind,
+        host: host.to_string(),
+        model: model.to_string(),
+    };
+    // Extraction follows only where it was following already — someone who
+    // chose a separate extractor meant it.
+    if settings.extraction == settings.chat {
+        settings.extraction = Some(choice.clone());
+    }
+    settings.chat = Some(choice);
+    let _ = settings.save(&state.data_dir);
 }
 
 async fn set_active(state: &State<'_, AppState>, kind: LocalKind, host: &str, model: &str) {
@@ -1526,22 +1547,33 @@ pub async fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<Settings, String> {
+    // What was saved before, so a save can tell what this one actually changed.
+    let previous = state.settings.lock().await.clone();
     settings.save(&state.data_dir).map_err(|e| e.to_string())?;
     *state.settings.lock().await = settings.clone();
 
-    if let Some(choice) = &settings.chat {
-        let current = state.active.lock().await.as_ref().map(|a| a.model.clone());
-        if current.as_deref() != Some(choice.model.as_str()) {
+    // Only when *this* save changed the choice.
+    //
+    // It used to compare the saved choice against the live provider and switch
+    // whenever they differed — which meant every unrelated save, a voice
+    // toggle, a slider, dismissing a dialog, dragged the model back to
+    // whatever the file said. With a stale entry naming a server that is no
+    // longer running, that silently replaced a working model with a dead one
+    // and the next message failed against a host nobody had chosen.
+    if settings.chat != previous.chat {
+        if let Some(choice) = &settings.chat {
             set_active(&state, choice.kind, &choice.host, &choice.model).await;
         }
     }
 
-    if let Some(choice) = &settings.extraction {
-        *state.extractor.lock().await = Some(Extractor {
-            provider: detect::extractor(choice.kind, &choice.host, &choice.model),
-            label: choice.kind.label().to_string(),
-            model: choice.model.clone(),
-        });
+    if settings.extraction != previous.extraction {
+        if let Some(choice) = &settings.extraction {
+            *state.extractor.lock().await = Some(Extractor {
+                provider: detect::extractor(choice.kind, &choice.host, &choice.model),
+                label: choice.kind.label().to_string(),
+                model: choice.model.clone(),
+            });
+        }
     }
 
     let _ = app.emit("settings:changed", settings.clone());

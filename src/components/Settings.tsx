@@ -161,6 +161,28 @@ export default function Settings() {
           is usually the one you want. The downloaded voice sounds better and
           runs on the CPU.
         </p>
+        <div className="knobs">
+          <div className="knob">
+            <label className="knob-name">Pause before sending</label>
+            <input
+              type="range"
+              className="scale-slider"
+              min={1}
+              max={15}
+              step={1}
+              value={s.call_silence_seconds}
+              onChange={(e) => setS({ ...s, call_silence_seconds: Number(e.target.value) })}
+              onMouseUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
+              onKeyUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
+            />
+            <span className="knob-value">{s.call_silence_seconds}s</span>
+            <span className="knob-hint">
+              How long a call waits after you stop talking before it sends what
+              you said. Thinking out loud has pauses in it.
+            </span>
+          </div>
+        </div>
+
         {!voice?.installed &&
           (fetching?.what === "voice" ? (
             <p className="blurb">

@@ -179,7 +179,12 @@ export default function App() {
   const [turnAction, setTurnAction] = useState<{ index: number; kind: "delete" | "rewind" } | null>(
     null,
   );
-  const [turnMenu, setTurnMenu] = useState<{ x: number; y: number; index: number } | null>(null);
+  const [turnMenu, setTurnMenu] = useState<{
+    x: number;
+    y: number;
+    index: number;
+    text: string;
+  } | null>(null);
   // Where this stretch of thinking gets filed. The backend is the source of
   // truth, since an idle timeout can archive without the UI involved.
   const [folderId, setFolderId] = useState<number>(ROOT_FOLDER);
@@ -214,6 +219,9 @@ export default function App() {
    */
   const [asking, setAsking] = useState<boolean | null>(null);
   const [remember, setRemember] = useState(false);
+  /** Seconds of quiet before a call sends. Mirrored from settings so the
+   *  timer does not have to read them on every phrase. */
+  const [callSilence, setCallSilence] = useState(5);
   const [rechecking, setRechecking] = useState(false);
 
   const endRef = useRef<HTMLDivElement>(null);
@@ -269,7 +277,10 @@ export default function App() {
       })
       .catch((e) => setError(String(e)));
     void getSettings()
-      .then((s) => setAsking(s.ask_provider))
+      .then((s) => {
+        setAsking(s.ask_provider);
+        setCallSilence(s.call_silence_seconds);
+      })
       .catch(() => setAsking(false));
   }, []);
 
@@ -392,9 +403,10 @@ export default function App() {
    * In a call, finishing a sentence sends it.
    *
    * There is no keyboard in a call, so waiting for one would be waiting
-   * forever. Held for a beat after the last phrase rather than sent on it: a
-   * pause mid-thought is not the end of a thought, and cutting someone off at
-   * the first comma is worse than a second of latency.
+   * forever. Held for a few seconds after the last phrase rather than sent on
+   * it: a pause mid-thought is not the end of a thought, and cutting someone
+   * off at the first comma is worse than waiting. How long is a setting,
+   * because how long anyone pauses is not something to guess at.
    */
   function heard(text: string) {
     if (!callMode) {
@@ -407,7 +419,7 @@ export default function App() {
       const said = heardRef.current.trim();
       heardRef.current = "";
       if (said) void sendText(said);
-    }, 1200);
+    }, Math.max(1, callSilence) * 1000);
   }
 
   async function send() {
@@ -921,7 +933,7 @@ export default function App() {
             onContextMenu={(e) => {
               if (streaming) return;
               e.preventDefault();
-              setTurnMenu({ x: e.clientX, y: e.clientY, index: i });
+              setTurnMenu({ x: e.clientX, y: e.clientY, index: i, text: t.content });
             }}
           >
             {/* The user's own words stay verbatim — they are what quotes get
@@ -949,6 +961,12 @@ export default function App() {
             y={turnMenu.y}
             onClose={() => setTurnMenu(null)}
             items={[
+              {
+                // First, and without a confirmation: it is the one thing here
+                // that changes nothing.
+                label: "Copy",
+                onSelect: () => void navigator.clipboard.writeText(turnMenu.text),
+              },
               {
                 label: "Delete this message",
                 danger: true,
