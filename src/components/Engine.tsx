@@ -49,7 +49,6 @@ export default function Engine({ onChanged }: { onChanged?: () => void }) {
   return (
     <>
       {error && <p className="error">{error}</p>}
-    <h3 className="section">The engine</h3>
     {error && <p className="error">{error}</p>}
 
     {/* Shown whether or not one is installed already. It used to be an

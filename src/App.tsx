@@ -79,15 +79,14 @@ import {
  * the same list twice — once with the ideas hidden and once with the
  * conversations reduced to headings.
  */
-type Tab = "chat" | "map" | "ideas" | "models" | "settings";
-const TABS: Tab[] = ["chat", "map", "ideas", "models", "settings"];
+type Tab = "chat" | "map" | "ideas" | "settings";
+const TABS: Tab[] = ["chat", "map", "ideas", "settings"];
 
 /** What each place is called. One map, so the rail and the URL agree. */
 const TAB_NAMES: Record<Tab, string> = {
   chat: "Think",
   map: "Map",
   ideas: "Ideas",
-  models: "Models",
   settings: "Settings",
 };
 
@@ -98,12 +97,18 @@ const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>>
   chat: IconThink,
   map: IconMap,
   ideas: IconIdeas,
-  models: IconModels,
   settings: IconSettings,
 };
 
 const MAIN: Tab[] = ["chat", "map", "ideas"];
-const SETUP: Tab[] = ["models", "settings"];
+/**
+ * Settings only.
+ *
+ * Models had a tab of its own until the model became a chip on the
+ * conversation — two doors to one room, one of them next to the window
+ * controls where nothing else about the conversation lives.
+ */
+const SETUP: Tab[] = ["settings"];
 
 type Deep = { kind: "idea"; id: number } | { kind: "conversation"; id: number } | null;
 
@@ -621,7 +626,7 @@ export default function App() {
    * In the all-at-once layout the tabs are gone, so expanding a panel left no
    * way back at all. The app's own name is the one thing always on screen.
    */
-  const awayFromMain = !!deep || !!expanded || view === "models" || view === "settings";
+  const awayFromMain = !!deep || !!expanded || view === "settings";
 
   function backToMain() {
     if (deep) setDeep(null);
@@ -803,9 +808,7 @@ export default function App() {
       </nav>
 
       <div className="pane">
-      {view === "models" ? (
-        <Models />
-      ) : view === "settings" ? (
+      {view === "settings" ? (
         <SettingsPanel />
       ) : (
       // Everything at once rather than one tab at a time: the map and the

@@ -1414,6 +1414,10 @@ blockquote {
   background: color-mix(in srgb, var(--verdant) 12%, transparent);
 }
 .model-run-icon { flex: none; display: inline-flex; width: 1rem; color: var(--muted); }
+/* The "another model" row: the same shape as a model, dashed so it reads as
+   an opening rather than as something already there. */
+.model-run.add { border-style: dashed; color: var(--muted); }
+.model-run.add:hover { color: var(--fg); }
 .model-run.on .model-run-icon { color: var(--verdant); }
 .model-run .row-meta { margin-left: auto; }
 .section-row { align-items: center; gap: 0.5rem; }

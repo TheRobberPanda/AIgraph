@@ -501,18 +501,7 @@ export default function Models() {
                 picking a model means. */}
             {embedded && embedded.downloaded.length > 0 && (
               <div className="downloaded">
-                <div className="row section-row">
-                  <h3 className="section">On this machine</h3>
-                  {/* Beside the models rather than in a section of its own:
-                      fetching another one belongs with the ones you have. */}
-                  <button
-                    className={browse ? "icon-btn on" : "icon-btn"}
-                    data-tip={browse ? "Close the browser" : "Find another model on Hugging Face"}
-                    onClick={() => setBrowse((b) => !b)}
-                  >
-                    <IconDownload />
-                  </button>
-                </div>
+
                 <ul className="list model-list">
                   {embedded.downloaded.map((f) => {
                     const isRunning = embedded.running && (chosenFile === null || chosenFile === f);
@@ -554,6 +543,22 @@ export default function Models() {
                       </li>
                     );
                   })}
+                  {/* On the end of the list, at the same size as the models in
+                      it: another model is another row here, not an errand. */}
+                  <li>
+                    <button
+                      className={browse ? "model-run add on" : "model-run add"}
+                      data-tip={browse ? "Close the browser" : "Find another model on Hugging Face"}
+                      onClick={() => setBrowse((b) => !b)}
+                    >
+                      <span className="model-run-icon" aria-hidden="true">
+                        <IconDownload />
+                      </span>
+                      <span className="row-main">
+                        {browse ? "Close the browser" : "Another model…"}
+                      </span>
+                    </button>
+                  </li>
                 </ul>
                 {embedded.running && <p className="blurb">{embedded.host}</p>}
               </div>

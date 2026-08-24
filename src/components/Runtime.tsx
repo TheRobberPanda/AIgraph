@@ -166,7 +166,6 @@ export default function RuntimePanel() {
         </>
       )}
 
-      <h3 className="section sub">How much of the machine it gets</h3>
       <div className="knobs">
         <Slider
           label="GPU offload"
@@ -245,7 +244,6 @@ export default function RuntimePanel() {
             />
           </div>
 
-          <h3 className="section sub">How it sounds</h3>
           <p className="blurb">
             Left at llama.cpp's own defaults. Anything else would be this app
             quietly having an opinion about how every model should sound.
