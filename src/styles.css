@@ -542,7 +542,8 @@ input, textarea {
   align-items: center;
   justify-content: center;
   padding: 3vh 3vw;
-  background: rgba(0, 0, 0, 0.55);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(2px);
 }
 .sheet {
   width: min(72rem, 92vw);
@@ -856,18 +857,24 @@ button { font-family: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
+  /* Mixed from the app's own background rather than flat black. Black at 45%
+     over a background this dark stops reading as a dimming and starts reading
+     as a box laid on top of the window. */
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(2px);
 }
 .modal {
-  min-width: 20rem;
-  max-width: 26rem;
+  min-width: 16rem;
+  max-width: 24rem;
   padding: 1.1rem 1.2rem;
   background: var(--surface-lift);
   border: 1px solid var(--line);
   border-radius: 9px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
-.modal.confirm p { margin: 0 0 1rem; color: var(--fg); font-size: 0.9rem; }
+/* A question and two buttons needs no more room than that. */
+.modal.confirm { min-width: 0; width: max-content; max-width: min(24rem, 80vw); }
+.modal.confirm p { margin: 0 0 0.9rem; color: var(--fg); font-size: 0.9rem; white-space: nowrap; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
 
 /* An in-app tooltip, replacing the browser's own — which renders as an
@@ -1320,6 +1327,27 @@ blockquote {
 /* Picking a subject out of the idea list, the same toggle the map's legend
    uses. Several can be on at once: two subjects that keep coming up together
    are worth seeing side by side. */
+/* A labelled slider with its value beside it. Sliders rather than number
+   fields: these are all "more or less of the machine", and typing 8192 into a
+   box to answer that is the wrong shape of question. */
+.knobs { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0 0.9rem; max-width: 34rem; }
+.knob {
+  display: grid;
+  grid-template-columns: 9rem 1fr 4.5rem;
+  align-items: center;
+  gap: 0.1rem 0.7rem;
+}
+.knob-name { font-size: 0.85rem; color: var(--fg); }
+.knob-value {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.knob-hint { grid-column: 2 / -1; font-size: 0.7rem; color: var(--faint); }
+.source-tabs.sub .btn { font-size: 0.8rem; }
+
 /* A settings section, closed until asked for. */
 .fold { border-bottom: 1px solid var(--line); }
 .fold-head {
@@ -1628,7 +1656,12 @@ blockquote {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  min-width: 160px;
+  /* Sized to its longest item. Without this it took whatever width the
+     shrink-to-fit calculation offered it, which next to a wide parent was the
+     rest of the window. */
+  width: max-content;
+  min-width: 10rem;
+  max-width: min(20rem, 70vw);
   padding: 0.3rem;
   background: var(--surface-lift);
   border: 1px solid var(--line);

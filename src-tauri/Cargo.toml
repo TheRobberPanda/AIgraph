@@ -42,6 +42,8 @@ ureq = "2"
 # use nothing else, and the other codecs bring C dependencies.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 bzip2 = "0.4"
+# Release archives are gzipped tarballs on Linux and macOS.
+flate2 = "1"
 
 keyring = { version = "3", features = ["linux-native", "apple-native", "windows-native"] }
 thiserror = "2"

@@ -4,17 +4,12 @@ import {
   applyTheme,
   applyUiScale,
   getSettings,
-  installLlamaServer,
   installVoice,
   onServerDownload,
   onVoiceDownload,
-  embeddedStatus,
-  reextractAll,
   saveSettings,
   transcriptsDir,
   voiceStatus,
-  type EmbeddedStatus,
-  type Runtime,
   type Settings as S,
   type Theme,
 } from "../lib/settings";
@@ -32,69 +27,16 @@ const THEMES: { value: Theme; label: string }[] = [
   { value: "light", label: "Light" },
 ];
 
-/**
- * Every knob the embedded model is started with, in one place.
- *
- * Two groups, because they answer different questions. The first is whether it
- * runs at all on this machine; the second is how it sounds. Mixing them means
- * someone hunting for "why is this slow" reads four sampling settings first.
- */
-const LOADING: {
-  key: keyof Runtime;
-  label: string;
-  hint: string;
-  min: number;
-  max: number;
-  step: number;
-}[] = [
-  { key: "gpu_layers", label: "GPU layers", hint: "0 keeps everything on the CPU", min: 0, max: 128, step: 1 },
-  { key: "context_length", label: "Context", hint: "tokens held at once — costs memory", min: 512, max: 262144, step: 512 },
-  { key: "batch_size", label: "Batch", hint: "tokens per pass; larger fills a GPU better", min: 32, max: 4096, step: 32 },
-  { key: "threads", label: "CPU threads", hint: "0 lets it decide from the machine", min: 0, max: 64, step: 1 },
-  { key: "parallel", label: "Parallel", hint: "conversations answered at once; each takes a slice of the context", min: 1, max: 8, step: 1 },
-];
-
-const SAMPLING: {
-  key: keyof Runtime;
-  label: string;
-  hint: string;
-  min: number;
-  max: number;
-  step: number;
-}[] = [
-  { key: "temperature", label: "Temperature", hint: "how adventurous the wording is", min: 0, max: 2, step: 0.05 },
-  { key: "top_p", label: "Top P", hint: "share of the probability mass considered", min: 0.05, max: 1, step: 0.01 },
-  { key: "top_k", label: "Top K", hint: "how many candidates are considered at all", min: 0, max: 200, step: 1 },
-  { key: "repeat_penalty", label: "Repeat penalty", hint: "pressure against repeating itself; 1 is off", min: 1, max: 2, step: 0.01 },
-];
-
-const SWITCHES: { key: keyof Runtime; label: string; hint: string }[] = [
-  { key: "kv_cache_on_gpu", label: "KV cache on the GPU", hint: "faster, at the cost of VRAM the model wants" },
-  { key: "flash_attention", label: "Flash attention", hint: "fused kernels where the backend has them" },
-  { key: "mlock", label: "Lock in RAM", hint: "stops the OS paging the weights out" },
-  { key: "keep_in_memory", label: "Keep loaded", hint: "hold the weights between sessions instead of reloading" },
-];
-
-export default function Settings({
-  folder,
-  folderName,
-}: {
-  folder: number | null;
-  folderName: string;
-}) {
+export default function Settings() {
   const [s, setS] = useState<S | null>(null);
   const [dir, setDir] = useState("");
   const [speech, setSpeech] = useState<{ installed: boolean; mb: number } | null>(null);
   const [voice, setVoice] = useState<{ installed: boolean; download_mb: number } | null>(null);
-  const [server, setServer] = useState<EmbeddedStatus | null>(null);
   const [fetching, setFetching] = useState<{ what: string; received: number; total: number } | null>(
     null,
   );
   const [downloading, setDownloading] = useState<DownloadProgress | null>(null);
-  const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** Null while nothing is pending, otherwise the scope being confirmed. */
-  const [confirming, setConfirming] = useState<"folder" | "all" | null>(null);
   /** What is being fetched right now, so a button that has been pressed says
    *  so. A download with no sign of life reads as a dead button, and the
    *  second press is someone giving up on the first. */
@@ -114,7 +56,6 @@ export default function Settings({
       .then((x) => setSpeech({ installed: x.installed, mb: x.download_mb }))
       .catch(() => {});
     void voiceStatus().then(setVoice).catch(() => {});
-    void embeddedStatus().then(setServer).catch(() => {});
     const p = onDownloadProgress(setDownloading);
     const q = onServerDownload(setFetching);
     const r = onVoiceDownload(setFetching);
@@ -125,10 +66,6 @@ export default function Settings({
     };
   }, []);
 
-  function setRuntime(patch: Partial<Runtime>) {
-    if (!s) return;
-    void update({ runtime: { ...s.runtime, ...patch } });
-  }
 
   async function update(patch: Partial<S>) {
     if (!s) return;
@@ -303,150 +240,6 @@ export default function Settings({
             </button>
           </>
         )}
-      </Fold>
-
-      <Fold title="The model this app runs" summary={server?.server_ready ? "engine ready" : "no engine"} {...fold("runtime")}>
-                <p className="blurb">
-          These apply to the model the app starts itself. A model reached
-          through LM Studio, Ollama, or an API is configured where it lives.
-        </p>
-
-        {server?.server_ready ? (
-          <p className="path">{server.server_path}</p>
-        ) : fetching?.what === "llama-server" ? (
-          <p className="blurb">
-            Fetching llama-server…{" "}
-            {Math.round((fetching.received / (fetching.total || 1)) * 100)}%
-          </p>
-        ) : (
-          <>
-            <p className="blurb">
-              No engine yet. The CPU build is one download; a GPU build is
-              per-vendor, so if you have built llama.cpp yourself, putting
-              <code> llama-server</code> on your PATH is preferred over this one.
-            </p>
-            <button
-              className={busy === "server" ? "btn busy" : "btn"}
-              disabled={busy !== null}
-              onClick={() => {
-                setBusy("server");
-                setError(null);
-                installLlamaServer()
-                  .then(() => embeddedStatus().then(setServer))
-                  .catch((e) => setError(String(e)))
-                  .finally(() => setBusy(null));
-              }}
-            >
-              {busy === "server" && <span className="spinner" aria-hidden="true" />}
-              {busy === "server" ? "Installing…" : "Install llama-server"}
-            </button>
-          </>
-        )}
-
-        <h3 className="section sub">Loading</h3>
-        <div className="params">
-          {LOADING.map((f) => (
-            <label key={f.key} className="param">
-              <span className="param-name">{f.label}</span>
-              <input
-                className="field param-input"
-                type="number"
-                min={f.min}
-                max={f.max}
-                step={f.step}
-                value={s.runtime[f.key] as number}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  if (Number.isFinite(v)) setRuntime({ [f.key]: v } as Partial<Runtime>);
-                }}
-              />
-              <span className="param-hint">{f.hint}</span>
-            </label>
-          ))}
-        </div>
-
-        <h3 className="section sub">Sampling</h3>
-        <p className="blurb">
-          Left at llama.cpp's own defaults. Anything else would be this app
-          quietly having an opinion about how every model should sound.
-        </p>
-        <div className="params">
-          {SAMPLING.map((f) => (
-            <label key={f.key} className="param">
-              <span className="param-name">{f.label}</span>
-              <input
-                className="field param-input"
-                type="number"
-                min={f.min}
-                max={f.max}
-                step={f.step}
-                value={s.runtime[f.key] as number}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  if (Number.isFinite(v)) setRuntime({ [f.key]: v } as Partial<Runtime>);
-                }}
-              />
-              <span className="param-hint">{f.hint}</span>
-            </label>
-          ))}
-        </div>
-
-        <h3 className="section sub">Switches</h3>
-        <div className="row wrap">
-          {SWITCHES.map((f) => (
-            <button
-              key={f.key}
-              className={s.runtime[f.key] ? "btn on" : "btn"}
-              data-tip={f.hint}
-              onClick={() => setRuntime({ [f.key]: !s.runtime[f.key] } as Partial<Runtime>)}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-        <p className="blurb">
-          Changes take effect the next time the model starts. Stop and start it
-          in Models to apply them now.
-        </p>
-      </Fold>
-
-      <Fold title="Re-read conversations" {...fold("reread")}>
-                <p className="blurb">
-          Discards the ideas and reads the conversations again — worth doing
-          after the app has learned to read better. The conversations
-          themselves are untouched.
-        </p>
-        {confirming ? (
-          <div className="row">
-            <button
-              className="btn danger"
-              onClick={() => {
-                const scope = confirming === "folder" ? folder : null;
-                setConfirming(null);
-                reextractAll(scope)
-                  .then((n) => setNote(`Re-reading ${n} conversation${n === 1 ? "" : "s"}.`))
-                  .catch((e) => setError(String(e)));
-              }}
-            >
-              {confirming === "folder" ? `Yes, re-read ${folderName}` : "Yes, re-read everything"}
-            </button>
-            <button className="btn" onClick={() => setConfirming(null)}>
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <div className="row">
-            {/* Scoped first: fixing one line of thinking should not mean
-                paying to re-read every other one. */}
-            <button className="btn" onClick={() => setConfirming("folder")}>
-              Re-read {folderName}
-            </button>
-            <button className="btn" onClick={() => setConfirming("all")}>
-              Re-read every folder
-            </button>
-          </div>
-        )}
-        {note && <p className="blurb">{note}</p>}
       </Fold>
 
       <Fold title="How this app uses AI" {...fold("ai")}>

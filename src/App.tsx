@@ -666,7 +666,7 @@ export default function App() {
       {view === "models" ? (
         <Models />
       ) : view === "settings" ? (
-        <SettingsPanel folder={folderId} folderName={folderName} />
+        <SettingsPanel />
       ) : (
       // Everything at once rather than one tab at a time: the map and the
       // conversations to the left, the ideas they produced to the right, and

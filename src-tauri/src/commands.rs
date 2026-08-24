@@ -1291,11 +1291,15 @@ pub async fn speak(state: State<'_, AppState>, text: String) -> Result<(), Strin
 pub async fn install_llama_server(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    flavour: Option<String>,
 ) -> Result<(), String> {
+    // Stopped first: the running server holds the file being replaced.
+    state.embedded.lock().await.stop();
+    let flavour = flavour.unwrap_or_else(|| "cpu".into());
     let handle = app.clone();
     let embedded = crate::llm::embedded::Embedded::new(&state.data_dir);
     tauri::async_runtime::spawn_blocking(move || {
-        embedded.install_server(&move |p| {
+        embedded.install_server(&flavour, &move |p| {
             let _ = handle.emit("server:download", p);
         })
     })

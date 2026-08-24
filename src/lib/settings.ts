@@ -132,6 +132,10 @@ export function clearAnthropicKey(): Promise<void> {
 
 /** The model the app runs itself. */
 export interface EmbeddedStatus {
+  /** Which build we installed, if we installed it. */
+  server_build?: string | null;
+  /** Whether a vendor-neutral GPU build exists for this platform. */
+  vulkan_available?: boolean;
   model_ready: boolean;
   server_ready: boolean;
   server_path: string | null;
@@ -199,8 +203,8 @@ export function downloadModelFile(repo: string, file: string, size: number): Pro
 
 
 /** Fetch a llama-server, so a model can run without one installed. */
-export function installLlamaServer(): Promise<void> {
-  return invoke("install_llama_server");
+export function installLlamaServer(flavour: "cpu" | "vulkan" | string = "cpu"): Promise<void> {
+  return invoke("install_llama_server", { flavour });
 }
 
 export function onServerDownload(

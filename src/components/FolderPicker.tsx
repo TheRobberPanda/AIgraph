@@ -8,6 +8,7 @@ import {
   type Folder,
 } from "../lib/folders";
 import FolderMark from "./FolderMark";
+import { reextractAll } from "../lib/settings";
 
 /**
  * Choose where this stretch of thinking gets filed, or start a new folder.
@@ -30,6 +31,16 @@ export default function FolderPicker({
   /** Deleting takes two clicks: the first arms it, the second does it. A
    *  folder is easy to hit by accident and there is no undo. */
   const [arming, setArming] = useState<number | null>(null);
+  /**
+   * Re-reading a folder, armed the same way deleting is.
+   *
+   * Here rather than in Settings because this is where folders are, and it is
+   * the only screen that lists all of them — the point being to re-read *a*
+   * folder, not just the one you happen to be in. Deliberately quiet: it can
+   * take a very long time and it is almost never the answer.
+   */
+  const [rereading, setRereading] = useState<number | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   const refresh = () => listFolders().then(setFolders).catch((e) => setError(String(e)));
 
@@ -83,6 +94,30 @@ export default function FolderPicker({
                   {f.session_count} {f.session_count === 1 ? "conversation" : "conversations"}
                 </span>
               </button>
+              {rereading === f.id ? (
+                <button
+                  className="btn folder-remove armed"
+                  onClick={() => {
+                    setRereading(null);
+                    reextractAll(f.id)
+                      .then((n) =>
+                        setNote(`Re-reading ${n} conversation${n === 1 ? "" : "s"} in ${f.name}.`),
+                      )
+                      .catch((e) => setError(String(e)));
+                  }}
+                  onMouseLeave={() => setRereading(null)}
+                >
+                  Re-read
+                </button>
+              ) : (
+                <button
+                  className="icon-btn folder-remove"
+                  data-tip={`Read ${f.name} again from scratch — slow, and rarely needed`}
+                  onClick={() => setRereading(f.id)}
+                >
+                  ↻
+                </button>
+              )}
               {f.id !== ROOT_FOLDER &&
                 (arming === f.id ? (
                   <button
@@ -107,6 +142,8 @@ export default function FolderPicker({
             </li>
           ))}
         </ul>
+
+        {note && <p className="blurb">{note}</p>}
 
         <form className="row folder-new" onSubmit={add}>
           <input

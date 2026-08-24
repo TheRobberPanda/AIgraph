@@ -24,8 +24,11 @@
 //! What the person sees is unaffected: nothing to install, the app fetches and
 //! runs it.
 
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
@@ -135,6 +138,10 @@ pub struct EmbeddedStatus {
     pub server_ready: bool,
     /// Where that server came from, for the UI to explain.
     pub server_path: Option<String>,
+    /// Which build was installed, if it was installed by us.
+    pub server_build: Option<String>,
+    /// Whether a vendor-neutral GPU build exists for this platform.
+    pub vulkan_available: bool,
     /// It is running now and answering.
     pub running: bool,
     /// Every GGUF already on disk, so one of several can be chosen.
@@ -146,6 +153,8 @@ pub struct EmbeddedStatus {
 pub struct Embedded {
     root: PathBuf,
     child: Option<std::process::Child>,
+    /// The tail of the server's own output, kept so a failure can say why.
+    log: Option<Arc<Mutex<VecDeque<String>>>>,
 }
 
 impl Drop for Embedded {
@@ -156,7 +165,7 @@ impl Drop for Embedded {
 
 impl Embedded {
     pub fn new(app_data_dir: &Path) -> Self {
-        Self { root: app_data_dir.join("llm"), child: None }
+        Self { root: app_data_dir.join("llm"), child: None, log: None }
     }
 
     pub fn model_path(&self) -> PathBuf {
@@ -207,37 +216,50 @@ impl Embedded {
 
     /// Fetch a `llama-server` build and unpack it beside the weights.
     ///
-    /// The CPU build only. The GPU ones are per-vendor — CUDA, ROCm, Vulkan —
-    /// and choosing between them from inside the app means owning the whole
-    /// matrix, which is the largest cost of embedding a model at all. Anyone
-    /// who wants the GPU build can put their own `llama-server` on PATH and it
-    /// is preferred over this one.
+    /// Two flavours, because "the GPU matrix is too expensive to own" turned
+    /// out to have one honest exception: the Vulkan build is a single archive
+    /// that works across AMD, Nvidia and Intel. CUDA and ROCm would each be
+    /// another matrix; Vulkan is one more file. Anything beyond that is still
+    /// someone putting their own `llama-server` on PATH, which is preferred
+    /// over ours.
     pub fn install_server(
         &self,
+        flavour: &str,
         on_progress: &(dyn Fn(DownloadProgress) + Send + Sync),
     ) -> Result<(), String> {
-        if self.root.join(server_name()).is_file() {
-            return Ok(());
-        }
-        let asset = server_asset()
-            .ok_or("no prebuilt llama-server for this platform — build llama.cpp and put llama-server on PATH")?;
-        std::fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
-        let zip = self.root.join("llama-server.zip");
+        // Resolved at install time rather than pinned to a build chosen when
+        // this was written. The whole reason this app drives a subprocess
+        // instead of linking a binding is that quantisations move faster than
+        // releases do — pinning would reintroduce exactly the problem, and it
+        // did: the pinned build could not read the model it was fetched for.
+        let tag = latest_build().unwrap_or_else(|| PINNED_BUILD.to_string());
+        let asset = server_asset(&tag, flavour).ok_or(
+            "no prebuilt llama-server for this platform — build llama.cpp and put llama-server on PATH",
+        )?;
+        // Wiped and rebuilt rather than unpacked over: a CPU build laid on top
+        // of a Vulkan one leaves both sets of libraries side by side, and the
+        // binary loads whichever the linker finds first.
+        let dir = self.engine_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let archive = dir.join(&asset);
         crate::stt::model::download_to(
-            &format!("https://github.com/ggml-org/llama.cpp/releases/download/{SERVER_RELEASE}/{asset}"),
-            &zip,
+            &format!("https://github.com/ggml-org/llama.cpp/releases/download/{tag}/{asset}"),
+            &archive,
             "llama-server",
             SERVER_APPROX_BYTES,
             on_progress,
         )
         .map_err(|e| e.to_string())?;
-        let out = unzip(&zip, &self.root);
-        let _ = std::fs::remove_file(&zip);
+        let out = unpack(&archive, &dir);
+        let _ = std::fs::remove_file(&archive);
         out?;
-        // The archive nests everything under build/bin; flatten what we need up
-        // to the root so `server_binary` finds it without knowing the layout.
-        flatten(&self.root)?;
-        let bin = self.root.join(server_name());
+        // The archives nest everything under a build directory. The binary
+        // loads its libraries from beside itself, so the whole directory it
+        // came in moves up together — picking out files by extension missed
+        // `libllama-common.so.0`, and the server would not start.
+        flatten(&dir)?;
+        let bin = dir.join(server_name());
         if !bin.is_file() {
             return Err("the archive did not contain a llama-server".into());
         }
@@ -246,7 +268,20 @@ impl Embedded {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755));
         }
+        std::fs::write(dir.join("build.txt"), format!("{tag} · {flavour}"))
+            .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// Where an engine we installed lives. Its own directory, apart from the
+    /// weights, so replacing it never touches a multi-gigabyte download.
+    fn engine_dir(&self) -> PathBuf {
+        self.root.join("engine")
+    }
+
+    /// Which build is installed, for the UI to name.
+    pub fn server_build(&self) -> Option<String> {
+        std::fs::read_to_string(self.engine_dir().join("build.txt")).ok()
     }
 
     /// A `llama-server` to drive, if there is one.
@@ -257,7 +292,7 @@ impl Embedded {
         if let Some(found) = which_on_path("llama-server") {
             return Some(found);
         }
-        let own = self.root.join(server_name());
+        let own = self.engine_dir().join(server_name());
         own.is_file().then_some(own)
     }
 
@@ -267,6 +302,8 @@ impl Embedded {
             model_ready: self.model_path().is_file(),
             server_ready: server.is_some(),
             server_path: server.map(|p| p.display().to_string()),
+            server_build: self.server_build(),
+            vulkan_available: vulkan_available(),
             running: self.is_running(),
             downloaded: self.downloaded(),
             download_gb: APPROX_BYTES as f32 / 1e9,
@@ -316,7 +353,7 @@ impl Embedded {
         }
         let bin = self
             .server_binary()
-            .ok_or("no llama-server found — install llama.cpp or put llama-server on PATH")?;
+            .ok_or("no llama-server found — install one below, or put llama-server on PATH")?;
 
         let mut cmd = std::process::Command::new(bin);
         cmd.arg("-m")
@@ -329,9 +366,9 @@ impl Embedded {
             .arg(rt.context_length.to_string())
             .arg("-ngl")
             .arg(rt.gpu_layers.to_string())
-            .arg("-np")
+            .arg("--parallel")
             .arg(rt.parallel.max(1).to_string())
-            .arg("-b")
+            .arg("--batch-size")
             .arg(rt.batch_size.max(32).to_string())
             .arg("--temp")
             .arg(rt.temperature.to_string())
@@ -341,19 +378,21 @@ impl Embedded {
             .arg(rt.top_k.to_string())
             .arg("--repeat-penalty")
             .arg(rt.repeat_penalty.to_string())
-            // Quiet: its logs are not this app's logs, and a chatty child
-            // filling a pipe nobody reads will eventually block it.
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            // Kept rather than discarded. A server that refuses to start says
+            // exactly why on stderr, and sending that to /dev/null is how a
+            // rejected flag became "it does not work" with nothing to go on.
+            .stderr(Stdio::piped());
 
         // Zero means "decide from the machine", which is llama.cpp's own
         // behaviour when the flag is absent — so absence is how we say it.
         if rt.threads > 0 {
             cmd.arg("-t").arg(rt.threads.to_string());
         }
-        if rt.flash_attention {
-            cmd.arg("-fa").arg("on");
-        }
+        // Long form and an explicit value: the short `-fa` took no argument in
+        // older builds and takes on/off/auto in current ones, so the spelling
+        // that works everywhere is the one that says what it means.
+        cmd.arg("--flash-attn").arg(if rt.flash_attention { "on" } else { "off" });
         if rt.mlock {
             cmd.arg("--mlock");
         }
@@ -363,9 +402,46 @@ impl Embedded {
             cmd.arg("--no-kv-offload");
         }
 
-        let child = cmd.spawn().map_err(|e| format!("could not start llama-server: {e}"))?;
+        let mut child = cmd.spawn().map_err(|e| format!("could not start llama-server: {e}"))?;
+
+        // Drained on a thread so a full pipe cannot block the server, keeping
+        // only the tail — enough to say what went wrong, not a log file.
+        let log = Arc::new(Mutex::new(VecDeque::<String>::new()));
+        if let Some(err) = child.stderr.take() {
+            let log = log.clone();
+            std::thread::spawn(move || {
+                for line in BufRead::lines(BufReader::new(err)).map_while(Result::ok) {
+                    let mut l = log.lock().unwrap();
+                    if l.len() == 40 {
+                        l.pop_front();
+                    }
+                    l.push_back(line);
+                }
+            });
+        }
+
+        // Give it long enough to reject its own arguments. A bad flag or a
+        // model the build cannot read kills it in well under a second, and
+        // reporting that here is the difference between an error and silence.
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            if let Ok(Some(status)) = child.try_wait() {
+                let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>();
+                return Err(explain(&tail, status.code()));
+            }
+        }
+
         self.child = Some(child);
+        self.log = Some(log);
         Ok(())
+    }
+
+    /// What the server last said, for a failure the UI wants to show.
+    pub fn last_output(&self) -> Vec<String> {
+        self.log
+            .as_ref()
+            .map(|l| l.lock().unwrap().iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn stop(&mut self) {
@@ -376,33 +452,72 @@ impl Embedded {
     }
 }
 
-/// The llama.cpp release the CPU build is taken from. Pinned rather than
-/// "latest": a release that changes under the app is a bug report nobody can
-/// reproduce.
-const SERVER_RELEASE: &str = "b6193";
-/// Roughly 3 MB compressed, for the bar before Content-Length arrives.
-const SERVER_APPROX_BYTES: u64 = 3_000_000;
+/// Used only when the release list cannot be reached. Not a pin — see
+/// `install_server` for why pinning is the wrong answer here.
+const PINNED_BUILD: &str = "b10612";
+/// Roughly 20 MB compressed, for the bar before Content-Length arrives.
+const SERVER_APPROX_BYTES: u64 = 20_000_000;
 
-fn server_name() -> &'static str {
+pub fn server_name() -> &'static str {
     if cfg!(windows) { "llama-server.exe" } else { "llama-server" }
 }
 
+/// The newest `bNNNN` release upstream has published.
+fn latest_build() -> Option<String> {
+    let body: String = ureq::get("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10")
+        .set("User-Agent", "idea-graph")
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
+    let releases: Vec<serde_json::Value> = serde_json::from_str(&body).ok()?;
+    releases
+        .iter()
+        .filter_map(|r| r.get("tag_name")?.as_str())
+        .find(|t| t.starts_with('b') && t[1..].chars().all(|c| c.is_ascii_digit()))
+        .map(str::to_string)
+}
+
+/// Whether this platform has a Vulkan build to offer.
+pub fn vulkan_available() -> bool {
+    server_asset("b0", "vulkan").is_some()
+}
+
 /// The prebuilt asset for this machine, if upstream publishes one.
-fn server_asset() -> Option<String> {
-    let os = std::env::consts::OS;
+///
+/// Linux and macOS ship `.tar.gz`, Windows `.zip` — upstream's choice, not
+/// ours, and [`unpack`] reads both.
+fn server_asset(tag: &str, flavour: &str) -> Option<String> {
     let arch = std::env::consts::ARCH;
-    Some(match (os, arch) {
-        ("linux", "x86_64") => format!("llama-{SERVER_RELEASE}-bin-ubuntu-x64.zip"),
-        ("macos", "aarch64") => format!("llama-{SERVER_RELEASE}-bin-macos-arm64.zip"),
-        ("macos", "x86_64") => format!("llama-{SERVER_RELEASE}-bin-macos-x64.zip"),
-        ("windows", "x86_64") => format!("llama-{SERVER_RELEASE}-bin-win-cpu-x64.zip"),
+    let gpu = flavour == "vulkan";
+    Some(match (std::env::consts::OS, arch, gpu) {
+        ("linux", "x86_64", false) => format!("llama-{tag}-bin-ubuntu-x64.tar.gz"),
+        ("linux", "x86_64", true) => format!("llama-{tag}-bin-ubuntu-vulkan-x64.tar.gz"),
+        ("linux", "aarch64", false) => format!("llama-{tag}-bin-ubuntu-arm64.tar.gz"),
+        ("linux", "aarch64", true) => format!("llama-{tag}-bin-ubuntu-vulkan-arm64.tar.gz"),
+        // Metal is in the ordinary macOS build; there is no separate one, and
+        // no Vulkan build either.
+        ("macos", "aarch64", false) => format!("llama-{tag}-bin-macos-arm64.tar.gz"),
+        ("macos", "x86_64", false) => format!("llama-{tag}-bin-macos-x64.tar.gz"),
+        ("windows", "x86_64", false) => format!("llama-{tag}-bin-win-cpu-x64.zip"),
+        ("windows", "x86_64", true) => format!("llama-{tag}-bin-win-vulkan-x64.zip"),
         _ => return None,
     })
 }
 
-/// Unpack an archive with the zip crate, refusing any entry whose path climbs
-/// out of the destination — an archive is untrusted input even from a release
-/// page we chose.
+/// Unpack a release archive, `.tar.gz` or `.zip` depending on the platform.
+fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
+    let name = archive.file_name().unwrap_or_default().to_string_lossy();
+    if name.ends_with(".zip") {
+        return unzip(archive, into);
+    }
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let gz = flate2::read::GzDecoder::new(file);
+    tar::Archive::new(gz).unpack(into).map_err(|e| e.to_string())
+}
+
+/// Unpack a zip, refusing any entry whose path climbs out of the destination —
+/// an archive is untrusted input even from a release page we chose.
 fn unzip(archive: &Path, into: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -423,43 +538,79 @@ fn unzip(archive: &Path, into: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Move the server and its shared libraries up out of whatever directory the
-/// archive nested them in. They have to sit together: the binary loads the
-/// ggml libraries from beside itself.
+/// Move the whole directory the server arrived in up to the top.
+///
+/// Everything that came with it moves, not a chosen list: the binary loads its
+/// libraries from beside itself, and picking files out by extension missed
+/// `libllama-common.so.0` — a versioned suffix ends in a digit, not in `.so`.
+/// The archive knows what belongs together; we do not need to.
 fn flatten(root: &Path) -> Result<(), String> {
-    let mut found: Vec<PathBuf> = Vec::new();
-    collect(root, &mut found, 0);
-    for path in found {
-        let Some(name) = path.file_name() else { continue };
-        let dest = root.join(name);
-        if dest == path {
-            continue;
-        }
-        let _ = std::fs::rename(&path, &dest);
+    let Some(home) = find_server(root, 0) else {
+        return Ok(());
+    };
+    if home == root {
+        return Ok(());
     }
+    let entries = std::fs::read_dir(&home).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        let dest = root.join(entry.file_name());
+        let _ = std::fs::rename(entry.path(), &dest);
+    }
+    let _ = std::fs::remove_dir_all(&home);
     Ok(())
 }
 
-fn collect(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+/// The directory holding `llama-server`, wherever the archive put it.
+fn find_server(dir: &Path, depth: usize) -> Option<PathBuf> {
     if depth > 4 {
-        return;
+        return None;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    if dir.join(server_name()).is_file() {
+        return Some(dir.to_path_buf());
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect(&path, out, depth + 1);
-            continue;
-        }
-        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let wanted = name == server_name()
-            || name.ends_with(".so")
-            || name.ends_with(".dylib")
-            || name.ends_with(".dll");
-        if wanted {
-            out.push(path);
+            if let Some(found) = find_server(&path, depth + 1) {
+                return Some(found);
+            }
         }
     }
+    None
+}
+
+/// Turn the server's parting words into something worth reading.
+///
+/// llama.cpp says what is wrong perfectly clearly and then says forty more
+/// lines about backends. The two failures that actually happen get named; for
+/// anything else the tail is better than a bare exit code.
+fn explain(tail: &[String], code: Option<i32>) -> String {
+    let joined = tail.join("\n");
+    if joined.contains("invalid argument") {
+        let arg = tail
+            .iter()
+            .find(|l| l.contains("invalid argument"))
+            .cloned()
+            .unwrap_or_default();
+        return format!(
+            "this llama-server does not understand one of the settings — {arg}. \
+             Installing the current build usually fixes it."
+        );
+    }
+    if joined.contains("invalid ggml type") || joined.contains("failed to load model") {
+        return "this llama-server is too old to read that model. Install the current \
+                build, or pick a model in a quantisation it understands."
+            .into();
+    }
+    let last: Vec<&String> = tail.iter().rev().take(6).rev().collect();
+    if last.is_empty() {
+        return format!("llama-server exited immediately (code {})", code.unwrap_or(-1));
+    }
+    format!(
+        "llama-server exited immediately:\n{}",
+        last.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+    )
 }
 
 /// Look for a binary on PATH without pulling in a crate for it.
