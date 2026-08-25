@@ -248,6 +248,8 @@ export default function App() {
   const streamingRef = useRef(false);
   /** Something was said while the model was answering, and is still waiting. */
   const queuedRef = useRef(false);
+  /** In a call right now. Never restored from settings — see the note where
+   *  the rest of them are read. */
   const [callMode, setCallMode] = useState(false);
   const voiceOn = voiceSetting || callMode;
   const [idleMinutes, setIdleMinutes] = useState(30);
@@ -272,7 +274,10 @@ export default function App() {
       applyUiScale(s.ui_scale);
       setVoiceSetting(s.voice !== "off");
       if (s.voice === "neural") setVoiceKind("neural");
-      setCallMode(s.call_mode);
+      // Deliberately not restored. A call is something you start, not a
+      // preference — and restoring it opened the microphone and covered the
+      // screen with the call view before anyone had asked for either. Every
+      // reload did it again, which is what the blank window turned out to be.
       setIdleMinutes(s.idle_minutes);
       setLayout(s.layout);
     });

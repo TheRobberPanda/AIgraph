@@ -132,3 +132,9 @@ export function pendingSessions(): Promise<import("./chat").SessionSummary[]> {
 export function stopDigest(): Promise<void> {
   return invoke("stop_digest");
 }
+
+
+/** Remove one recorded idea and everything supporting it. */
+export function deleteIdea(ideaId: number): Promise<void> {
+  return invoke("delete_idea", { ideaId });
+}

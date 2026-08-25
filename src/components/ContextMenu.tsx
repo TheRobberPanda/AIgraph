@@ -1,9 +1,18 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface ContextMenuItem {
   label: string;
   onSelect: () => void;
   danger?: boolean;
+  /**
+   * Ask again before doing it. The first click swaps the label for this one
+   * and the second carries it out.
+   *
+   * For anything that throws work away. A right-click menu opens under the
+   * pointer, which is exactly where the next click lands — so the gap between
+   * meaning to open it and having deleted something is one twitch wide.
+   */
+  confirm?: string;
 }
 
 /**
@@ -22,6 +31,8 @@ export default function ContextMenu({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  /** Which item is armed, if any. */
+  const [armed, setArmed] = useState<string | null>(null);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -47,18 +58,29 @@ export default function ContextMenu({
 
   return (
     <div ref={ref} className="context-menu" style={style}>
-      {items.map((item) => (
-        <button
-          key={item.label}
-          className={item.danger ? "context-item danger" : "context-item"}
-          onClick={() => {
-            item.onSelect();
-            onClose();
-          }}
-        >
-          {item.label}
-        </button>
-      ))}
+      {items.map((item) => {
+        const isArmed = armed === item.label;
+        return (
+          <button
+            key={item.label}
+            className={
+              (item.danger || isArmed ? "context-item danger" : "context-item") +
+              (isArmed ? " armed" : "")
+            }
+            onClick={() => {
+              if (item.confirm && !isArmed) {
+                setArmed(item.label);
+                return;
+              }
+              item.onSelect();
+              onClose();
+            }}
+            onMouseLeave={() => isArmed && setArmed(null)}
+          >
+            {isArmed ? item.confirm : item.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

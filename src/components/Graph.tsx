@@ -10,7 +10,9 @@ import {
   type SimulationNodeDatum,
 } from "d3-force";
 import { loadGraph, type GraphNode } from "../lib/graph";
-import { onIdeasChanged } from "../lib/ideas";
+import { deleteIdea, onIdeasChanged, reextractSession } from "../lib/ideas";
+import { deleteSession, setSessionArchived } from "../lib/chat";
+import ContextMenu from "./ContextMenu";
 import { categoryColors, UNCATEGORISED } from "../lib/categories";
 import { ConversationFile, IdeaFile } from "./Deep";
 import FilePanel from "./FilePanel";
@@ -256,6 +258,8 @@ export default function Graph({ folder }: { folder: number | null }) {
   // the same node again closes it, clicking a different one swaps the panel's
   // content, rather than navigating away and losing the map's state.
   const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
+  /** A node right-clicked on the map, and where. */
+  const [menu, setMenu] = useState<{ x: number; y: number; node: GraphNode } | null>(null);
   /** The open file, readable from the canvas handlers without making them
    *  depend on a re-render. */
   const panelRef = useRef(panel);
@@ -1060,6 +1064,14 @@ export default function Graph({ folder }: { folder: number | null }) {
           focusOn(hit);
           setPanel({ kind, id });
         }}
+        onContextMenu={(e) => {
+          // The map's own menu, not the browser's — and only over a node,
+          // since there is nothing to do to empty canvas.
+          e.preventDefault();
+          const hit = nodeAt(e.clientX, e.clientY);
+          if (!hit) return;
+          setMenu({ x: e.clientX, y: e.clientY, node: hit.data });
+        }}
         onWheel={(e) => {
           const canvas = canvasRef.current;
           if (!canvas) return;
@@ -1157,6 +1169,55 @@ export default function Graph({ folder }: { folder: number | null }) {
           </button>
         ))}
       </div>
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={
+            menu.node.kind === "conversation" && menu.node.session_id !== null
+              ? [
+                  {
+                    // Cheap and reversible, so it goes without asking.
+                    label: "Archive it",
+                    onSelect: () =>
+                      void setSessionArchived(menu.node.session_id!, true).then(() => build()),
+                  },
+                  {
+                    label: "Read it again",
+                    confirm: "Yes, read it again",
+                    onSelect: () =>
+                      void reextractSession(menu.node.session_id!).then(() => build()),
+                  },
+                  {
+                    label: "Delete it",
+                    danger: true,
+                    confirm: "Yes, delete it",
+                    onSelect: () =>
+                      void deleteSession(menu.node.session_id!).then(() => {
+                        setPanel(null);
+                        void build();
+                      }),
+                  },
+                ]
+              : [
+                  {
+                    label: "Delete this idea",
+                    danger: true,
+                    confirm: "Yes, delete it",
+                    onSelect: () => {
+                      if (menu.node.idea_id === null) return;
+                      void deleteIdea(menu.node.idea_id).then(() => {
+                        setPanel(null);
+                        void build();
+                      });
+                    },
+                  },
+                ]
+          }
+        />
+      )}
 
       {edgeHover && (
         <div

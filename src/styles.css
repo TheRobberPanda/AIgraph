@@ -1976,3 +1976,4 @@ blockquote {
 }
 .context-item:hover { background: var(--surface); }
 .context-item.danger { color: var(--danger); }
+.context-item.armed { background: color-mix(in srgb, var(--danger) 16%, transparent); font-weight: 500; }

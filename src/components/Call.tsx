@@ -72,6 +72,13 @@ export default function Call({
       const dpr = window.devicePixelRatio || 1;
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
+      // Nothing to draw into yet. Without this the loop happily paints into a
+      // zero-sized buffer and the screen stays the flat background colour,
+      // which reads as a hung window rather than as a call.
+      if (w === 0 || h === 0) {
+        frame = requestAnimationFrame(loop);
+        return;
+      }
       if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
         canvas.width = w * dpr;
         canvas.height = h * dpr;
