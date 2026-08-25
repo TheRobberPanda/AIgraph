@@ -35,6 +35,9 @@ NOTES ALREADY TAKEN:
 {}
 {}
 
+Write in the language the idea and the quotes are written in. There are no
+USER lines here to take it from — take it from them.
+
 Name the one specific claim, assumption, or step in this idea that would break
 first under real pushback, and say plainly what breaks it — not the general
 topic, the exact point.

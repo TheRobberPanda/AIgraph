@@ -19,7 +19,11 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` so a JSON schema is emitted in the order it is written.
+# Grammar-constrained decoding follows that order, and the order is load-
+# bearing: a field the model must fill before it writes anything else is how
+# you get it to commit to a decision — see `extract::prompt::json_schema`.
+serde_json = { version = "1", features = ["preserve_order"] }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
 futures-util = "0.3"

@@ -16,8 +16,17 @@ use crate::llm::{IdeaExtractor, LlmError};
 pub fn json_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
-        "required": ["replies"],
+        "required": ["language", "replies"],
         "properties": {
+            // Named before anything is written, and first on purpose.
+            //
+            // Telling the model to answer in the language of the text does not
+            // work: the instructions are in English and it follows them into
+            // English, however plainly and however late they are put. Making
+            // it write the language down before it writes anything else does
+            // work — it has to decide, and having decided it is far more
+            // likely to keep to it.
+            "language": { "type": "string" },
             "replies": {
                 "type": "array",
                 "items": {
@@ -57,14 +66,22 @@ Condense each one to what is worth keeping.
   them. Do not reproduce the explanation of each.
 - Plain sentences. No headings, no bullets, no bold.
 - Write it as a note to be read later, not as a reply to anyone.
+- Write each digest in the language of the answer it condenses. An answer in
+  Polish is condensed in Polish. There are no USER lines here to take the
+  language from — take it from the answer itself.
 - Never write "the user's view" or "the user asked" or similar. State the
   content directly: not "The user's view moves from X to Y" but "Moves from
   X to Y."
 
 {style}
 
-Return JSON: {{"replies": [{{"turn": <number>, "digest": "..."}}]}} with one entry
-per turn given.
+Return JSON: {{"language": "...", "replies": [{{"turn": <number>, "digest": "..."}}]}}
+with one entry per turn given.
+
+First return "language": the language the answers below are written in, named
+in English — "Polish", "Spanish", "English". Then write every digest in that
+language. Not the language of these instructions, which is not the point; the
+language of the text below. Translating it is a mistake, not a courtesy.
 
 {body}"#
     )

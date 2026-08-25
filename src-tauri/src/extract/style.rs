@@ -45,13 +45,16 @@ Substance:
   generated.
 
 Language:
-- Write in the language of the transcript, not in English. If the USER lines
-  are in Polish, then every claim, title, category, reasoning and note is in
-  Polish. The same for any other language.
+- Write in the language of the text you are given, not in English. Every field
+  you write — without exception, whatever it is called — is in that language.
+  Polish in, Polish out. The same for any other language.
+- This is not a list of fields to check against. If you are writing it, it is
+  in the language of the source.
 - Never translate a quote. The quote is located by searching the transcript
   for it character for character, so a translated quote is not found and the
   idea is thrown away.
-- Where a transcript mixes languages, follow the language of the USER lines.
+- Where a text mixes languages, follow the language of the USER lines if there
+  are any, and otherwise the language most of it is written in.
 
 Who is speaking:
 - Never write "the user" or "the speaker", in any field, anywhere. State what
@@ -83,10 +86,34 @@ mod tests {
             // Without this the model answers in English whatever was spoken,
             // and a translated quote fails verification outright.
             assert!(
-                body.contains("Write in the language of the transcript"),
-                "{name} lost the rule about matching the transcript's language"
+                body.contains("Write in the language of the text you are given"),
+                "{name} lost the rule about matching the source language"
             );
         }
+    }
+
+    #[test]
+    /// The language rule has to bind whatever the field is called.
+    ///
+    /// It used to list them — claim, title, category, reasoning, note — and a
+    /// digest, which is none of those, came back in English from a Polish
+    /// conversation. A list of fields is a list of exceptions waiting to be
+    /// found.
+    /// Telling a model to answer in the source language does not work on its
+    /// own — the instructions are in English and it follows them there. What
+    /// works is making it name the language before it writes anything else,
+    /// which is why the schemas put that field first and why the field
+    /// descriptions point back at it. This guards the half that lives here.
+    #[test]
+    fn the_language_rule_is_not_a_list_of_fields() {
+        for field in ["claim", "title", "category", "reasoning", "digest"] {
+            assert!(
+                !RULES.contains(&format!("{field}, ")),
+                "the language rule went back to naming fields, and left {field:?} \
+                 to be forgotten"
+            );
+        }
+        assert!(RULES.contains("whatever it is called"));
     }
 
     #[test]

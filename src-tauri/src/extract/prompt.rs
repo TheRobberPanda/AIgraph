@@ -12,7 +12,7 @@ use crate::llm::LlmError;
 pub fn json_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
-        "required": ["ideas", "title"],
+        "required": ["language", "ideas", "title"],
         "$defs": {
             "notes": {
                 "type": "array",
@@ -27,6 +27,14 @@ pub fn json_schema() -> serde_json::Value {
             }
         },
         "properties": {
+            // First, and written before anything else is.
+            //
+            // Telling the model to answer in the language of the transcript
+            // does not work — these instructions are in English and it follows
+            // them into English, however plainly and however late it is said.
+            // Making it name the language before it writes a word does work:
+            // it has to decide, and having decided it keeps to it.
+            "language": { "type": "string" },
             "title": { "type": "string" },
             "conversation": {
                 "type": "object",
@@ -128,7 +136,8 @@ they had.
 
 For each idea return:
 
-- "title": two to six words naming what the idea actually is, written from what
+- "title": two to six words, in the language named in "language" above, naming
+  what the idea actually is, written from what
   it means, not sliced out of its own sentence. "Giving as a hedge against
   envy", not the first few words of the claim. This is what identifies the
   idea at a glance in a list of many, so it must say something the claim's
@@ -148,9 +157,11 @@ For each idea return:
   USER. Find it above and copy it across rather than writing it from memory.
   Do not paraphrase, trim, fix typos, or join separated fragments. If no exact
   span supports the claim, omit the idea entirely.
-- "category": two or three words for the subject. Lowercase. Prefer a category
+- "category": two or three words for the subject, in the language named in
+  "language" above. Lowercase. Prefer a category
   already in use over coining a near-synonym.
-- "reasoning": two or three sentences that make the idea stand on its own.
+- "reasoning": two or three sentences, in the language named in "language"
+  above, that make the idea stand on its own.
 
   A quote is rarely enough on its own to know what was meant. "It basically
   socializes the losses of the American empire" is a sentence someone can read
@@ -200,6 +211,11 @@ genuinely load-bearing. It is not a critique quota.
 
 {style}
 
+First return "language": the language the USER lines are written in, named in
+English — "Polish", "Spanish", "English". Everything else you write is in that
+language: the titles, the claims, the categories, the reasoning, the notes.
+Quotes are copied, never translated.
+
 Also return "title": a short name for this conversation, two to five words,
 title case, no punctuation — the way a chat app names a thread from what was
 said in it. Name the subject, not the format: "American Economic Empire", not
@@ -210,8 +226,10 @@ actually said, never generic.
 Also return "conversation": notes on the whole stretch of thinking, under the
 same rules — usually none, and never more than two.
 
-Return JSON: {{"title": "...", "ideas": [...], "conversation": {{"notes": [...]}}}}.
-Return {{"title": "...", "ideas": []}} if nothing substantive was said.
+Return JSON: {{"language": "...", "title": "...", "ideas": [...],
+"conversation": {{"notes": [...]}}}}.
+Return {{"language": "...", "title": "...", "ideas": []}} if nothing substantive
+was said.
 {known_block}
 --- TRANSCRIPT ---
 {transcript}
