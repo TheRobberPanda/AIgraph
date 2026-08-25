@@ -32,6 +32,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "aigraph"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bzip2",
+ "chrono",
+ "cpal",
+ "fastembed",
+ "flate2",
+ "futures-util",
+ "hound",
+ "keyring",
+ "libc",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sherpa-rs",
+ "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ureq 2.12.1",
+ "uuid",
+ "zip",
+]
+
+[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2511,39 +2544,6 @@ dependencies = [
  "zerofrom",
  "zerotrie",
  "zerovec",
-]
-
-[[package]]
-name = "idea-graph"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bzip2",
- "chrono",
- "cpal",
- "fastembed",
- "flate2",
- "futures-util",
- "hound",
- "keyring",
- "libc",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "sherpa-rs",
- "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "ureq 2.12.1",
- "uuid",
- "zip",
 ]
 
 [[package]]

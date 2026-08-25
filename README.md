@@ -1,50 +1,100 @@
-# Idea Graph
+# AIgraph
 
 Think out loud. Get a map back.
 
-You talk to a local AI. It answers **exactly as it normally would** — no injected
-prompts, no persona, no steering. When you're done, the chat clears, the
-transcript is archived, and your ideas appear as dots in a diagram you can
-explore. Click a dot to jump to the moment you said it, highlighted in place.
+You talk to a model. When you press Done the transcript is archived and the
+ideas in what you said become dots on a map you can walk around. Every idea
+links back to the exact words it came from, highlighted in place, so nothing on
+the map is something you have to take on faith.
 
-The diagram is the product. The chat is just what gets it out of your head.
+The map is the product. The chat is what gets it out of your head.
 
-Free, open source, local-first.
+Free, open source, local-first: it runs a model on your own machine by default,
+and nothing said to it has to leave.
 
-## Status
+## Install
 
-All eleven milestones built.
+**Linux** — download the `.AppImage`, make it executable, run it:
 
-Working: chat with a local model; sessions that archive to SQLite plus plain
-markdown on Done, idle, or app close; automatic idea extraction with quote
-verification, live progress, and a manual trigger; an Ideas view with each
-idea's nudges and drop rate; and click-to-source — click a quote to see the
-conversation it came from with those exact words highlighted in place; and voice
-dictation.
+```bash
+chmod +x AIgraph_*.AppImage
+./AIgraph_*.AppImage
+```
 
-Also working: reconciliation — the same idea expressed twice becomes one bubble,
-rewritten to the more nuanced claim and carrying both quotes; and the **Map**, a
-bipartite graph of conversations and the ideas that came out of them, where an
-idea you returned to is shared between conversations and joins them together.
+Or the `.deb` on Debian and Ubuntu, or the `.rpm` on Fedora:
 
-Also working: the deep-dive files — click a conversation to read it with the
-words that produced ideas highlighted in place, hovering each to see *why* the
-model read them that way; click an idea to see every quote supporting it, the
-reasoning behind each, and how the claim has been rewritten (with one-click
-restore). Hovering any node on the map dims the rest and animates out the AI's
-strong and weak points.
+```bash
+sudo apt install ./AIgraph_*_amd64.deb
+```
 
-There is a **Models** tab for choosing what you talk to and — separately — what
-reads your sessions back afterwards, and a **Settings** tab for appearance,
-session timeout, where transcripts are written, dictation, and re-reading every
-conversation after a change to the prompts.
+**Windows 10 and 11** — download the `-setup.exe` and run it. It installs for
+the current user, so it needs no administrator.
+
+Downloads are on the [releases page][releases]. Nothing else is required: the
+app fetches a model and an engine on first run if you ask it to.
+
+[releases]: https://github.com/TheRobberPanda/aigraph/releases
+
+### First run
+
+The app opens on the conversation with nothing to talk to, and the chip at the
+bottom left says so. Press it and pick one:
+
+- **Local** — the app downloads a model (about 4 GB) and an engine and runs
+  them itself. Nothing else to install.
+- **LM Studio** or **Ollama** — if you already run one, whatever it has loaded
+  is used automatically.
+- **Cloud API** — Claude, or anything speaking the same API. Transcripts leave
+  this machine, and the app says so where you choose it.
+
+On Linux the app needs a GPU build of the engine to be quick. Install it in
+**Settings → The engine**; the CPU build works everywhere and is roughly twenty
+times slower at reading a prompt.
+
+## What it does
+
+**Talk, then press Done.** The transcript is archived to SQLite and to plain
+markdown in a folder you choose, so your thinking is never trapped in this
+app's database.
+
+**Ideas are extracted with their receipts.** A model reads the conversation
+back and reports each idea with a verbatim quote. The quote is then located by
+exact string search in your own turns — model-reported offsets are never
+trusted — and an idea whose quote cannot be found is *discarded*, not shown.
+The Ideas view reports how often that happens, because a drop rate nobody looks
+at is a drop rate nobody fixes.
+
+**The same thought said twice becomes one dot.** Saying "Trump is a bad man"
+and later "he's not a bad guy, he acts like one sometimes" rewrites the first
+claim rather than making two dots, keeps both quotes as evidence, and keeps the
+old wording one click from being restored. Over-merging is worse than
+under-merging, so it only merges when confident and draws a faint line
+otherwise.
+
+**The map.** Conversations are large dots, ideas are small ones, and an idea
+you returned to is shared between the conversations it came up in — which is
+the only thing that links one conversation to another, and it means something
+precise. Click a node to fly to it and name what it touches; pin a subject in
+the legend to pick it out; right-click to archive, re-read or delete.
+
+**Folders** scope everything — the map, the ideas, the conversations, and what
+the chat is allowed to recall.
+
+**Talking rather than typing.** Dictation puts phrases in the composer for you
+to edit; it never sends by itself, because a misheard word would become a quote
+attributed to you that you never said. Call mode is the exception you ask for:
+one press, a waveform, and it sends when you stop talking.
+
+**Your language, not English.** If you think in Polish, the titles, claims and
+notes come back in Polish, and quotes are copied rather than translated.
 
 ## Models
 
-Local by default — the app finds LM Studio or Ollama on its own and needs no
-account, no key, and no network.
+Local by default. The app can run a model itself, or use LM Studio or Ollama
+if you already have one — either way it needs no account, no key, and no
+network.
 
-Two roles, chosen separately in the **Models** tab:
+Two roles, chosen separately in the model panel:
 
 - **The model you talk to.** Never given instructions about this app.
 - **The model that reads it back.** A mechanical, structured job; a small fast
@@ -52,7 +102,7 @@ Two roles, chosen separately in the **Models** tab:
 
 Remote options, both optional:
 
-- **Anthropic API** — paste a key in the Models tab. Stored in your system
+- **Anthropic API** — paste a key under **Cloud API**. Stored in your system
   keychain, never in the settings file, and checked against the API before it is
   saved. Models are listed live from the key.
 - **`claude` CLI** — if the command is installed, your Claude Pro or Max
@@ -63,18 +113,42 @@ Remote options, both optional:
 
 Anything remote is labelled **leaves this machine** where you choose it.
 
-## Building packages
+## Building it yourself
 
 ```bash
-npm run tauri build
+npm install
+npm run package
 ```
 
-Produces a `.deb` and an `.AppImage` under `src-tauri/target/release/bundle/`.
+`npm run package` is `tauri build` with `LD_LIBRARY_PATH` pointing at the build
+directory. The AppImage step resolves shared libraries by scanning the loader
+path, and the speech runtimes are not on it — they sit beside the binary and
+are found at run time through an `$ORIGIN` rpath. Without it everything builds
+and then the last step fails with *Could not find dependency:
+libsherpa-onnx-c-api.so*.
 
-Both carry the sherpa-onnx and onnxruntime shared libraries, and the binary is
-linked with an `$ORIGIN` rpath so it finds them once installed. Without that the
-packages build cleanly and then fail at startup with *error while loading shared
-libraries* — worth knowing if you change how speech recognition is linked.
+Produces a `.deb`, an `.rpm` and an `.AppImage` under
+`src-tauri/target/release/bundle/` on Linux, and an installer and an `.msi` on
+Windows. Tagged releases build all of them in CI — Windows installers cannot be
+cross-compiled from Linux, so the matrix in `.github/workflows/release.yml` is
+the only way to produce them.
+
+Both Linux packages carry the sherpa-onnx and onnxruntime shared libraries, and
+the binary is linked with an `$ORIGIN` rpath so it finds them once installed.
+Without that the packages build cleanly and then fail at startup with *error
+while loading shared libraries* — worth knowing if you change how speech
+recognition is linked.
+
+Build dependencies on Debian and Ubuntu:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libasound2-dev clang libclang-dev \
+                 librsvg2-dev patchelf
+```
+
+ALSA is for the microphone and clang is for the speech bindings' bindgen step.
+Neither failure message mentions audio or speech, so leaving them out sends
+anyone debugging it a long way in the wrong direction.
 
 ## Design
 
@@ -115,10 +189,11 @@ gemma-4-12b-qat this was the difference between a ten-minute failure and a
 
 ## Requirements
 
-- Linux (macOS, Windows, then mobile to follow)
+To *use* AIgraph you need nothing but the installer — see [Install](#install).
+The rest of this section is for building it.
+
+- Linux or Windows 10+ (macOS should build; it is untested here)
 - Rust 1.77+, Node 18+
-- A local model server: **LM Studio** or **Ollama**. Either works; the app
-  detects whichever is running.
 
 Tauri system dependencies on Debian/Ubuntu/Mint:
 
@@ -148,7 +223,9 @@ that choice is yours.
 ### Fitting a model on a small GPU
 
 Two settings decide whether a model loads and whether extraction works. Both
-caused real failures during development on a 12GB RTX 3060:
+caused real failures during development on a 12 GB RTX 3060. The app's own
+engine exposes them in the model panel, under **Set them for speed**; the notes
+below are for driving LM Studio directly.
 
 - **GPU offload.** Full offload (`--gpu max`) crashes partway through loading
   when the model plus its KV cache exceeds VRAM. The error — `Engine protocol
@@ -202,3 +279,13 @@ IDEA_GRAPH_MODEL=google/gemma-4-12b-qat \
 ## License
 
 AGPL-3.0-or-later.
+
+## Privacy
+
+Everything is on your machine: the database, the transcripts, and the model, if
+you let the app run one. Nothing is sent anywhere unless you pick a Cloud API,
+and the app says **leaves this machine** at the point where you pick it.
+
+There is no telemetry, no analytics, no crash reporting and no update check.
+
+API keys go in your operating system's keychain, never in the settings file.

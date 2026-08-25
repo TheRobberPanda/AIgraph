@@ -14,11 +14,7 @@ pub fn build(claim: &str, strong: &[String], weak: &[String], quotes: &[String])
         if items.is_empty() {
             "  (none noted)".to_string()
         } else {
-            items
-                .iter()
-                .map(|s| format!("  - {s}"))
-                .collect::<Vec<_>>()
-                .join("\n")
+            items.iter().map(|s| format!("  - {s}")).collect::<Vec<_>>().join("\n")
         }
     };
 
@@ -78,11 +74,7 @@ pub async fn run(
     // Schema-constrained providers return {"text": ...}; the CLI returns prose.
     // Accept either rather than failing on the shape.
     match serde_json::from_str::<serde_json::Value>(raw.trim()) {
-        Ok(v) => Ok(v
-            .get("text")
-            .and_then(|t| t.as_str())
-            .map(str::to_string)
-            .unwrap_or(raw)),
+        Ok(v) => Ok(v.get("text").and_then(|t| t.as_str()).map(str::to_string).unwrap_or(raw)),
         Err(_) => Ok(raw),
     }
 }

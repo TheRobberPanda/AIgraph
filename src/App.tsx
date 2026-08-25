@@ -757,11 +757,11 @@ export default function App() {
       <nav className="topbar" data-tauri-drag-region>
         {awayFromMain ? (
           <button className="brand back" onClick={backToMain} data-tip="Back to the conversation">
-            Idea Graph
+            AIgraph
           </button>
         ) : (
           <div className="brand" data-tauri-drag-region>
-            Idea Graph
+            AIgraph
           </div>
         )}
 

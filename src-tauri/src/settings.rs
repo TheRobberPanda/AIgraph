@@ -261,9 +261,7 @@ mod tests {
     #[test]
     fn round_trips() {
         let dir = tmpdir("round");
-        let mut s = Settings::default();
-        s.theme = Theme::Dark;
-        s.idle_minutes = 5;
+        let mut s = Settings { theme: Theme::Dark, idle_minutes: 5, ..Settings::default() };
         s.chat = Some(ModelChoice {
             kind: LocalKind::LmStudio,
             host: "http://x/v1".into(),
@@ -299,8 +297,7 @@ mod tests {
 
     #[test]
     fn idle_timeout_never_collapses_to_nothing() {
-        let mut s = Settings::default();
-        s.idle_minutes = 0;
+        let s = Settings { idle_minutes: 0, ..Settings::default() };
         assert_eq!(s.idle_timeout().as_secs(), 60, "a pause to think is not the end");
     }
 

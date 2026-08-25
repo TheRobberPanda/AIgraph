@@ -8,10 +8,10 @@
 //!   cargo test --test real_session -- --ignored --nocapture
 //! ```
 
-use idea_graph_lib::extract;
-use idea_graph_lib::llm::openai_compat::OpenAiCompat;
-use idea_graph_lib::llm::types::Role;
-use idea_graph_lib::store::Store;
+use aigraph_lib::extract;
+use aigraph_lib::llm::openai_compat::OpenAiCompat;
+use aigraph_lib::llm::types::Role;
+use aigraph_lib::store::Store;
 
 fn model() -> String {
     std::env::var("IDEA_GRAPH_MODEL").unwrap_or_else(|_| "google/gemma-4-12b-qat".into())
@@ -29,12 +29,14 @@ async fn extracts_ideas_from_a_real_archived_session() {
     // Copy, never touch the original. In WAL mode the recent writes live in the
     // `-wal` sidecar, not the main file — copying only the `.db` yields a
     // database that opens fine and looks empty.
-    let tmp = std::env::temp_dir().join(format!("ideagraph-real-{}.db", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("aigraph-real-{}.db", std::process::id()));
     std::fs::copy(&live, &tmp).expect("copy database");
     for ext in ["-wal", "-shm"] {
-        let from = live.with_file_name(format!("{}{ext}", live.file_name().unwrap().to_string_lossy()));
+        let from =
+            live.with_file_name(format!("{}{ext}", live.file_name().unwrap().to_string_lossy()));
         if from.exists() {
-            let to = tmp.with_file_name(format!("{}{ext}", tmp.file_name().unwrap().to_string_lossy()));
+            let to =
+                tmp.with_file_name(format!("{}{ext}", tmp.file_name().unwrap().to_string_lossy()));
             std::fs::copy(&from, &to).expect("copy wal sidecar");
         }
     }
@@ -49,15 +51,12 @@ async fn extracts_ideas_from_a_real_archived_session() {
         session.id, session.turn_count, session.model, session.extract_state
     );
 
-    let transcript = store.transcript(session.id).unwrap().unwrap();
     let turns = store.verify_turns(session.id).unwrap();
     let user_turns = turns.iter().filter(|t| t.role == Role::User).count();
-    eprintln!("{user_turns} user turns, {} bytes of transcript\n", transcript.len());
+    eprintln!("{user_turns} user turns, {} in all\n", turns.len());
 
     let extractor = OpenAiCompat::lm_studio(model());
-    let out = extract::run(&extractor, &transcript, &turns)
-        .await
-        .expect("extraction failed");
+    let out = extract::run(&extractor, &turns).await.expect("extraction failed");
 
     eprintln!(
         "=== {} kept, {} dropped, drop rate {:.0}%{} ===",
@@ -76,8 +75,8 @@ async fn extracts_ideas_from_a_real_archived_session() {
         );
         for n in &i.raw.notes {
             let mark = match n.kind {
-                idea_graph_lib::llm::types::NoteKind::Supports => "+",
-                idea_graph_lib::llm::types::NoteKind::Questions => "?",
+                aigraph_lib::llm::types::NoteKind::Supports => "+",
+                aigraph_lib::llm::types::NoteKind::Questions => "?",
             };
             eprintln!("  {mark} {}", n.text);
         }
@@ -91,34 +90,32 @@ async fn extracts_ideas_from_a_real_archived_session() {
     for i in &out.ideas {
         let turn = turns.iter().find(|t| t.id == i.located.turn_id).expect("turn");
         assert_eq!(turn.role, Role::User, "idea sourced from the assistant");
-        assert_eq!(
-            &turn.text[i.located.start_byte..i.located.end_byte],
-            i.located.matched_text
-        );
+        assert_eq!(&turn.text[i.located.start_byte..i.located.end_byte], i.located.matched_text);
     }
 
     // Persisting works too, and diagnostics reflect it.
-    store
-        .save_extraction(session.id, &out, "lmstudio", &model())
-        .expect("save");
+    store.save_extraction(session.id, &out, "lmstudio", &model()).expect("save");
     let d = store.diagnostics().unwrap();
     eprintln!(
         "\ndiagnostics: {} ideas, {} rejected, {:.0}% drop, {} normalized, {} sessions done",
-        d.ideas, d.rejected, d.drop_rate * 100.0, d.normalized, d.sessions_extracted
+        d.ideas,
+        d.rejected,
+        d.drop_rate * 100.0,
+        d.normalized,
+        d.sessions_extracted
     );
     assert_eq!(d.ideas as usize, out.ideas.len());
 
     std::fs::remove_file(&tmp).ok();
     for ext in ["-wal", "-shm"] {
-        std::fs::remove_file(tmp.with_file_name(format!(
-            "{}{ext}",
-            tmp.file_name().unwrap().to_string_lossy()
-        )))
+        std::fs::remove_file(
+            tmp.with_file_name(format!("{}{ext}", tmp.file_name().unwrap().to_string_lossy())),
+        )
         .ok();
     }
 }
 
 fn dirs_db() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var("HOME").unwrap())
-        .join(".local/share/dev.ideagraph.app/idea-graph.db")
+        .join(".local/share/app.aigraph/aigraph.db")
 }

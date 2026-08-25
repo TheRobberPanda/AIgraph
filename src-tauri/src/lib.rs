@@ -1,4 +1,4 @@
-//! Idea Graph — think out loud, get a map back.
+//! AIgraph — think out loud, get a map back.
 //!
 //! Pipeline, and the invariant each stage holds:
 //!
@@ -20,16 +20,67 @@ pub mod reconcile;
 pub mod secrets;
 pub mod session;
 pub mod settings;
+pub mod store;
 pub mod stt;
 pub mod tts;
-pub mod store;
+
+/// Move a previous installation's data across, once.
+///
+/// The app was called Idea Graph, which put its database under a different
+/// identifier and under a different filename. Renaming without this would leave
+/// every existing user staring at an empty map with their thinking still on
+/// disk under a name they have no reason to know.
+///
+/// Only ever a move into an empty directory: if there is anything here already
+/// then this install is the one in use, and the old copy is left alone rather
+/// than merged over the top of it.
+fn carry_over_old_data(data_dir: &std::path::Path) {
+    if data_dir.join("aigraph.db").exists() {
+        return;
+    }
+    let Some(old) = data_dir.parent().map(|p| p.join("dev.ideagraph.app")) else {
+        return;
+    };
+    if !old.join("idea-graph.db").exists() {
+        return;
+    }
+
+    if let Err(e) = std::fs::create_dir_all(data_dir) {
+        tracing::warn!(error = %e, "could not prepare the data directory");
+        return;
+    }
+    // Copied rather than moved. If this goes wrong halfway the old install is
+    // still whole, and someone can go back to it.
+    for (from, to) in [
+        (old.join("idea-graph.db"), data_dir.join("aigraph.db")),
+        (old.join("settings.json"), data_dir.join("settings.json")),
+    ] {
+        if from.exists() {
+            if let Err(e) = std::fs::copy(&from, &to) {
+                tracing::warn!(error = %e, file = %from.display(), "could not carry over");
+            }
+        }
+    }
+    for dir in ["transcripts", "models", "llm", "embeddings"] {
+        let (from, to) = (old.join(dir), data_dir.join(dir));
+        if from.is_dir() && !to.exists() {
+            // Several gigabytes of weights live in here, so it is a rename
+            // where that works and nothing at all where it does not — a model
+            // is downloadable again, a transcript is not.
+            if let Err(e) = std::fs::rename(&from, &to) {
+                tracing::warn!(error = %e, dir, "could not carry over");
+            }
+        }
+    }
+    tracing::info!(from = %old.display(), "carried over data from the previous name");
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "idea_graph_lib=info".into()),
+                .unwrap_or_else(|_| "aigraph_lib=info".into()),
         )
         .init();
 
@@ -108,8 +159,9 @@ pub fn run() {
             use tauri::Manager;
 
             let data_dir = app.path().app_data_dir()?;
+            carry_over_old_data(&data_dir);
             let state = commands::AppState::new(
-                &data_dir.join("idea-graph.db"),
+                &data_dir.join("aigraph.db"),
                 data_dir.join("transcripts"),
             )?;
 
@@ -155,14 +207,15 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Idea Graph")
+        .expect("error while building AIgraph")
         .run(|app, event| {
             // Closing the app must not discard an unfinished session either.
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 use tauri::Manager;
                 let state = app.state::<commands::AppState>();
                 tauri::async_runtime::block_on(async {
-                    match commands::end_session_inner(&state, session::EndReason::AppClosing).await {
+                    match commands::end_session_inner(&state, session::EndReason::AppClosing).await
+                    {
                         Ok(Some(a)) => tracing::info!(session = a.session_id, "archived on exit"),
                         Ok(None) => {}
                         Err(e) => tracing::error!(error = %e, "failed to archive on exit"),

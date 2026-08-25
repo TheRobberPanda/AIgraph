@@ -1,0 +1,5 @@
+# Matched to how this code is already written, rather than the other way round.
+# A hundred columns and Max heuristics keep short struct literals and matches
+# on one line, which is how most of this file set reads.
+max_width = 100
+use_small_heuristics = "Max"

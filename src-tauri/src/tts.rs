@@ -66,7 +66,13 @@ impl Voices {
         if self.is_installed() {
             return Ok(());
         }
-        crate::stt::model::fetch_archive(VOICE_URL, &self.root, "voice", VOICE_APPROX_BYTES, on_progress)?;
+        crate::stt::model::fetch_archive(
+            VOICE_URL,
+            &self.root,
+            "voice",
+            VOICE_APPROX_BYTES,
+            on_progress,
+        )?;
         if !self.is_installed() {
             return Err(ModelError::Incomplete(VOICE_DIR.into()));
         }

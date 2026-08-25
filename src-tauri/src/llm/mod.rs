@@ -71,11 +71,7 @@ pub trait IdeaExtractor: Send + Sync {
     /// On this trait rather than its own because it shares every property that
     /// matters: reasoning disabled, temperature zero, schema-constrained, and —
     /// most importantly — a context with nothing of the user's chat in it.
-    async fn judge(
-        &self,
-        prompt: &str,
-        schema: serde_json::Value,
-    ) -> Result<String, LlmError>;
+    async fn judge(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError>;
 
     fn model_id(&self) -> String;
 }

@@ -15,8 +15,8 @@
 //! only leaves a tidy graph slightly untidy. Wrong merges are therefore counted
 //! as failures, while missed merges are counted as misses and tolerated.
 
-use idea_graph_lib::llm::openai_compat::OpenAiCompat;
-use idea_graph_lib::reconcile::{decide, Candidate, Decision};
+use aigraph_lib::llm::openai_compat::OpenAiCompat;
+use aigraph_lib::reconcile::{decide, Candidate, Decision};
 
 fn model() -> String {
     std::env::var("IDEA_GRAPH_MODEL").unwrap_or_else(|_| "google/gemma-4-12b-qat".into())
@@ -88,20 +88,13 @@ async fn adjudication_merges_what_it_should_and_nothing_more() {
     let mut missed = Vec::new();
 
     for case in cases() {
-        let candidates = vec![Candidate {
-            idea_id: 1,
-            claim: case.existing.into(),
-            similarity: 0.8,
-        }];
+        let candidates =
+            vec![Candidate { idea_id: 1, claim: case.existing.into(), similarity: 0.8 }];
 
-        let decision = decide(&adjudicator, case.incoming, &candidates)
-            .await
-            .expect("adjudication failed");
+        let decision =
+            decide(&adjudicator, case.incoming, &candidates).await.expect("adjudication failed");
 
-        let merged = matches!(
-            decision,
-            Decision::Attach { .. } | Decision::Rewrite { .. }
-        );
+        let merged = matches!(decision, Decision::Attach { .. } | Decision::Rewrite { .. });
 
         let verdict = match (&decision, case.want) {
             (Decision::Rewrite { new_claim, .. }, Want::Merge) => {
@@ -109,7 +102,9 @@ async fn adjudication_merges_what_it_should_and_nothing_more() {
             }
             (_, _) if merged && case.want == Want::Merge => "merged".into(),
             (_, _) if merged => "MERGED — should have stayed separate".into(),
-            (Decision::Conflict { .. }, Want::Separate) => "separate, recorded as a conflict".into(),
+            (Decision::Conflict { .. }, Want::Separate) => {
+                "separate, recorded as a conflict".into()
+            }
             (_, Want::Separate) => "separate".into(),
             (_, Want::Merge) => "stayed separate (missed merge)".into(),
         };
@@ -125,18 +120,11 @@ async fn adjudication_merges_what_it_should_and_nothing_more() {
         }
     }
 
-    eprintln!(
-        "=== {} harmful merges, {} missed merges ===",
-        harmful.len(),
-        missed.len()
-    );
+    eprintln!("=== {} harmful merges, {} missed merges ===", harmful.len(), missed.len());
     if !missed.is_empty() {
         eprintln!("missed (tolerated, but worth watching): {missed:?}");
     }
 
     // The asymmetry, enforced: wrong merges fail the suite, timid ones do not.
-    assert!(
-        harmful.is_empty(),
-        "merged ideas that should have stayed separate: {harmful:?}"
-    );
+    assert!(harmful.is_empty(), "merged ideas that should have stayed separate: {harmful:?}");
 }

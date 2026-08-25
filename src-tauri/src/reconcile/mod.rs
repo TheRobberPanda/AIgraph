@@ -68,11 +68,7 @@ pub enum Decision {
     /// Attach evidence to an existing idea; claim unchanged.
     Attach { idea_id: i64, confidence: f32 },
     /// Rewrite an existing idea's claim and attach the evidence.
-    Rewrite {
-        idea_id: i64,
-        new_claim: String,
-        confidence: f32,
-    },
+    Rewrite { idea_id: i64, new_claim: String, confidence: f32 },
     /// Separate idea, but recorded as contradicting an existing one.
     Conflict { idea_id: i64, confidence: f32, reason: Option<String> },
 }
@@ -151,11 +147,9 @@ pub async fn decide(
         Verdict::Duplicate => Decision::Attach { idea_id: j.idea_id, confidence: j.confidence },
         Verdict::Refines => match j.merged_claim {
             // A rewrite with no replacement text would blank the bubble.
-            Some(claim) if !claim.trim().is_empty() => Decision::Rewrite {
-                idea_id: j.idea_id,
-                new_claim: claim,
-                confidence: j.confidence,
-            },
+            Some(claim) if !claim.trim().is_empty() => {
+                Decision::Rewrite { idea_id: j.idea_id, new_claim: claim, confidence: j.confidence }
+            }
             _ => Decision::Attach { idea_id: j.idea_id, confidence: j.confidence },
         },
         Verdict::Distinct | Verdict::Contradicts => Decision::New { related },
@@ -187,9 +181,8 @@ mod tests {
 
     #[test]
     fn shortlist_is_capped() {
-        let many: Vec<_> = (0..50)
-            .map(|i| (i, format!("claim {i}"), vec![1.0, 0.0, 0.0]))
-            .collect();
+        let many: Vec<_> =
+            (0..50).map(|i| (i, format!("claim {i}"), vec![1.0, 0.0, 0.0])).collect();
         assert_eq!(shortlist(&[1.0, 0.0, 0.0], &many).len(), SHORTLIST_SIZE);
     }
 
@@ -236,9 +229,7 @@ mod tests {
     async fn a_confident_refinement_rewrites_the_claim() {
         let judged = r#"{"judgements":[{"idea_id":1,"verdict":"refines","confidence":0.92,
             "merged_claim":"He acts badly in certain circumstances"}]}"#;
-        let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.8)])
-            .await
-            .unwrap();
+        let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.8)]).await.unwrap();
         assert_eq!(
             out,
             Decision::Rewrite {
@@ -254,18 +245,14 @@ mod tests {
         // The rule: over-merging is worse than under-merging. Below the
         // threshold the idea stays separate, however tempting the verdict.
         let judged = r#"{"judgements":[{"idea_id":1,"verdict":"duplicate","confidence":0.6}]}"#;
-        let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.9)])
-            .await
-            .unwrap();
+        let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.9)]).await.unwrap();
         assert_eq!(out, Decision::New { related: vec![(1, 0.9, None)] });
     }
 
     #[tokio::test]
     async fn a_refinement_with_no_replacement_text_attaches_instead_of_blanking() {
         let judged = r#"{"judgements":[{"idea_id":1,"verdict":"refines","confidence":0.95}]}"#;
-        let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.9)])
-            .await
-            .unwrap();
+        let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.9)]).await.unwrap();
         assert_eq!(out, Decision::Attach { idea_id: 1, confidence: 0.95 });
     }
 
@@ -274,9 +261,7 @@ mod tests {
         // They render nothing yet, so a wrong one is cheap while a missed one
         // loses information the graph will want later.
         let judged = r#"{"judgements":[{"idea_id":2,"verdict":"contradicts","confidence":0.4}]}"#;
-        let out = decide(&Scripted(judged.into()), "new", &[candidate(2, 0.7)])
-            .await
-            .unwrap();
+        let out = decide(&Scripted(judged.into()), "new", &[candidate(2, 0.7)]).await.unwrap();
         assert_eq!(out, Decision::Conflict { idea_id: 2, confidence: 0.4, reason: None });
     }
 
@@ -285,9 +270,7 @@ mod tests {
         // The model can hallucinate an id. Acting on one would attach evidence
         // to an unrelated bubble.
         let judged = r#"{"judgements":[{"idea_id":999,"verdict":"duplicate","confidence":0.99}]}"#;
-        let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.9)])
-            .await
-            .unwrap();
+        let out = decide(&Scripted(judged.into()), "new", &[candidate(1, 0.9)]).await.unwrap();
         assert_eq!(out, Decision::New { related: vec![(1, 0.9, None)] });
     }
 

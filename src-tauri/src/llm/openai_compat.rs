@@ -93,7 +93,9 @@ impl OpenAiCompat {
     /// so callers fall back to the plain listing.
     pub async fn list_models_detailed(&self) -> Option<Vec<ModelInfo>> {
         #[derive(Deserialize)]
-        struct Models { data: Vec<Model> }
+        struct Models {
+            data: Vec<Model>,
+        }
         #[derive(Deserialize)]
         struct Model {
             id: String,
@@ -130,9 +132,13 @@ impl OpenAiCompat {
     /// Plain OpenAI-compatible listing. Ids only — no state, no type.
     pub async fn list_models(&self) -> Result<Vec<String>, LlmError> {
         #[derive(Deserialize)]
-        struct Models { data: Vec<Model> }
+        struct Models {
+            data: Vec<Model>,
+        }
         #[derive(Deserialize)]
-        struct Model { id: String }
+        struct Model {
+            id: String,
+        }
 
         let req = self.http.get(format!("{}/models", self.base_url));
         let req = match &self.api_key {
@@ -352,10 +358,8 @@ impl OpenAiCompat {
             return Err(LlmError::Transport(format!("{status}: {detail}")));
         }
 
-        let completion: Completion = resp
-            .json()
-            .await
-            .map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        let completion: Completion =
+            resp.json().await.map_err(|e| LlmError::BadOutput(e.to_string()))?;
 
         let Some(choice) = completion.choices.first() else {
             return Err(LlmError::BadOutput("no choices in response".into()));
@@ -448,11 +452,7 @@ impl IdeaExtractor for OpenAiCompat {
         }
     }
 
-    async fn judge(
-        &self,
-        prompt: &str,
-        schema: serde_json::Value,
-    ) -> Result<String, LlmError> {
+    async fn judge(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError> {
         match self.structured(prompt, schema.clone(), true).await {
             Err(LlmError::Transport(msg)) if mentions_reasoning_effort(&msg) => {
                 self.structured(prompt, schema, false).await

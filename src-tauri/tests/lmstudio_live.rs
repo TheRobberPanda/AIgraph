@@ -10,11 +10,11 @@
 //! These measure the number the plan says gates everything else: the share of
 //! proposed ideas that cannot be traced back to something the user actually said.
 
-use idea_graph_lib::chat::Conversation;
-use idea_graph_lib::extract::{self, verify::Turn};
-use idea_graph_lib::llm::openai_compat::OpenAiCompat;
-use idea_graph_lib::llm::types::Role;
-use idea_graph_lib::llm::{ChatProvider, ChunkKind};
+use aigraph_lib::chat::Conversation;
+use aigraph_lib::extract::{self, verify::Turn};
+use aigraph_lib::llm::openai_compat::OpenAiCompat;
+use aigraph_lib::llm::types::Role;
+use aigraph_lib::llm::{ChatProvider, ChunkKind};
 use std::sync::Mutex;
 
 fn model() -> String {
@@ -36,17 +36,6 @@ fn refinement_session() -> Vec<Turn> {
         .enumerate()
         .map(|(i, (role, text))| Turn { id: i as i64 + 1, role: *role, text: (*text).into() })
         .collect()
-}
-
-fn transcript(turns: &[Turn]) -> String {
-    turns
-        .iter()
-        .map(|t| {
-            let who = if t.role == Role::User { "USER" } else { "ASSISTANT" };
-            format!("{who}: {}", t.text)
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 #[tokio::test]
@@ -90,10 +79,10 @@ async fn chat_streams_and_keeps_reasoning_out_of_the_reply() {
 #[ignore = "requires LM Studio with a model loaded"]
 async fn extraction_traces_ideas_back_to_real_words() {
     let turns = refinement_session();
-    let text = transcript(&turns);
+
     let extractor = OpenAiCompat::lm_studio(model());
 
-    let out = extract::run(&extractor, &text, &turns).await.expect("extraction failed");
+    let out = extract::run(&extractor, &turns).await.expect("extraction failed");
 
     eprintln!(
         "\n=== {} ideas kept, {} dropped, drop rate {:.0}%{} ===",
@@ -104,12 +93,15 @@ async fn extraction_traces_ideas_back_to_real_words() {
     );
     for i in &out.ideas {
         eprintln!("\n• {}", i.raw.claim);
-        eprintln!("  quote: {:?}{}", i.located.matched_text,
-            if i.located.normalized_match { " [normalized]" } else { "" });
+        eprintln!(
+            "  quote: {:?}{}",
+            i.located.matched_text,
+            if i.located.normalized_match { " [normalized]" } else { "" }
+        );
         for n in &i.raw.notes {
             let mark = match n.kind {
-                idea_graph_lib::llm::types::NoteKind::Supports => "+",
-                idea_graph_lib::llm::types::NoteKind::Questions => "?",
+                aigraph_lib::llm::types::NoteKind::Supports => "+",
+                aigraph_lib::llm::types::NoteKind::Questions => "?",
             };
             eprintln!("  {mark} {}", n.text);
         }

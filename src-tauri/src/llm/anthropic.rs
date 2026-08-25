@@ -23,11 +23,7 @@ const CHAT_MAX_TOKENS: u32 = 64_000;
 
 /// Models worth offering. Shown in the Models tab when a key is present; the
 /// live list comes from the API, and this is only the fallback ordering.
-pub const SUGGESTED: &[&str] = &[
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-haiku-4-5",
-];
+pub const SUGGESTED: &[&str] = &["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"];
 
 pub struct Anthropic {
     api_key: String,
@@ -37,11 +33,7 @@ pub struct Anthropic {
 
 impl Anthropic {
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            model: model.into(),
-            http: reqwest::Client::new(),
-        }
+        Self { api_key: api_key.into(), model: model.into(), http: reqwest::Client::new() }
     }
 
     fn post(&self, path: &str) -> reqwest::RequestBuilder {
@@ -74,10 +66,7 @@ impl Anthropic {
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(LlmError::Unavailable("that API key was rejected".into()));
         }
-        let models: Models = resp
-            .json()
-            .await
-            .map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        let models: Models = resp.json().await.map_err(|e| LlmError::BadOutput(e.to_string()))?;
         Ok(models.data.into_iter().map(|m| m.id).collect())
     }
 
@@ -214,9 +203,7 @@ impl ChatProvider for Anthropic {
         }
 
         if refused && full.trim().is_empty() {
-            return Err(LlmError::BadOutput(
-                "the model declined to answer this one".into(),
-            ));
+            return Err(LlmError::BadOutput("the model declined to answer this one".into()));
         }
         Ok(full)
     }
@@ -277,10 +264,8 @@ impl Anthropic {
             return Err(Self::error_for(resp).await);
         }
 
-        let completion: Completion = resp
-            .json()
-            .await
-            .map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        let completion: Completion =
+            resp.json().await.map_err(|e| LlmError::BadOutput(e.to_string()))?;
 
         if completion.stop_reason.as_deref() == Some("refusal") {
             return Err(LlmError::BadOutput(

@@ -73,13 +73,14 @@ impl Models {
     /// interrupted halfway leaves a directory that exists but cannot be loaded.
     pub fn is_installed(&self) -> bool {
         let p = self.paths();
-        [&p.encoder, &p.decoder, &p.joiner, &p.tokens, &p.vad]
-            .iter()
-            .all(|f| f.exists())
+        [&p.encoder, &p.decoder, &p.joiner, &p.tokens, &p.vad].iter().all(|f| f.exists())
     }
 
     /// Download whatever is missing.
-    pub fn ensure(&self, on_progress: &(dyn Fn(DownloadProgress) + Send + Sync)) -> Result<ModelPaths> {
+    pub fn ensure(
+        &self,
+        on_progress: &(dyn Fn(DownloadProgress) + Send + Sync),
+    ) -> Result<ModelPaths> {
         std::fs::create_dir_all(&self.root)?;
         let paths = self.paths();
 
@@ -89,13 +90,7 @@ impl Models {
 
         if !paths.encoder.exists() || !paths.tokens.exists() {
             let archive = self.root.join("parakeet.tar.bz2");
-            download(
-                PARAKEET_URL,
-                &archive,
-                "speech model",
-                PARAKEET_APPROX_BYTES,
-                on_progress,
-            )?;
+            download(PARAKEET_URL, &archive, "speech model", PARAKEET_APPROX_BYTES, on_progress)?;
             extract(&archive, &self.root)?;
             // The archive is dead weight once unpacked; ~487MB is worth reclaiming.
             std::fs::remove_file(&archive).ok();
@@ -134,14 +129,10 @@ fn download(
     approx_total: u64,
     on_progress: &(dyn Fn(DownloadProgress) + Send + Sync),
 ) -> Result<()> {
-    let resp = ureq::get(url)
-        .call()
-        .map_err(|e| ModelError::Network(e.to_string()))?;
+    let resp = ureq::get(url).call().map_err(|e| ModelError::Network(e.to_string()))?;
 
-    let total = resp
-        .header("Content-Length")
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(approx_total);
+    let total =
+        resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).unwrap_or(approx_total);
 
     // Download beside the target, then rename. An interrupted download must not
     // leave a truncated file that `is_installed` would happily accept.

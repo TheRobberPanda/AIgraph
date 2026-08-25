@@ -347,9 +347,8 @@ impl Embedded {
     /// — a `llama-server` whose command line names our port is ours, because
     /// nothing else would be asked to listen there.
     fn orphan_pid(&self) -> Option<u32> {
-        if let Some(pid) = std::fs::read_to_string(self.pid_path())
-            .ok()
-            .and_then(|p| p.trim().parse::<u32>().ok())
+        if let Some(pid) =
+            std::fs::read_to_string(self.pid_path()).ok().and_then(|p| p.trim().parse::<u32>().ok())
         {
             if is_llama_server(pid) {
                 return Some(pid);
@@ -488,10 +487,7 @@ impl Embedded {
 
     /// What the server last said, for a failure the UI wants to show.
     pub fn last_output(&self) -> Vec<String> {
-        self.log
-            .as_ref()
-            .map(|l| l.lock().unwrap().iter().cloned().collect())
-            .unwrap_or_default()
+        self.log.as_ref().map(|l| l.lock().unwrap().iter().cloned().collect()).unwrap_or_default()
     }
 
     pub fn stop(&mut self) {
@@ -518,17 +514,22 @@ const PINNED_BUILD: &str = "b10612";
 const SERVER_APPROX_BYTES: u64 = 20_000_000;
 
 pub fn server_name() -> &'static str {
-    if cfg!(windows) { "llama-server.exe" } else { "llama-server" }
+    if cfg!(windows) {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    }
 }
 
 /// The newest `bNNNN` release upstream has published.
 fn latest_build() -> Option<String> {
-    let body: String = ureq::get("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10")
-        .set("User-Agent", "idea-graph")
-        .call()
-        .ok()?
-        .into_string()
-        .ok()?;
+    let body: String =
+        ureq::get("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10")
+            .set("User-Agent", "aigraph")
+            .call()
+            .ok()?
+            .into_string()
+            .ok()?;
     let releases: Vec<serde_json::Value> = serde_json::from_str(&body).ok()?;
     releases
         .iter()
@@ -706,11 +707,7 @@ fn kill(pid: u32) {
 fn explain(tail: &[String], code: Option<i32>) -> String {
     let joined = tail.join("\n");
     if joined.contains("invalid argument") {
-        let arg = tail
-            .iter()
-            .find(|l| l.contains("invalid argument"))
-            .cloned()
-            .unwrap_or_default();
+        let arg = tail.iter().find(|l| l.contains("invalid argument")).cloned().unwrap_or_default();
         return format!(
             "this llama-server does not understand one of the settings — {arg}. \
              Installing the current build usually fixes it."

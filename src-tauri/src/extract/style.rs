@@ -92,7 +92,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// The language rule has to bind whatever the field is called.
     ///
     /// It used to list them — claim, title, category, reasoning, note — and a

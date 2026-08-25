@@ -86,7 +86,8 @@ pub fn obvious_choice(servers: &[Detected]) -> Option<(&Detected, &ModelInfo)> {
             return Some((own, model));
         }
     }
-    let with_ready: Vec<&Detected> = servers.iter().filter(|s| !s.ready_models().is_empty()).collect();
+    let with_ready: Vec<&Detected> =
+        servers.iter().filter(|s| !s.ready_models().is_empty()).collect();
     let [server] = with_ready[..] else { return None };
     let ready = server.ready_models();
     let [model] = ready[..] else { return None };
@@ -166,9 +167,10 @@ pub async fn probe_local() -> Vec<Detected> {
         let provider = AnthropicProvider::new(key, "");
         // Ask the API what this key can reach; fall back to the known-good list
         // if that call fails, so a network blip does not empty the picker.
-        let models = provider.list_models().await.unwrap_or_else(|_| {
-            ANTHROPIC_MODELS.iter().map(|m| m.to_string()).collect()
-        });
+        let models = provider
+            .list_models()
+            .await
+            .unwrap_or_else(|_| ANTHROPIC_MODELS.iter().map(|m| m.to_string()).collect());
         Some(Detected {
             kind: LocalKind::Anthropic,
             host: "https://api.anthropic.com".to_string(),
@@ -188,11 +190,7 @@ pub async fn probe_local() -> Vec<Detected> {
             host: String::new(),
             models: ANTHROPIC_MODELS
                 .iter()
-                .map(|id| ModelInfo {
-                    id: id.to_string(),
-                    loaded: None,
-                    kind: ModelKind::Chat,
-                })
+                .map(|id| ModelInfo { id: id.to_string(), loaded: None, kind: ModelKind::Chat })
                 .collect(),
         })
     };
@@ -215,14 +213,13 @@ pub fn chat_provider(kind: LocalKind, host: &str, model: &str) -> Arc<dyn ChatPr
         LocalKind::Ollama => Arc::new(Ollama::new(host, model)),
         LocalKind::LmStudio => Arc::new(OpenAiCompat::new(host, model, None, "lmstudio")),
         LocalKind::Embedded => Arc::new(OpenAiCompat::new(host, model, None, "embedded")),
-        LocalKind::Embedded => Arc::new(OpenAiCompat::new(host, model, None, "embedded")),
         LocalKind::Anthropic => Arc::new(AnthropicProvider::new(
             crate::secrets::get(crate::secrets::ANTHROPIC).unwrap_or_default(),
             model,
         )),
-        LocalKind::ClaudeCli => Arc::new(ClaudeCli::new(
-            (!model.is_empty()).then(|| model.to_string()),
-        )),
+        LocalKind::ClaudeCli => {
+            Arc::new(ClaudeCli::new((!model.is_empty()).then(|| model.to_string())))
+        }
     }
 }
 
@@ -237,8 +234,8 @@ pub fn extractor(kind: LocalKind, host: &str, model: &str) -> Arc<dyn IdeaExtrac
             crate::secrets::get(crate::secrets::ANTHROPIC).unwrap_or_default(),
             model,
         )),
-        LocalKind::ClaudeCli => Arc::new(ClaudeCli::new(
-            (!model.is_empty()).then(|| model.to_string()),
-        )),
+        LocalKind::ClaudeCli => {
+            Arc::new(ClaudeCli::new((!model.is_empty()).then(|| model.to_string())))
+        }
     }
 }

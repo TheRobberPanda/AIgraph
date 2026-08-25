@@ -1,14 +1,14 @@
 [package]
-name = "idea-graph"
+name = "aigraph"
 version = "0.1.0"
 description = "Think out loud, get a map back"
-authors = ["Idea Graph contributors"]
+authors = ["AIgraph contributors"]
 license = "AGPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "idea_graph_lib"
+name = "aigraph_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

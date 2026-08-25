@@ -65,16 +65,10 @@ impl ClaudeCli {
                 .write_all(prompt.as_bytes())
                 .await
                 .map_err(|e| LlmError::Transport(e.to_string()))?;
-            stdin
-                .shutdown()
-                .await
-                .map_err(|e| LlmError::Transport(e.to_string()))?;
+            stdin.shutdown().await.map_err(|e| LlmError::Transport(e.to_string()))?;
         }
 
-        let out = child
-            .wait_with_output()
-            .await
-            .map_err(|e| LlmError::Transport(e.to_string()))?;
+        let out = child.wait_with_output().await.map_err(|e| LlmError::Transport(e.to_string()))?;
 
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
@@ -153,10 +147,7 @@ impl IdeaExtractor for ClaudeCli {
         known_categories: &[String],
     ) -> Result<crate::extract::prompt::Extracted, LlmError> {
         let raw = self
-            .run(
-                &crate::extract::prompt::build_with_categories(transcript, known_categories),
-                None,
-            )
+            .run(&crate::extract::prompt::build_with_categories(transcript, known_categories), None)
             .await?;
         crate::extract::prompt::parse(&raw)
     }

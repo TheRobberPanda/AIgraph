@@ -4,6 +4,12 @@
 //! copied between machines, and would end up in a backup or a screenshot; a
 //! credential does not belong in it.
 
+/// Deliberately still the old name.
+///
+/// The app was renamed; a keychain entry is not a file we can move, and
+/// changing this would silently lose the key of anyone who had already saved
+/// one — they would be told to paste it again with no explanation. A stable
+/// string is worth more here than a tidy one.
 const SERVICE: &str = "dev.ideagraph.app";
 
 #[derive(Debug, thiserror::Error)]
@@ -17,9 +23,7 @@ fn entry(account: &str) -> Result<keyring::Entry, SecretError> {
 }
 
 pub fn set(account: &str, secret: &str) -> Result<(), SecretError> {
-    entry(account)?
-        .set_password(secret)
-        .map_err(|e| SecretError::Keychain(e.to_string()))
+    entry(account)?.set_password(secret).map_err(|e| SecretError::Keychain(e.to_string()))
 }
 
 /// The stored secret, or `None` if there isn't one.

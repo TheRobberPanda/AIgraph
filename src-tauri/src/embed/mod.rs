@@ -47,9 +47,7 @@ impl Embedder {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
-        self.model
-            .embed(texts, None)
-            .map_err(|e| EmbedError::Model(e.to_string()))
+        self.model.embed(texts, None).map_err(|e| EmbedError::Model(e.to_string()))
     }
 
     pub fn embed_one(&mut self, text: &str) -> Result<Vec<f32>, EmbedError> {
@@ -85,10 +83,7 @@ pub fn pack(vec: &[f32]) -> Vec<u8> {
 }
 
 pub fn unpack(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
+    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 
 #[cfg(test)]

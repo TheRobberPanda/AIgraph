@@ -74,18 +74,13 @@ impl Extraction {
 /// If anything fails verification, the session is retried once with the failed
 /// quotes named. Models are noticeably better on the second pass when told
 /// specifically which quotes did not appear in the source.
-pub async fn run(
-    extractor: &dyn IdeaExtractor,
-    transcript: &str,
-    turns: &[Turn],
-) -> Result<Extraction, LlmError> {
-    run_with_progress(extractor, transcript, turns, &[], &|_| {}).await
+pub async fn run(extractor: &dyn IdeaExtractor, turns: &[Turn]) -> Result<Extraction, LlmError> {
+    run_with_progress(extractor, turns, &[], &|_| {}).await
 }
 
 /// As [`run`], reporting each phase as it starts.
 pub async fn run_with_progress(
     extractor: &dyn IdeaExtractor,
-    transcript: &str,
     turns: &[Turn],
     known_categories: &[String],
     on_phase: &(dyn Fn(Phase) + Send + Sync),
@@ -228,7 +223,7 @@ mod tests {
             passes: vec![vec![idea("latency is the real problem")]],
             calls: AtomicUsize::new(0),
         };
-        let out = run(&ex, "t", &turns()).await.unwrap();
+        let out = run(&ex, &turns()).await.unwrap();
         assert_eq!(out.ideas.len(), 1);
         assert!(!out.retried);
         assert_eq!(ex.calls.load(Ordering::SeqCst), 1);
@@ -243,7 +238,7 @@ mod tests {
             ],
             calls: AtomicUsize::new(0),
         };
-        let out = run(&ex, "t", &turns()).await.unwrap();
+        let out = run(&ex, &turns()).await.unwrap();
         assert!(out.retried);
         assert_eq!(out.ideas.len(), 1);
         assert_eq!(out.drop_rate(), 0.0);
@@ -252,13 +247,10 @@ mod tests {
     #[tokio::test]
     async fn worse_retry_is_discarded() {
         let ex = Scripted {
-            passes: vec![
-                vec![idea("latency is the real problem"), idea("nope")],
-                vec![],
-            ],
+            passes: vec![vec![idea("latency is the real problem"), idea("nope")], vec![]],
             calls: AtomicUsize::new(0),
         };
-        let out = run(&ex, "t", &turns()).await.unwrap();
+        let out = run(&ex, &turns()).await.unwrap();
         assert_eq!(out.ideas.len(), 1, "kept the better first pass");
         assert!(out.retried);
     }

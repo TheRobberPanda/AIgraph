@@ -16,5 +16,5 @@ fn main() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    idea_graph_lib::run()
+    aigraph_lib::run()
 }

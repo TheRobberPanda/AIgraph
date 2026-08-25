@@ -21,11 +21,7 @@ pub struct Ollama {
 
 impl Ollama {
     pub fn new(host: impl Into<String>, model: impl Into<String>) -> Self {
-        Self {
-            host: host.into(),
-            model: model.into(),
-            http: reqwest::Client::new(),
-        }
+        Self { host: host.into(), model: model.into(), http: reqwest::Client::new() }
     }
 
     /// Is the daemon up? Used to show a useful message instead of a failed call.
@@ -81,22 +77,19 @@ impl ChatProvider for Ollama {
             "stream": true,
         });
 
-        let resp = self
-            .http
-            .post(format!("{}/api/chat", self.host))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_connect() {
-                    LlmError::Unavailable(format!(
-                        "Ollama is not reachable at {}. Is it running?",
-                        self.host
-                    ))
-                } else {
-                    LlmError::Transport(e.to_string())
-                }
-            })?;
+        let resp =
+            self.http.post(format!("{}/api/chat", self.host)).json(&body).send().await.map_err(
+                |e| {
+                    if e.is_connect() {
+                        LlmError::Unavailable(format!(
+                            "Ollama is not reachable at {}. Is it running?",
+                            self.host
+                        ))
+                    } else {
+                        LlmError::Transport(e.to_string())
+                    }
+                },
+            )?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -163,11 +156,7 @@ impl IdeaExtractor for Ollama {
         crate::extract::prompt::parse(&raw)
     }
 
-    async fn judge(
-        &self,
-        prompt: &str,
-        schema: serde_json::Value,
-    ) -> Result<String, LlmError> {
+    async fn judge(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError> {
         self.structured(prompt, schema).await
     }
 
@@ -213,10 +202,7 @@ impl Ollama {
             message: ChunkMessage,
         }
 
-        let once: Once = resp
-            .json()
-            .await
-            .map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        let once: Once = resp.json().await.map_err(|e| LlmError::BadOutput(e.to_string()))?;
 
         if once.message.content.trim().is_empty() {
             let thought = once.message.thinking.as_deref().unwrap_or("");
@@ -236,9 +222,13 @@ impl Ollama {
     /// UI can offer one model picker regardless of which server is behind it.
     pub async fn list_models(&self) -> Result<Vec<String>, LlmError> {
         #[derive(Deserialize)]
-        struct Tags { models: Vec<Tag> }
+        struct Tags {
+            models: Vec<Tag>,
+        }
         #[derive(Deserialize)]
-        struct Tag { name: String }
+        struct Tag {
+            name: String,
+        }
 
         let tags: Tags = self
             .http

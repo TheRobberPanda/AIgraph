@@ -252,14 +252,9 @@ mod tests {
 
     #[test]
     fn quoting_the_assistant_is_its_own_rejection() {
-        let turns = vec![
-            user(1, "what should I use?"),
-            asst(2, "You should consider Tauri for this."),
-        ];
-        assert_eq!(
-            verify(&idea("consider Tauri"), &turns),
-            Err(Rejection::AttributedToAssistant)
-        );
+        let turns =
+            vec![user(1, "what should I use?"), asst(2, "You should consider Tauri for this.")];
+        assert_eq!(verify(&idea("consider Tauri"), &turns), Err(Rejection::AttributedToAssistant));
     }
 
     #[test]

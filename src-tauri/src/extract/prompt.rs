@@ -114,11 +114,7 @@ pub fn build_with_categories(transcript: &str, known: &[String]) -> String {
         format!(
             "\n\nCategories already in use. Reuse one wherever it fits, exactly \
              as written, rather than coining a near-synonym:\n{}\n",
-            known
-                .iter()
-                .map(|c| format!("  {c}"))
-                .collect::<Vec<_>>()
-                .join("\n")
+            known.iter().map(|c| format!("  {c}")).collect::<Vec<_>>().join("\n")
         )
     };
     format!(
@@ -265,7 +261,11 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
     let text = raw.trim();
 
     if let Ok(env) = serde_json::from_str::<Envelope>(text) {
-        return Ok(Extracted { title: env.title, ideas: env.ideas, conversation: env.conversation });
+        return Ok(Extracted {
+            title: env.title,
+            ideas: env.ideas,
+            conversation: env.conversation,
+        });
     }
 
     let start = text.find('{');
@@ -273,7 +273,11 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
     if let (Some(s), Some(e)) = (start, end) {
         if e > s {
             if let Ok(env) = serde_json::from_str::<Envelope>(&text[s..=e]) {
-                return Ok(Extracted { title: env.title, ideas: env.ideas, conversation: env.conversation });
+                return Ok(Extracted {
+                    title: env.title,
+                    ideas: env.ideas,
+                    conversation: env.conversation,
+                });
             }
         }
     }
@@ -285,7 +289,11 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
     if let Some(repaired) = repair(text) {
         if let Ok(env) = serde_json::from_str::<Envelope>(&repaired) {
             tracing::warn!("extraction output was truncated; salvaged what completed");
-            return Ok(Extracted { title: env.title, ideas: env.ideas, conversation: env.conversation });
+            return Ok(Extracted {
+                title: env.title,
+                ideas: env.ideas,
+                conversation: env.conversation,
+            });
         }
     }
 

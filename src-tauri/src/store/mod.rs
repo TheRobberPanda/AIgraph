@@ -11,8 +11,8 @@ use serde::Serialize;
 use crate::embed;
 use crate::extract::verify::{Rejection, Turn};
 use crate::extract::{Extraction, VerifiedIdea};
-use crate::reconcile::Decision;
 use crate::llm::types::Role;
+use crate::reconcile::Decision;
 use crate::session::transcript::Rendered;
 
 #[derive(Debug, thiserror::Error)]
@@ -24,12 +24,10 @@ pub enum StoreError {
     /// Stored offsets no longer select the stored quote. Should be impossible;
     /// surfaced loudly rather than papered over, because a wrong highlight is
     /// worse than a missing one.
-    #[error("evidence {evidence_id} no longer matches its source (expected {quote:?}, found {found:?})")]
-    Provenance {
-        evidence_id: i64,
-        quote: String,
-        found: String,
-    },
+    #[error(
+        "evidence {evidence_id} no longer matches its source (expected {quote:?}, found {found:?})"
+    )]
+    Provenance { evidence_id: i64, quote: String, found: String },
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -230,6 +228,13 @@ pub struct Graph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
 }
+
+/// Everything a deep dive needs about one idea: the claim, what holds up,
+/// what is thin, and the words it came from.
+pub type IdeaForDeepDive = (String, Vec<String>, Vec<String>, Vec<String>);
+
+/// Notes against each id: what holds up, and what is thin.
+pub type NudgesById = std::collections::HashMap<i64, (Vec<String>, Vec<String>)>;
 
 /// The honesty metric, as shown in Diagnostics.
 #[derive(Debug, Clone, Serialize, Default)]
@@ -522,9 +527,9 @@ impl Store {
     /// quit, so it is driven off this queue rather than fired once and hoped
     /// for. Nothing the user said should be lost to bad timing.
     pub fn pending_extraction(&self) -> Result<Vec<i64>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM sessions WHERE extract_state IN ('pending','extracting') ORDER BY id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM sessions WHERE extract_state IN ('pending','extracting') ORDER BY id",
+        )?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
     }
@@ -683,9 +688,8 @@ impl Store {
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
-            let mut nudge = self
-                .conn
-                .prepare("SELECT kind, text FROM nudges WHERE idea_id = ?1")?;
+            let mut nudge =
+                self.conn.prepare("SELECT kind, text FROM nudges WHERE idea_id = ?1")?;
             let nudges = nudge
                 .query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -696,7 +700,11 @@ impl Store {
                 claim,
                 category,
                 evidence,
-                strong: nudges.iter().filter(|(k, _)| k == "strong").map(|(_, t)| t.clone()).collect(),
+                strong: nudges
+                    .iter()
+                    .filter(|(k, _)| k == "strong")
+                    .map(|(_, t)| t.clone())
+                    .collect(),
                 weak: nudges.iter().filter(|(k, _)| k == "weak").map(|(_, t)| t.clone()).collect(),
             });
         }
@@ -707,17 +715,24 @@ impl Store {
         let ideas: i64 = self.conn.query_row("SELECT COUNT(*) FROM ideas", [], |r| r.get(0))?;
         let rejected: i64 =
             self.conn.query_row("SELECT COUNT(*) FROM rejected_ideas", [], |r| r.get(0))?;
-        let normalized: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM evidence WHERE normalized = 1", [], |r| r.get(0))?;
+        let normalized: i64 =
+            self.conn.query_row("SELECT COUNT(*) FROM evidence WHERE normalized = 1", [], |r| {
+                r.get(0)
+            })?;
         let done: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sessions WHERE extract_state = 'done'", [], |r| r.get(0))?;
+            "SELECT COUNT(*) FROM sessions WHERE extract_state = 'done'",
+            [],
+            |r| r.get(0),
+        )?;
         let pending: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM sessions WHERE extract_state IN ('pending','extracting')",
-            [], |r| r.get(0))?;
+            [],
+            |r| r.get(0),
+        )?;
 
         let mut stmt = self.conn.prepare(
-            "SELECT reason, COUNT(*) FROM rejected_ideas GROUP BY reason ORDER BY 2 DESC")?;
+            "SELECT reason, COUNT(*) FROM rejected_ideas GROUP BY reason ORDER BY 2 DESC",
+        )?;
         let by_reason = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -758,9 +773,9 @@ impl Store {
         // Offsets on `evidence` are relative to the turn; `turns` locates the
         // turn within the transcript. Combining them is the only correct way to
         // get an absolute position.
-        let turn_start: i64 = self
-            .conn
-            .query_row("SELECT start_byte FROM turns WHERE id = ?1", [turn_id], |r| r.get(0))?;
+        let turn_start: i64 =
+            self.conn
+                .query_row("SELECT start_byte FROM turns WHERE id = ?1", [turn_id], |r| r.get(0))?;
 
         let (abs_start, abs_end) = ((turn_start + start) as usize, (turn_start + end) as usize);
 
@@ -868,11 +883,9 @@ impl Store {
 
             let digest = self
                 .conn
-                .query_row(
-                    "SELECT content FROM reply_digests WHERE turn_id = ?1",
-                    [turn.id],
-                    |r| r.get::<_, String>(0),
-                )
+                .query_row("SELECT content FROM reply_digests WHERE turn_id = ?1", [turn.id], |r| {
+                    r.get::<_, String>(0)
+                })
                 .optional()?;
             turns.push(ViewTurn { id: turn.id, role: turn.role, segments, digest });
         }
@@ -930,19 +943,14 @@ impl Store {
     }
 
     /// Every nudge in one table, grouped by owner.
-    fn grouped_nudges(
-        &self,
-        table: &str,
-        column: &str,
-    ) -> Result<std::collections::HashMap<i64, (Vec<String>, Vec<String>)>> {
-        let mut stmt = self
-            .conn
-            .prepare(&format!("SELECT {column}, kind, text FROM {table}"))?;
+    fn grouped_nudges(&self, table: &str, column: &str) -> Result<NudgesById> {
+        let mut stmt = self.conn.prepare(&format!("SELECT {column}, kind, text FROM {table}"))?;
         let rows: Vec<(i64, String, String)> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<rusqlite::Result<_>>()?;
 
-        let mut out: std::collections::HashMap<i64, (Vec<String>, Vec<String>)> = Default::default();
+        let mut out: std::collections::HashMap<i64, (Vec<String>, Vec<String>)> =
+            Default::default();
         for (id, kind, text) in rows {
             let entry = out.entry(id).or_default();
             if kind == "strong" {
@@ -957,9 +965,8 @@ impl Store {
     fn nudges_for(&self, table: &str, column: &str, id: i64) -> Result<(Vec<String>, Vec<String>)> {
         // `table` and `column` are compile-time constants at every call site,
         // never user input.
-        let mut stmt = self
-            .conn
-            .prepare(&format!("SELECT kind, text FROM {table} WHERE {column} = ?1"))?;
+        let mut stmt =
+            self.conn.prepare(&format!("SELECT kind, text FROM {table} WHERE {column} = ?1"))?;
         let rows: Vec<(String, String)> = stmt
             .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
@@ -1059,9 +1066,7 @@ impl Store {
         // two conversations therefore joins them — which is the whole point of
         // the shape: shared ideas are the only thing connecting one stretch of
         // thinking to another.
-        let mut from = self
-            .conn
-            .prepare("SELECT DISTINCT session_id, idea_id FROM evidence")?;
+        let mut from = self.conn.prepare("SELECT DISTINCT session_id, idea_id FROM evidence")?;
         for row in from.query_map([], |r| {
             let (s, i): (i64, i64) = (r.get(0)?, r.get(1)?);
             Ok(GraphEdge {
@@ -1102,9 +1107,9 @@ impl Store {
         // most of them. A shared topic is a much weaker claim than "these two
         // thoughts are related", so it earns a fainter, cheaper line rather
         // than the one reconciliation draws.
-        let mut cat_stmt = self.conn.prepare(
-            "SELECT id, category FROM ideas WHERE category <> '' ORDER BY category, id",
-        )?;
+        let mut cat_stmt = self
+            .conn
+            .prepare("SELECT id, category FROM ideas WHERE category <> '' ORDER BY category, id")?;
         let by_category: Vec<(i64, String)> = cat_stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
@@ -1191,11 +1196,9 @@ impl Store {
     pub fn deep_dive(&self, idea_id: i64) -> Result<Option<String>> {
         Ok(self
             .conn
-            .query_row(
-                "SELECT content FROM idea_deep_dives WHERE idea_id = ?1",
-                [idea_id],
-                |r| r.get(0),
-            )
+            .query_row("SELECT content FROM idea_deep_dives WHERE idea_id = ?1", [idea_id], |r| {
+                r.get(0)
+            })
             .optional()?)
     }
 
@@ -1211,7 +1214,7 @@ impl Store {
 
     /// Everything needed to argue about one idea: the claim, its nudges, and the
     /// user's own words behind it.
-    pub fn idea_context(&self, idea_id: i64) -> Result<(String, Vec<String>, Vec<String>, Vec<String>)> {
+    pub fn idea_context(&self, idea_id: i64) -> Result<IdeaForDeepDive> {
         let claim: String =
             self.conn
                 .query_row("SELECT claim FROM ideas WHERE id = ?1", [idea_id], |r| r.get(0))?;
@@ -1219,9 +1222,8 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare("SELECT quote FROM evidence WHERE idea_id = ?1 ORDER BY created_at")?;
-        let quotes: Vec<String> = stmt
-            .query_map([idea_id], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
+        let quotes: Vec<String> =
+            stmt.query_map([idea_id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
         Ok((claim, strong, weak, quotes))
     }
 
@@ -1590,7 +1592,12 @@ impl Store {
         )?)
     }
 
-    pub fn set_extract_state(&self, session_id: i64, state: &str, error: Option<&str>) -> Result<()> {
+    pub fn set_extract_state(
+        &self,
+        session_id: i64,
+        state: &str,
+        error: Option<&str>,
+    ) -> Result<()> {
         self.conn.execute(
             "UPDATE sessions SET extract_state = ?2, extract_error = ?3 WHERE id = ?1",
             params![session_id, state, error],
@@ -1604,12 +1611,8 @@ impl Store {
 /// Lowercased and squeezed so "Moral Philosophy" and "moral  philosophy" do not
 /// become two colours on the map.
 fn normalize_category(raw: &str) -> String {
-    let cleaned: String = raw
-        .trim()
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let cleaned: String =
+        raw.trim().to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
     cleaned.chars().take(40).collect()
 }
 
@@ -1727,7 +1730,7 @@ mod tests {
 
     #[test]
     fn markdown_copy_contains_the_transcript() {
-        let dir = std::env::temp_dir().join(format!("ideagraph-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("aigraph-test-{}", std::process::id()));
         let mut store = Store::open_in_memory().unwrap();
         let rendered = transcript::render(&convo());
         let id = store.archive_session(&rendered, "m", Utc::now(), Some(&dir)).unwrap();
@@ -1755,7 +1758,8 @@ mod tests {
     #[test]
     fn extraction_queue_tracks_state() {
         let mut store = Store::open_in_memory().unwrap();
-        let id = store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
+        let id =
+            store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
         assert_eq!(store.pending_extraction().unwrap(), vec![id]);
 
         store.set_extract_state(id, "done", None).unwrap();
@@ -1776,7 +1780,8 @@ mod tests {
         let messages = vec![
             Message {
                 role: Role::User,
-                content: "caf\u{e9} \u{1F600} \u{1F680} na\u{ef}ve — latency is the real problem".into(),
+                content: "caf\u{e9} \u{1F600} \u{1F680} na\u{ef}ve — latency is the real problem"
+                    .into(),
             },
             Message { role: Role::Assistant, content: "\u{1F914} say more".into() },
             Message { role: Role::User, content: "\u{e9}verything compounds".into() },
@@ -1857,10 +1862,7 @@ mod tests {
             .unwrap();
 
         // Corrupt the stored offsets, as a bad migration might.
-        store
-            .conn
-            .execute("UPDATE evidence SET start_byte = start_byte + 3", [])
-            .unwrap();
+        store.conn.execute("UPDATE evidence SET start_byte = start_byte + 3", []).unwrap();
 
         let id = store.ideas(None).unwrap()[0].evidence[0].id;
         assert!(
@@ -1900,11 +1902,11 @@ mod tests {
 
         let (s1, t1) = session_with(&mut store, "Trump is a bad man");
         let first = verified("Trump is a bad man", "Trump is a bad man", &t1);
-        let idea_id = store
-            .apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m")
-            .unwrap();
+        let idea_id =
+            store.apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m").unwrap();
 
-        let (s2, t2) = session_with(&mut store, "he acts like a bad person in certain circumstances");
+        let (s2, t2) =
+            session_with(&mut store, "he acts like a bad person in certain circumstances");
         let second = verified(
             "He acts badly in certain circumstances",
             "he acts like a bad person in certain circumstances",
@@ -1930,10 +1932,7 @@ mod tests {
         assert_eq!(ideas.len(), 1, "one idea, not two");
         assert_eq!(ideas[0].claim, "He acts badly in certain circumstances");
         assert_eq!(ideas[0].evidence.len(), 2, "both moments support it");
-        assert_eq!(
-            ideas[0].evidence[0].session_id, s1,
-            "the original quote survives the rewrite"
-        );
+        assert_eq!(ideas[0].evidence[0].session_id, s1, "the original quote survives the rewrite");
     }
 
     #[test]
@@ -1941,9 +1940,8 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         let (s1, t1) = session_with(&mut store, "Trump is a bad man");
         let first = verified("Trump is a bad man", "Trump is a bad man", &t1);
-        let idea_id = store
-            .apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m")
-            .unwrap();
+        let idea_id =
+            store.apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m").unwrap();
 
         let (s2, t2) = session_with(&mut store, "he acts like a bad person sometimes");
         let second = verified("Nuanced", "he acts like a bad person sometimes", &t2);
@@ -1973,9 +1971,8 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         let (s1, t1) = session_with(&mut store, "latency is the problem");
         let first = verified("Latency is the problem", "latency is the problem", &t1);
-        let idea_id = store
-            .apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m")
-            .unwrap();
+        let idea_id =
+            store.apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m").unwrap();
 
         let (s2, t2) = session_with(&mut store, "latency is the problem");
         let again = verified("Latency is the problem", "latency is the problem", &t2);
@@ -1994,18 +1991,14 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         let (s1, t1) = session_with(&mut store, "latency is the problem");
         let idea = verified("Latency", "latency is the problem", &t1);
-        let id = store
-            .apply_decision(s1, &idea, &Decision::New { related: vec![] }, "t", "m")
-            .unwrap();
+        let id =
+            store.apply_decision(s1, &idea, &Decision::New { related: vec![] }, "t", "m").unwrap();
 
         store.set_embedding(id, &[0.1; 384]).unwrap();
         assert_eq!(store.ideas_with_embeddings().unwrap().len(), 1);
         assert!(store.ideas_needing_embedding().unwrap().is_empty());
 
-        store
-            .conn
-            .execute("UPDATE embeddings SET model = 'some-other-model'", [])
-            .unwrap();
+        store.conn.execute("UPDATE embeddings SET model = 'some-other-model'", []).unwrap();
         assert!(
             store.ideas_with_embeddings().unwrap().is_empty(),
             "cosine across two models' spaces is meaningless"
@@ -2019,9 +2012,8 @@ mod tests {
 
         let (s1, t1) = session_with(&mut store, "latency is the problem");
         let a = verified("Latency is the problem", "latency is the problem", &t1);
-        let idea_id = store
-            .apply_decision(s1, &a, &Decision::New { related: vec![] }, "t", "m")
-            .unwrap();
+        let idea_id =
+            store.apply_decision(s1, &a, &Decision::New { related: vec![] }, "t", "m").unwrap();
 
         let (s2, t2) = session_with(&mut store, "latency is the problem");
         let b = verified("Latency is the problem", "latency is the problem", &t2);
@@ -2062,14 +2054,25 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         let (s1, t1) = session_with(&mut store, "latency is the problem");
         let first = verified("Latency is the problem", "latency is the problem", &t1);
-        let a = store
-            .apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m")
-            .unwrap();
+        let a =
+            store.apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m").unwrap();
 
         let (s2, t2) = session_with(&mut store, "speed matters most of all");
         let second = verified("Speed matters most", "speed matters most of all", &t2);
         let b = store
-            .apply_decision(s2, &second, &Decision::New { related: vec![(a, 0.7, Some("both treat latency as the binding constraint".into()))] }, "t", "m")
+            .apply_decision(
+                s2,
+                &second,
+                &Decision::New {
+                    related: vec![(
+                        a,
+                        0.7,
+                        Some("both treat latency as the binding constraint".into()),
+                    )],
+                },
+                "t",
+                "m",
+            )
             .unwrap();
 
         assert_ne!(a, b, "related is not the same as merged");
@@ -2142,7 +2145,11 @@ mod tests {
     #[test]
     fn a_short_ai_title_wins_over_the_opening_words() {
         assert_eq!(
-            conversation_label("American Economic Empire", "so today I wanted to talk about", "2026-08-22"),
+            conversation_label(
+                "American Economic Empire",
+                "so today I wanted to talk about",
+                "2026-08-22"
+            ),
             "American Economic Empire"
         );
     }
@@ -2150,7 +2157,8 @@ mod tests {
     #[test]
     fn deleting_a_session_takes_its_turns_with_it() {
         let mut store = Store::open_in_memory().unwrap();
-        let id = store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
+        let id =
+            store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
         store.conn.execute("DELETE FROM sessions WHERE id = ?1", [id]).unwrap();
         assert!(store.turns(id).unwrap().is_empty(), "cascade did not fire");
     }

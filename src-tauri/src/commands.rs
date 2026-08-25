@@ -8,18 +8,18 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 use crate::chat::Conversation;
+use crate::embed::Embedder;
 use crate::llm::detect::{self, Detected, LocalKind};
 use crate::llm::{ChatProvider, ChunkKind, IdeaExtractor};
-use crate::session::{ActiveSession, EndReason};
-use crate::stt::capture::{Dictation, Event as SttEvent};
-use crate::stt::model::{DownloadProgress, Models};
-use crate::embed::Embedder;
 use crate::reconcile;
+use crate::session::{ActiveSession, EndReason};
 use crate::settings::{ModelChoice, Settings};
 use crate::store::{
-    ConversationView, Diagnostics, Graph, IdeaView, SessionSummary, SourceView, StoredIdea, Store,
+    ConversationView, Diagnostics, Graph, IdeaView, SessionSummary, SourceView, Store, StoredIdea,
     StoredTurn,
 };
+use crate::stt::capture::{Dictation, Event as SttEvent};
+use crate::stt::model::{DownloadProgress, Models};
 
 /// The provider currently in use, if one has been chosen.
 struct Active {
@@ -83,26 +83,24 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(db_path: &std::path::Path, md_dir: PathBuf) -> Result<Self, crate::store::StoreError> {
+    pub fn new(
+        db_path: &std::path::Path,
+        md_dir: PathBuf,
+    ) -> Result<Self, crate::store::StoreError> {
         Ok(Self {
             conversation: Mutex::new(None),
             active: Mutex::new(None),
             session: Mutex::new(None),
             store: Mutex::new(Store::open(db_path)?),
             progress: Mutex::new(ExtractionProgress::default()),
-            models: Models::new(
-                db_path.parent().unwrap_or(std::path::Path::new(".")),
-            ),
+            models: Models::new(db_path.parent().unwrap_or(std::path::Path::new("."))),
             dictation: Mutex::new(None),
             embedder: Mutex::new(None),
             extractor: Mutex::new(None),
             settings: Mutex::new(Settings::load(
                 db_path.parent().unwrap_or(std::path::Path::new(".")),
             )),
-            data_dir: db_path
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .to_path_buf(),
+            data_dir: db_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf(),
             embed_cache_dir: md_dir
                 .parent()
                 .unwrap_or(std::path::Path::new("."))
@@ -123,11 +121,7 @@ impl AppState {
     /// Clear `extracting` marks left by a crash, so those sessions are picked up
     /// again instead of being skipped forever.
     pub async fn requeue_interrupted(&self) -> Result<usize, String> {
-        self.store
-            .lock()
-            .await
-            .reset_stale_extractions()
-            .map_err(|e| e.to_string())
+        self.store.lock().await.reset_stale_extractions().map_err(|e| e.to_string())
     }
 }
 
@@ -192,9 +186,9 @@ pub async fn startup(state: State<'_, AppState>) -> Result<Startup, String> {
     // and would quietly overrule it.
     let saved = state.settings.lock().await.clone();
     if let Some(choice) = &saved.chat {
-        let still_there = servers.iter().any(|s| {
-            s.kind == choice.kind && s.models.iter().any(|m| m.id == choice.model)
-        });
+        let still_there = servers
+            .iter()
+            .any(|s| s.kind == choice.kind && s.models.iter().any(|m| m.id == choice.model));
         if still_there {
             set_active(&state, choice.kind, &choice.host, &choice.model).await;
             if let Some(ex) = &saved.extraction {
@@ -250,11 +244,8 @@ pub async fn select_provider(
 /// Record which model is in use, so the settings file agrees with reality.
 async fn remember_choice(state: &State<'_, AppState>, kind: LocalKind, host: &str, model: &str) {
     let mut settings = state.settings.lock().await;
-    let choice = crate::settings::ModelChoice {
-        kind,
-        host: host.to_string(),
-        model: model.to_string(),
-    };
+    let choice =
+        crate::settings::ModelChoice { kind, host: host.to_string(), model: model.to_string() };
     // Extraction follows only where it was following already — someone who
     // chose a separate extractor meant it.
     if settings.extraction == settings.chat {
@@ -421,13 +412,7 @@ pub async fn continue_session(
     }
 
     let turns = state.store.lock().await.turns(session_id).map_err(|e| e.to_string())?;
-    let model = state
-        .active
-        .lock()
-        .await
-        .as_ref()
-        .map(|a| a.model.clone())
-        .unwrap_or_default();
+    let model = state.active.lock().await.as_ref().map(|a| a.model.clone()).unwrap_or_default();
 
     let mut convo = Conversation::new(&model);
     convo.set_call_mode(state.settings.lock().await.call_mode);
@@ -472,23 +457,12 @@ pub async fn end_session_inner(
         if convo.is_empty() {
             return Ok(None);
         }
-        let model = state
-            .active
-            .lock()
-            .await
-            .as_ref()
-            .map(|a| a.model.clone())
-            .unwrap_or_default();
+        let model = state.active.lock().await.as_ref().map(|a| a.model.clone()).unwrap_or_default();
         (convo.render(), model)
     };
 
-    let started_at = state
-        .session
-        .lock()
-        .await
-        .as_ref()
-        .map(|s| s.started_at)
-        .unwrap_or_else(chrono::Utc::now);
+    let started_at =
+        state.session.lock().await.as_ref().map(|s| s.started_at).unwrap_or_else(chrono::Utc::now);
 
     // Picked back up rather than started fresh: the same session grows instead
     // of a second one appearing beside it. Every offset already recorded points
@@ -552,13 +526,7 @@ pub async fn end_session(
 }
 
 pub async fn is_session_idle(state: &AppState) -> bool {
-    state
-        .session
-        .lock()
-        .await
-        .as_ref()
-        .map(|s| s.is_idle(chrono::Utc::now()))
-        .unwrap_or(false)
+    state.session.lock().await.as_ref().map(|s| s.is_idle(chrono::Utc::now())).unwrap_or(false)
 }
 
 /// Whether the current session has gone quiet long enough to be over.
@@ -587,13 +555,7 @@ pub async fn session_turns(
 /// the chat-purity boundary inspectable from the UI.
 #[tauri::command]
 pub async fn transcript(state: State<'_, AppState>) -> Result<String, String> {
-    Ok(state
-        .conversation
-        .lock()
-        .await
-        .as_ref()
-        .map(|c| c.to_transcript())
-        .unwrap_or_default())
+    Ok(state.conversation.lock().await.as_ref().map(|c| c.to_transcript()).unwrap_or_default())
 }
 
 /// Which provider is in use, if any.
@@ -622,14 +584,11 @@ pub async fn extract_session_inner(
         (e.provider.clone(), e.label.clone(), e.model.clone())
     };
 
-    let (transcript, turns) = {
+    // The turns, not the whole transcript: extraction builds its own abridged
+    // copy from these, and verification searches these directly.
+    let turns = {
         let store = state.store.lock().await;
-        let t = store
-            .transcript(session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("no such session")?;
-        let turns = store.verify_turns(session_id).map_err(|e| e.to_string())?;
-        (t, turns)
+        store.verify_turns(session_id).map_err(|e| e.to_string())?
     };
 
     let started = chrono::Utc::now();
@@ -679,23 +638,13 @@ pub async fn extract_session_inner(
     // take minutes on a local model, and holding it would freeze the whole app.
     // Hand the model the categories already in use so it reuses them instead of
     // coining a synonym for a subject it has seen before.
-    let known = state
-        .store
-        .lock()
-        .await
-        .categories()
-        .unwrap_or_default();
+    let known = state.store.lock().await.categories().unwrap_or_default();
 
-    let result = crate::extract::run_with_progress(
-        extractor.as_ref(),
-        &transcript,
-        &turns,
-        &known,
-        &move |phase| {
+    let result =
+        crate::extract::run_with_progress(extractor.as_ref(), &turns, &known, &move |phase| {
             let _ = tx.send(phase);
-        },
-    )
-    .await;
+        })
+        .await;
 
     pump.abort();
     let seconds = (chrono::Utc::now() - started).num_seconds();
@@ -717,7 +666,8 @@ pub async fn extract_session_inner(
                 .map_err(|e| format!("saving ideas: {e}"))?;
 
             if !extraction.title.is_empty() {
-                let _ = state.store.lock().await.set_session_title_ai(session_id, &extraction.title);
+                let _ =
+                    state.store.lock().await.set_session_title_ai(session_id, &extraction.title);
             }
 
             finish(
@@ -740,11 +690,7 @@ pub async fn extract_session_inner(
             let msg = e.to_string();
             // Back to `pending`, not `failed` — a model that was merely unloaded
             // shouldn't cost the user their session permanently.
-            let _ = state
-                .store
-                .lock()
-                .await
-                .set_extract_state(session_id, "pending", Some(&msg));
+            let _ = state.store.lock().await.set_extract_state(session_id, "pending", Some(&msg));
             finish(
                 app,
                 state,
@@ -811,7 +757,10 @@ pub async fn extract_session(
 /// impatient second click, which should be a no-op rather than a second
 /// concurrent decode competing for the same model.
 #[tauri::command]
-pub async fn extract_now(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn extract_now(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
     if state.progress.lock().await.running.is_some() {
         return Ok(false);
     }
@@ -838,16 +787,11 @@ pub async fn pending_sessions(
     let store = state.store.lock().await;
     let ids = store.pending_extraction().map_err(|e| e.to_string())?;
     let all = store.list_sessions(500, None).map_err(|e| e.to_string())?;
-    Ok(ids
-        .iter()
-        .filter_map(|id| all.iter().find(|s| s.id == *id).cloned())
-        .collect())
+    Ok(ids.iter().filter_map(|id| all.iter().find(|s| s.id == *id).cloned()).collect())
 }
 
 #[tauri::command]
-pub async fn extraction_progress(
-    state: State<'_, AppState>,
-) -> Result<ExtractionProgress, String> {
+pub async fn extraction_progress(state: State<'_, AppState>) -> Result<ExtractionProgress, String> {
     let mut p = state.progress.lock().await.clone();
     p.pending = state.store.lock().await.diagnostics().map(|d| d.sessions_pending).unwrap_or(0);
     Ok(p)
@@ -898,10 +842,7 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
                 // 2, 4, 8 … capped at an hour. A model that is simply switched
                 // off should not keep the machine busy.
                 let wait = 2u32.saturating_pow(attempts.min(6)).min(60);
-                backoff.insert(
-                    id,
-                    (now + chrono::TimeDelta::minutes(wait as i64), attempts),
-                );
+                backoff.insert(id, (now + chrono::TimeDelta::minutes(wait as i64), attempts));
                 tracing::warn!(
                     session = id,
                     attempts,
@@ -969,12 +910,7 @@ pub async fn source_view(
     state: State<'_, AppState>,
     evidence_id: i64,
 ) -> Result<SourceView, String> {
-    state
-        .store
-        .lock()
-        .await
-        .source_view(evidence_id)
-        .map_err(|e| e.to_string())
+    state.store.lock().await.source_view(evidence_id).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------- dictation
@@ -988,10 +924,7 @@ pub struct SpeechModelStatus {
 
 #[tauri::command]
 pub async fn speech_model_status(state: State<'_, AppState>) -> Result<SpeechModelStatus, String> {
-    Ok(SpeechModelStatus {
-        installed: state.models.is_installed(),
-        download_mb: 488,
-    })
+    Ok(SpeechModelStatus { installed: state.models.is_installed(), download_mb: 488 })
 }
 
 /// Download the speech models if they aren't already present.
@@ -1006,12 +939,7 @@ pub async fn download_speech_model(
     if state.models.is_installed() {
         return Ok(());
     }
-    let models = Models::new(
-        app.path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?
-            .as_path(),
-    );
+    let models = Models::new(app.path().app_data_dir().map_err(|e| e.to_string())?.as_path());
     let emitter = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         models.ensure(&move |p: DownloadProgress| {
@@ -1072,9 +1000,7 @@ pub async fn start_dictation(
 pub async fn stop_dictation(state: State<'_, AppState>) -> Result<(), String> {
     if let Some(d) = state.dictation.lock().await.take() {
         // Blocking join, but only for as long as one in-flight segment takes.
-        tauri::async_runtime::spawn_blocking(move || d.stop())
-            .await
-            .map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || d.stop()).await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1128,12 +1054,8 @@ async fn reconcile_and_save(
     for (idea, vector) in extraction.ideas.iter().zip(vectors) {
         // Re-read each time: a decision may have added an idea that the next one
         // should be compared against, including within this same session.
-        let existing = state
-            .store
-            .lock()
-            .await
-            .ideas_with_embeddings()
-            .map_err(|e| e.to_string())?;
+        let existing =
+            state.store.lock().await.ideas_with_embeddings().map_err(|e| e.to_string())?;
 
         let candidates = reconcile::shortlist(&vector, &existing);
         let decision = reconcile::decide(adjudicator.as_ref(), &idea.raw.claim, &candidates)
@@ -1175,12 +1097,7 @@ async fn reconcile_and_save(
 
     // Rejected ideas are recorded separately: the drop rate is only honest if
     // the failures are kept.
-    state
-        .store
-        .lock()
-        .await
-        .save_rejections(session_id, extraction)
-        .map_err(|e| e.to_string())?;
+    state.store.lock().await.save_rejections(session_id, extraction).map_err(|e| e.to_string())?;
 
     condense_replies(state, session_id, adjudicator.as_ref(), model).await;
     Ok(())
@@ -1225,12 +1142,7 @@ pub async fn revert_revision(
     state: State<'_, AppState>,
     revision_id: i64,
 ) -> Result<(), String> {
-    state
-        .store
-        .lock()
-        .await
-        .revert_revision(revision_id)
-        .map_err(|e| e.to_string())?;
+    state.store.lock().await.revert_revision(revision_id).map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
     Ok(())
 }
@@ -1245,12 +1157,7 @@ pub async fn conversation_view(
     state: State<'_, AppState>,
     session_id: i64,
 ) -> Result<ConversationView, String> {
-    state
-        .store
-        .lock()
-        .await
-        .conversation_view(session_id)
-        .map_err(|e| e.to_string())
+    state.store.lock().await.conversation_view(session_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1275,12 +1182,8 @@ pub async fn reextract_session(
     state: State<'_, AppState>,
     session_id: i64,
 ) -> Result<Cleared, String> {
-    let (evidence_removed, ideas_removed) = state
-        .store
-        .lock()
-        .await
-        .clear_extraction(session_id)
-        .map_err(|e| e.to_string())?;
+    let (evidence_removed, ideas_removed) =
+        state.store.lock().await.clear_extraction(session_id).map_err(|e| e.to_string())?;
 
     let _ = app.emit("ideas:changed", ());
 
@@ -1299,12 +1202,7 @@ pub async fn delete_session(
     state: State<'_, AppState>,
     session_id: i64,
 ) -> Result<(), String> {
-    state
-        .store
-        .lock()
-        .await
-        .delete_session(session_id)
-        .map_err(|e| e.to_string())?;
+    state.store.lock().await.delete_session(session_id).map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
     Ok(())
 }
@@ -1406,9 +1304,8 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus,
 
     // The busy slot, if any. With several slots only one is usually working,
     // and the idle ones have nothing worth reporting.
-    let busy = slots
-        .iter()
-        .find(|s| s.get("is_processing").and_then(|b| b.as_bool()).unwrap_or(false));
+    let busy =
+        slots.iter().find(|s| s.get("is_processing").and_then(|b| b.as_bool()).unwrap_or(false));
     let Some(slot) = busy else {
         return Ok(RuntimeStatus {
             phase: "idle".into(),
@@ -1635,12 +1532,7 @@ pub async fn rename_session(
     session_id: i64,
     title: String,
 ) -> Result<(), String> {
-    state
-        .store
-        .lock()
-        .await
-        .rename_session(session_id, &title)
-        .map_err(|e| e.to_string())?;
+    state.store.lock().await.rename_session(session_id, &title).map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
     Ok(())
 }
@@ -1781,13 +1673,7 @@ pub async fn choose_model(
 /// Where transcripts are written, so Settings can show it.
 #[tauri::command]
 pub async fn transcripts_dir(state: State<'_, AppState>) -> Result<String, String> {
-    Ok(state
-        .settings
-        .lock()
-        .await
-        .transcripts_path(&state.md_dir)
-        .to_string_lossy()
-        .to_string())
+    Ok(state.settings.lock().await.transcripts_path(&state.md_dir).to_string_lossy().to_string())
 }
 
 /// Re-extract every archived session.
@@ -1813,12 +1699,7 @@ pub async fn reextract_all(
         .collect();
 
     for id in &sessions {
-        state
-            .store
-            .lock()
-            .await
-            .clear_extraction(*id)
-            .map_err(|e| e.to_string())?;
+        state.store.lock().await.clear_extraction(*id).map_err(|e| e.to_string())?;
     }
 
     let _ = app.emit("ideas:changed", ());
@@ -1890,12 +1771,8 @@ pub async fn idea_deep_dive(
         (e.provider.clone(), e.model.clone())
     };
 
-    let (claim, strong, weak, quotes) = state
-        .store
-        .lock()
-        .await
-        .idea_context(idea_id)
-        .map_err(|e| e.to_string())?;
+    let (claim, strong, weak, quotes) =
+        state.store.lock().await.idea_context(idea_id).map_err(|e| e.to_string())?;
 
     let text = crate::extract::deepen::run(model.as_ref(), &claim, &strong, &weak, &quotes)
         .await
@@ -1948,11 +1825,10 @@ pub async fn import_conversation(
             .map_err(|e| e.to_string())?
     };
 
-    let _ = app.emit("session:archived", Archived {
-        session_id,
-        reason: EndReason::Done,
-        turn_count: parsed.turns.len(),
-    });
+    let _ = app.emit(
+        "session:archived",
+        Archived { session_id, reason: EndReason::Done, turn_count: parsed.turns.len() },
+    );
 
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {

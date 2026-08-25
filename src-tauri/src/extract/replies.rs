@@ -147,7 +147,8 @@ mod tests {
 
     #[test]
     fn salvages_a_chatty_wrapper() {
-        let out = parse("Sure:\n```json\n{\"replies\":[{\"turn\":1,\"digest\":\"x\"}]}\n```").unwrap();
+        let out =
+            parse("Sure:\n```json\n{\"replies\":[{\"turn\":1,\"digest\":\"x\"}]}\n```").unwrap();
         assert_eq!(out.len(), 1);
     }
 

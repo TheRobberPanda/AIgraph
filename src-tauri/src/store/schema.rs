@@ -183,7 +183,6 @@ CREATE INDEX IF NOT EXISTS idx_nudges_idea     ON nudges(idea_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_state  ON sessions(extract_state);
 "#;
 
-
 /// Additive migrations for databases created by an earlier build.
 ///
 /// Deliberately tiny and idempotent: this is a local-first app, and a user's
@@ -200,9 +199,7 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     if !evidence_cols.iter().any(|c| c == "reasoning") {
-        conn.execute_batch(
-            "ALTER TABLE evidence ADD COLUMN reasoning TEXT NOT NULL DEFAULT '';",
-        )?;
+        conn.execute_batch("ALTER TABLE evidence ADD COLUMN reasoning TEXT NOT NULL DEFAULT '';")?;
     }
 
     let idea_cols: Vec<String> = conn
@@ -256,7 +253,9 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // No REFERENCES here: SQLite cannot add a column with a foreign key
         // that has a non-constant default. The constraint holds on new
         // databases, and every write goes through set_session_folder anyway.
-        conn.execute_batch("ALTER TABLE sessions ADD COLUMN folder_id INTEGER NOT NULL DEFAULT 1;")?;
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN folder_id INTEGER NOT NULL DEFAULT 1;",
+        )?;
     }
 
     // Root always exists, on a fresh database and on one made before folders.

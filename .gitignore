@@ -4,3 +4,12 @@ src-tauri/target/
 src-tauri/gen/schemas/
 *.local
 .DS_Store
+
+# Never a repository's business. The app writes its database and its plain
+# markdown transcripts into the OS data directory, but a copy left in the tree
+# during development is how someone's actual thinking ends up in a public
+# commit — and a commit is forever even after the file is deleted.
+*.db
+*.sqlite
+*.sqlite3
+transcripts/

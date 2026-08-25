@@ -70,9 +70,7 @@ impl Dictation {
         match ready_rx.recv_timeout(std::time::Duration::from_secs(120)) {
             Ok(Ok(())) => Ok(Self { stop: stop_tx, thread: Some(thread) }),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(SttError::Audio(
-                "the microphone did not start within 120s".into(),
-            )),
+            Err(_) => Err(SttError::Audio("the microphone did not start within 120s".into())),
         }
     }
 
@@ -125,12 +123,9 @@ fn run(
     .map_err(|e| SttError::Recognizer(e.to_string()))?;
 
     let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| SttError::Audio("no microphone found".into()))?;
-    let config = device
-        .default_input_config()
-        .map_err(|e| SttError::Audio(e.to_string()))?;
+    let device =
+        host.default_input_device().ok_or_else(|| SttError::Audio("no microphone found".into()))?;
+    let config = device.default_input_config().map_err(|e| SttError::Audio(e.to_string()))?;
 
     // cpal 0.18: SampleRate is a plain u32.
     let in_rate = config.sample_rate();
@@ -144,7 +139,7 @@ fn run(
 
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
-            config.clone().into(),
+            config.config(),
             move |data: &[f32], _: &_| {
                 let _ = audio_tx.send(mono(data, channels));
             },
@@ -152,7 +147,7 @@ fn run(
             None,
         ),
         cpal::SampleFormat::I16 => device.build_input_stream(
-            config.clone().into(),
+            config.config(),
             move |data: &[i16], _: &_| {
                 let f: Vec<f32> = data.iter().map(|s| *s as f32 / i16::MAX as f32).collect();
                 let _ = audio_tx.send(mono(&f, channels));
@@ -229,9 +224,7 @@ fn mono(data: &[f32], channels: usize) -> Vec<f32> {
     if channels <= 1 {
         return data.to_vec();
     }
-    data.chunks(channels)
-        .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
-        .collect()
+    data.chunks(channels).map(|frame| frame.iter().sum::<f32>() / frame.len() as f32).collect()
 }
 
 /// Rate conversion with a box filter.

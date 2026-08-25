@@ -11,14 +11,13 @@
 //! so this checks the actual recognizer against known-good speech rather than
 //! against something we synthesized to be easy.
 
-use idea_graph_lib::stt::capture::Resampler;
-use idea_graph_lib::stt::model::Models;
-use idea_graph_lib::stt::parakeet::Parakeet;
-use idea_graph_lib::stt::{SpeechToText, SAMPLE_RATE};
+use aigraph_lib::stt::capture::Resampler;
+use aigraph_lib::stt::model::Models;
+use aigraph_lib::stt::parakeet::Parakeet;
+use aigraph_lib::stt::{SpeechToText, SAMPLE_RATE};
 
 fn app_data_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var("HOME").unwrap())
-        .join(".local/share/dev.ideagraph.app")
+    std::path::PathBuf::from(std::env::var("HOME").unwrap()).join(".local/share/app.aigraph")
 }
 
 #[test]
@@ -32,22 +31,14 @@ fn transcribes_real_speech() {
     let paths = models
         .ensure(&|p| {
             if p.total > 0 && p.received % (32 << 20) < (1 << 20) {
-                eprintln!(
-                    "  {} {:.0}%",
-                    p.what,
-                    (p.received as f64 / p.total as f64) * 100.0
-                );
+                eprintln!("  {} {:.0}%", p.what, (p.received as f64 / p.total as f64) * 100.0);
             }
         })
         .expect("model download failed");
 
     assert!(models.is_installed(), "install reported success but files are missing");
 
-    let wav_dir = paths
-        .encoder
-        .parent()
-        .expect("model dir")
-        .join("test_wavs");
+    let wav_dir = paths.encoder.parent().expect("model dir").join("test_wavs");
     let mut wavs: Vec<_> = std::fs::read_dir(&wav_dir)
         .unwrap_or_else(|e| panic!("no test_wavs at {wav_dir:?}: {e}"))
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -63,10 +54,9 @@ fn transcribes_real_speech() {
         let reader = hound::WavReader::open(wav).expect("open wav");
         let spec = reader.spec();
         let raw: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Int => reader
-                .into_samples::<i16>()
-                .map(|s| s.unwrap() as f32 / i16::MAX as f32)
-                .collect(),
+            hound::SampleFormat::Int => {
+                reader.into_samples::<i16>().map(|s| s.unwrap() as f32 / i16::MAX as f32).collect()
+            }
             hound::SampleFormat::Float => {
                 reader.into_samples::<f32>().map(|s| s.unwrap()).collect()
             }
@@ -86,11 +76,7 @@ fn transcribes_real_speech() {
         let audio_secs = samples.len() as f32 / SAMPLE_RATE as f32;
         let took = started.elapsed().as_secs_f32();
 
-        eprintln!(
-            "{} ({}Hz)",
-            wav.file_name().unwrap().to_string_lossy(),
-            spec.sample_rate
-        );
+        eprintln!("{} ({}Hz)", wav.file_name().unwrap().to_string_lossy(), spec.sample_rate);
         eprintln!("  {text:?}");
         eprintln!(
             "  {audio_secs:.1}s audio in {took:.2}s  ({:.1}x real time)\n",
@@ -109,7 +95,7 @@ fn transcribes_real_speech() {
 #[test]
 #[ignore = "requires a microphone"]
 fn dictation_starts_and_stops_cleanly() {
-    use idea_graph_lib::stt::capture::{Dictation, Event};
+    use aigraph_lib::stt::capture::{Dictation, Event};
     use std::sync::{Arc, Mutex};
 
     let models = Models::new(&app_data_dir());

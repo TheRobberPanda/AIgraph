@@ -40,7 +40,12 @@ pub struct Rendered {
 
 impl Rendered {
     /// Absolute byte range of a quote located within one turn.
-    pub fn absolute(&self, ord: usize, start_in_turn: usize, end_in_turn: usize) -> Option<(usize, usize)> {
+    pub fn absolute(
+        &self,
+        ord: usize,
+        start_in_turn: usize,
+        end_in_turn: usize,
+    ) -> Option<(usize, usize)> {
         let span = self.spans.iter().find(|s| s.ord == ord)?;
         let (start, end) = (span.start + start_in_turn, span.start + end_in_turn);
         // A range that runs past the turn it belongs to means the offsets came
@@ -101,10 +106,7 @@ mod tests {
 
     #[test]
     fn absolute_maps_a_quote_into_the_transcript() {
-        let msgs = vec![
-            msg(Role::User, "first thing"),
-            msg(Role::User, "latency is the problem"),
-        ];
+        let msgs = vec![msg(Role::User, "first thing"), msg(Role::User, "latency is the problem")];
         let r = render(&msgs);
 
         let turn = "latency is the problem";

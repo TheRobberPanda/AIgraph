@@ -66,8 +66,6 @@ pub struct RawIdea {
     pub notes: Vec<Note>,
 }
 
-
-
 /// What the model made of the conversation as a whole.
 ///
 /// A session is more than the sum of its claims, and the gaps between them are

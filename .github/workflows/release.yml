@@ -1,0 +1,90 @@
+# Installers for a tagged release.
+#
+# Windows installers cannot be cross-compiled from Linux — the toolchain, the
+# webview headers and the NSIS packaging all want to run there — so the matrix
+# is the only way to produce them at all, and it costs nothing to build the
+# Linux ones the same way.
+#
+# Triggered by a tag, and by hand for a dry run before committing to one.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      # One platform failing should not throw away the other's artifacts —
+      # a Linux build that worked is still worth having.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            # Built on the oldest sensible Ubuntu on purpose: glibc is
+            # backwards compatible, not forwards, so a binary built on the
+            # newest one refuses to start on anything older.
+            args: ""
+          - platform: windows-latest
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            clang \
+            libclang-dev \
+            rpm
+          # ALSA for the microphone, clang for the speech bindings' bindgen
+          # step. Neither failure message mentions audio or speech, so leaving
+          # them out sends anyone debugging it a long way in the wrong
+          # direction.
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check before building
+        run: |
+          npm run build
+          cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # linuxdeploy resolves the binary's shared libraries by scanning the
+          # loader path. The speech runtimes are not on it — they sit beside
+          # the binary and are found at run time through an $ORIGIN rpath — so
+          # without this the AppImage step fails with "Could not find
+          # dependency: libsherpa-onnx-c-api.so" after everything else has
+          # already built.
+          LD_LIBRARY_PATH: ${{ github.workspace }}/src-tauri/target/release
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "AIgraph ${{ github.ref_name }}"
+          releaseBody: "See CHANGELOG.md. Downloads are below."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

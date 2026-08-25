@@ -11,14 +11,26 @@ use crate::llm::types::{Message, Role};
 
 /// Labels that name the machine.
 const ASSISTANT_LABELS: &[&str] = &[
-    "assistant", "ai", "bot", "model", "chatgpt", "gpt", "claude", "gemini",
-    "bard", "copilot", "llama", "mistral", "grok", "perplexity", "answer", "a",
+    "assistant",
+    "ai",
+    "bot",
+    "model",
+    "chatgpt",
+    "gpt",
+    "claude",
+    "gemini",
+    "bard",
+    "copilot",
+    "llama",
+    "mistral",
+    "grok",
+    "perplexity",
+    "answer",
+    "a",
 ];
 
 /// Labels that name the person.
-const HUMAN_LABELS: &[&str] = &[
-    "user", "human", "me", "you", "prompt", "question", "q", "self",
-];
+const HUMAN_LABELS: &[&str] = &["user", "human", "me", "you", "prompt", "question", "q", "self"];
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ImportedTurn {
@@ -137,9 +149,8 @@ pub fn parse(text: &str) -> Import {
     // Exact match, or containment only for labels long enough to be meaningful.
     // Substring matching on short entries misfires badly: "a" is a real label in
     // Q&A transcripts, and it also sits inside "human".
-    let known = |l: &str, set: &[&str]| {
-        set.iter().any(|k| l == *k || (k.len() >= 4 && l.contains(k)))
-    };
+    let known =
+        |l: &str, set: &[&str]| set.iter().any(|k| l == *k || (k.len() >= 4 && l.contains(k)));
 
     let (assistant, basis) = if known(a, ASSISTANT_LABELS) || known(b, HUMAN_LABELS) {
         (a.clone(), Basis::Recognised)
@@ -188,10 +199,7 @@ pub fn swap(import: &Import) -> Import {
 }
 
 pub fn to_messages(turns: &[ImportedTurn]) -> Vec<Message> {
-    turns
-        .iter()
-        .map(|t| Message { role: t.role, content: t.text.clone() })
-        .collect()
+    turns.iter().map(|t| Message { role: t.role, content: t.text.clone() }).collect()
 }
 
 #[cfg(test)]
@@ -200,7 +208,9 @@ mod tests {
 
     #[test]
     fn reads_a_chatgpt_style_export() {
-        let out = parse("You: what is latency\n\nChatGPT: The delay between\ncause and effect.\n\nYou: right");
+        let out = parse(
+            "You: what is latency\n\nChatGPT: The delay between\ncause and effect.\n\nYou: right",
+        );
         assert_eq!(out.basis, Basis::Recognised);
         assert_eq!(out.turns.len(), 3);
         assert_eq!(out.turns[0].role, Role::User);
@@ -210,7 +220,9 @@ mod tests {
 
     #[test]
     fn reads_markdown_decorated_labels() {
-        let out = parse("**Human**: first thought\n\n**Assistant**: a reply\n\n**Human**: second thought");
+        let out = parse(
+            "**Human**: first thought\n\n**Assistant**: a reply\n\n**Human**: second thought",
+        );
         assert_eq!(out.basis, Basis::Recognised);
         assert_eq!(out.turns[0].role, Role::User);
         assert_eq!(out.turns[1].role, Role::Assistant);
@@ -228,9 +240,7 @@ mod tests {
 
     #[test]
     fn prose_containing_a_colon_is_not_a_speaker() {
-        let out = parse(
-            "Me: I was thinking about this\nthe point is: it compounds\n\nAI: I see",
-        );
+        let out = parse("Me: I was thinking about this\nthe point is: it compounds\n\nAI: I see");
         assert_eq!(out.turns.len(), 2);
         assert!(
             out.turns[0].text.contains("the point is: it compounds"),

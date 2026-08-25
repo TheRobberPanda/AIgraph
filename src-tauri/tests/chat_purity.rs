@@ -12,18 +12,11 @@
 //! intentional, but it is a product decision, not a refactor — change the
 //! README and the pitch before you change this test.
 
-use idea_graph_lib::chat::style::SYSTEM_PROMPT;
-use idea_graph_lib::chat::Conversation;
+use aigraph_lib::chat::style::SYSTEM_PROMPT;
+use aigraph_lib::chat::Conversation;
 
-const FORBIDDEN: &[&str] = &[
-    "tools",
-    "tool_choice",
-    "instructions",
-    "context",
-    "persona",
-    "extract",
-    "idea",
-];
+const FORBIDDEN: &[&str] =
+    &["tools", "tool_choice", "instructions", "context", "persona", "extract", "idea"];
 
 #[test]
 fn outgoing_payload_carries_only_the_conversation_and_the_fixed_house_voice() {
@@ -52,10 +45,7 @@ fn outgoing_payload_carries_only_the_conversation_and_the_fixed_house_voice() {
     }
 
     for key in obj.keys() {
-        assert!(
-            !FORBIDDEN.contains(&key.as_str()),
-            "chat payload gained a `{key}` field"
-        );
+        assert!(!FORBIDDEN.contains(&key.as_str()), "chat payload gained a `{key}` field");
     }
 }
 
@@ -94,7 +84,6 @@ fn a_fresh_conversation_sends_no_turns() {
     let json = serde_json::to_value(c.to_request()).unwrap();
     assert!(json["messages"].as_array().unwrap().is_empty());
 }
-
 
 /// Recall is opt-in, and opting in is the only way anything the user wrote
 /// reaches the system prompt.
