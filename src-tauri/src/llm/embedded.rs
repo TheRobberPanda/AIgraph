@@ -441,6 +441,9 @@ impl Embedded {
             cmd.arg("--mlock");
         }
         cmd.arg(if rt.kv_unified { "--kv-unified" } else { "--no-kv-unified" });
+        // Counters for the readout. `/slots` reports the prompt but says
+        // nothing about generation, which is where the time actually goes.
+        cmd.arg("--metrics");
         // llama.cpp's flag is the negative one. Off by default there, so it is
         // only passed when the setting says to keep the cache on the CPU.
         if !rt.kv_cache_on_gpu {

@@ -116,7 +116,12 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
           {s.prompt_cached > 0 && ` · ${s.prompt_cached} already cached`}
         </>
       ) : s.phase === "writing" ? (
-        <>writing the answer · read {s.prompt_total} tokens first</>
+        // No percentage: the model stops when it stops, and a fraction of a
+        // cap it will never reach is worse than a plain count.
+        <>
+          writing · {s.written.toLocaleString()} tokens
+          {s.tokens_per_second > 0 && ` · ${s.tokens_per_second.toFixed(1)}/s`}
+        </>
       ) : (
         <>waiting · {s.context ? `${Math.round(s.context / 1024)}K of context` : "loaded"}</>
       )}

@@ -250,6 +250,9 @@ export interface RuntimeStatus {
   prompt_total: number;
   prompt_cached: number;
   context: number;
+  /** Tokens written so far in this run, and how fast. */
+  written: number;
+  tokens_per_second: number;
   reachable: boolean;
 }
 

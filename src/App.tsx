@@ -111,6 +111,14 @@ const MAIN: Tab[] = ["chat", "map", "ideas"];
  */
 const SETUP: Tab[] = ["settings"];
 
+/** What each extraction phase is actually doing, in words. */
+const PHASE_WORD: Record<string, string> = {
+  asking: "Reading it",
+  verifying: "Checking quotes",
+  retrying: "Asking again",
+  saving: "Saving",
+};
+
 type Deep = { kind: "idea"; id: number } | { kind: "conversation"; id: number } | null;
 
 /**
@@ -725,18 +733,18 @@ export default function App() {
 
   const pending = digesting?.pending ?? 0;
   /**
-   * How far through the queue the digest is.
+   * How much of the queue is behind us.
    *
-   * Counted in conversations rather than in tokens: how long one takes is
-   * unknowable in advance, but how many are left is exact, and "three of
-   * eight" is the answer to what someone waiting actually wants to know.
+   * Conversations finished, and nothing else. It used to add a quarter for
+   * each phase of the one in progress, which put the bar at 25% for the whole
+   * of a two-minute read and then jumped — a number that moves when nothing
+   * happened and sits still while everything does. How long one takes is not
+   * knowable in advance; how many are left is exact.
    */
   const digestPct = (() => {
     const r = digesting?.running;
     if (!r || r.total <= 0) return null;
-    const phases = ["asking", "verifying", "retrying", "saving"];
-    const within = Math.max(0, phases.indexOf(r.phase)) / phases.length;
-    return Math.min(99, Math.round(((r.index - 1 + within) / r.total) * 100));
+    return Math.round(((r.index - 1) / r.total) * 100);
   })();
 
   return (
@@ -797,10 +805,9 @@ export default function App() {
               {digesting?.running ? (
                 <>
                   <span className="digest-label">
-                    Digesting
                     {digesting.running.total > 1 &&
-                      ` ${digesting.running.index}/${digesting.running.total}`}
-                    {digestPct !== null && ` · ${digestPct}%`}
+                      `${digesting.running.index} of ${digesting.running.total} · `}
+                    {PHASE_WORD[digesting.running.phase] ?? digesting.running.phase}
                   </span>
                   <span className="digest-hover">Stop</span>
                   {digestPct !== null && (
