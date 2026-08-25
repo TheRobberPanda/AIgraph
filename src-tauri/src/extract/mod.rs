@@ -91,7 +91,11 @@ pub async fn run_with_progress(
     on_phase: &(dyn Fn(Phase) + Send + Sync),
 ) -> Result<Extraction, LlmError> {
     on_phase(Phase::Asking);
-    let extracted = extractor.extract(transcript, known_categories).await?;
+    // Abridged, not the whole thing — see `for_extraction`. Verification below
+    // still runs against the real turns, so this cannot widen what counts as a
+    // quote, only narrow what the model is tempted to reach for.
+    let for_model = for_extraction(turns);
+    let extracted = extractor.extract(&for_model, known_categories).await?;
     let notes = extracted.conversation.clone();
     let title = extracted.title.trim().to_string();
 
@@ -107,10 +111,13 @@ pub async fn run_with_progress(
     on_phase(Phase::Retrying);
 
     let corrective = format!(
-        "{}\n\nA previous attempt failed because these quotes did not appear \
-         verbatim in the transcript:\n{}\n\nCopy quotes character for character \
-         from lines marked USER. Omit any idea you cannot quote exactly.",
-        prompt::build(transcript),
+        "{}\n\nA previous attempt failed. These quotes could not be found in \
+         the USER lines:\n{}\n\nEach was either copied from an ASSISTANT line, \
+         which does not count, or written from memory rather than copied. Find \
+         each quote in a USER line and copy it across character for character. \
+         Omit any idea you cannot quote exactly — fewer ideas that are real is \
+         the right outcome.",
+        prompt::build(&for_model),
         first
             .rejected
             .iter()
@@ -260,5 +267,83 @@ mod tests {
     #[test]
     fn drop_rate_of_nothing_is_zero_not_nan() {
         assert_eq!(Extraction::default().drop_rate(), 0.0);
+    }
+}
+
+/// The transcript as the extractor should see it.
+///
+/// The assistant's replies are abridged. In a real session they are most of
+/// the text — 10,138 characters against 1,745 of the person's own, in the
+/// session that prompted this — and handing a model all of it while asking it
+/// to ignore eighty-five per cent of what it is reading is a rule it will
+/// break. It did: every quote in a failed Polish session came from the
+/// assistant's words rather than the person's.
+///
+/// Enough of each reply is kept to follow the thread, and what is kept is
+/// marked as not quotable. Verification is unaffected — quotes are still
+/// located in the real transcript, so abridging cannot let a bad quote
+/// through. It only stops the model reaching for words that were never the
+/// user's, and shrinks the prompt to a fraction of its size on the way.
+pub fn for_extraction(turns: &[Turn]) -> String {
+    use crate::llm::Role;
+    /// Characters of each reply kept. Enough to know what was answered,
+    /// nowhere near enough to mine for a claim.
+    const LEAD: usize = 160;
+
+    let mut out = String::new();
+    for turn in turns {
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        match turn.role {
+            Role::User => {
+                out.push_str(crate::session::transcript::USER_MARKER);
+                out.push_str(&turn.text);
+            }
+            Role::Assistant => {
+                out.push_str(crate::session::transcript::ASSISTANT_MARKER);
+                let trimmed = turn.text.trim();
+                let lead: String = trimmed.chars().take(LEAD).collect();
+                out.push_str(&lead);
+                if trimmed.chars().count() > LEAD {
+                    // Said in the transcript itself, not only in the rules
+                    // above it. A model reading this line knows there is
+                    // nothing here to quote without having to remember an
+                    // instruction from two thousand tokens ago.
+                    out.push_str("… [reply abridged — nothing here is quotable]");
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod abridge_tests {
+    use super::*;
+    use crate::llm::Role;
+
+    fn turn(id: i64, role: Role, text: &str) -> Turn {
+        Turn { id, role, text: text.into() }
+    }
+
+    #[test]
+    fn the_persons_own_words_are_kept_whole() {
+        let said = "jestem muzykiem z Polski i chciałabym założyć własną działalność";
+        let turns = vec![
+            turn(1, Role::User, said),
+            turn(2, Role::Assistant, &"a long answer about taxes ".repeat(40)),
+        ];
+        let out = for_extraction(&turns);
+        assert!(out.contains(said), "a quote has to still be findable here");
+        assert!(out.len() < 700, "the reply is abridged, not carried whole");
+        assert!(out.contains("nothing here is quotable"));
+    }
+
+    #[test]
+    fn a_short_reply_is_left_alone() {
+        let turns = vec![turn(1, Role::Assistant, "Say more?")];
+        let out = for_extraction(&turns);
+        assert_eq!(out, "ASSISTANT: Say more?");
     }
 }

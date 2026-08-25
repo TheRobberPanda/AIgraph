@@ -121,7 +121,15 @@ Take notes the way a student takes notes in a seminar. The thinking belongs to
 the USER lines. The job is to record it faithfully, not to improve it, grade it,
 or add to it.
 
-Record the ideas in the USER lines. Ignore the ASSISTANT lines entirely.
+Record the ideas in the USER lines. Ignore the ASSISTANT lines entirely: they
+are shown only so the USER lines make sense, they are abridged for that reason,
+and nothing in them can be quoted. An answer given to someone is not a thought
+they had.
+
+This is the rule most often broken, and it is broken in a particular way — the
+ASSISTANT lines are usually longer and more polished, so they look more like
+ideas. They are not. A well-put sentence that the person did not say is worth
+nothing here.
 
 For each idea return:
 
@@ -144,6 +152,12 @@ For each idea return:
 - "quote": text copied EXACTLY, character for character, from a line marked
   USER. Do not paraphrase, trim, fix typos, or join separated fragments. If no
   exact span supports the claim, omit the idea entirely.
+
+  Before writing a quote, find it in a USER line above and copy it across. The
+  quote is checked by searching those lines for it character for character, so
+  a quote that was remembered rather than copied is not found and the idea is
+  thrown away. Anything at all — a changed ending, a corrected spelling, a word
+  from an ASSISTANT line — loses the idea.
 - "category": two or three words for the subject. Lowercase. Prefer a category
   already in use over coining a near-synonym.
 - "reasoning": two or three sentences that make the idea stand on its own.
