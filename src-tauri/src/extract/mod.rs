@@ -115,8 +115,7 @@ pub async fn run_with_progress(
          the USER lines:\n{}\n\nEach was either copied from an ASSISTANT line, \
          which does not count, or written from memory rather than copied. Find \
          each quote in a USER line and copy it across character for character. \
-         Omit any idea you cannot quote exactly — fewer ideas that are real is \
-         the right outcome.",
+         Omit any idea you cannot quote exactly.",
         prompt::build(&for_model),
         first
             .rejected
