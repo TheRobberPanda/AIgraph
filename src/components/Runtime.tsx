@@ -3,6 +3,7 @@ import { useNoWheel } from "../lib/noWheel";
 import {
   embeddedStatus,
   getSettings,
+  resetRuntime,
   saveSettings,
   type EmbeddedStatus,
   type Runtime as R,
@@ -87,6 +88,7 @@ export default function RuntimePanel() {
   const [status, setStatus] = useState<EmbeddedStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     void getSettings().then(setS);
@@ -202,9 +204,35 @@ export default function RuntimePanel() {
         />
       </div>
 
-      <button className="link" onClick={() => setAdvanced(!advanced)}>
-        {advanced ? "Fewer settings" : "More settings"}
-      </button>
+      <div className="row">
+        <button className="link" onClick={() => setAdvanced(!advanced)}>
+          {advanced ? "Fewer settings" : "More settings"}
+        </button>
+        {/* Two clicks, like anything else that throws work away — these are
+            settings people spend an evening on. */}
+        {resetting ? (
+          <span className="row">
+            <button
+              className="btn danger"
+              onClick={() => {
+                setResetting(false);
+                resetRuntime()
+                  .then(setS)
+                  .catch((e) => setError(String(e)));
+              }}
+            >
+              Yes, reset them
+            </button>
+            <button className="btn" onClick={() => setResetting(false)}>
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <button className="link" onClick={() => setResetting(true)}>
+            Reset to defaults
+          </button>
+        )}
+      </div>
 
       {advanced && (
         <>

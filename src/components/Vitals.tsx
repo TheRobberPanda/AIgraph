@@ -26,16 +26,28 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
   const [s, setS] = useState<RuntimeStatus | null>(null);
   const [engine, setEngine] = useState<EmbeddedStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  /** When the writing phase began, so the wait can be counted in seconds.
+   *  llama.cpp's own token counters only move when a request finishes, so
+   *  there is nothing live to count instead. */
+  const [writingSince, setWritingSince] = useState<number | null>(null);
+  const [, tick] = useState(0);
 
   // Whether the model is up is worth knowing wherever you are — it is the
   // difference between "slow" and "not running", and hunting for it in a tab
   // is the wrong moment to be navigating.
   useEffect(() => {
-    const tick = () => void embeddedStatus().then(setEngine).catch(() => {});
-    tick();
-    const id = setInterval(tick, 4000);
+    const check = () => void embeddedStatus().then(setEngine).catch(() => {});
+    check();
+    const id = setInterval(check, 4000);
     return () => clearInterval(id);
   }, []);
+
+  // Advances the elapsed counter between polls.
+  useEffect(() => {
+    if (writingSince === null) return;
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [writingSince]);
 
   async function toggle() {
     setBusy(true);
@@ -56,12 +68,18 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
     // Only while it is being looked at. A poll nobody reads is a request per
     // second against a server that is busy doing the actual work.
     let alive = true;
-    const tick = () =>
+    const poll = () =>
       runtimeStatus()
-        .then((r) => alive && setS(r))
+        .then((r) => {
+          if (!alive) return;
+          setS(r);
+          setWritingSince((was) =>
+            r.phase === "writing" ? was ?? Date.now() : null,
+          );
+        })
         .catch(() => {});
-    void tick();
-    const id = setInterval(tick, 700);
+    void poll();
+    const id = setInterval(poll, 700);
     return () => {
       alive = false;
       clearInterval(id);
@@ -116,11 +134,12 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
           {s.prompt_cached > 0 && ` · ${s.prompt_cached} already cached`}
         </>
       ) : s.phase === "writing" ? (
-        // No percentage: the model stops when it stops, and a fraction of a
-        // cap it will never reach is worse than a plain count.
+        // Seconds, not tokens and not a percentage. The model stops when it
+        // stops, so there is no fraction to show — and llama.cpp's token
+        // counters only move once a request has finished, so there is nothing
+        // live to count either. How long it has been going is true.
         <>
-          writing · {s.written.toLocaleString()} tokens
-          {s.tokens_per_second > 0 && ` · ${s.tokens_per_second.toFixed(1)}/s`}
+          writing the answer · {writingSince ? Math.round((Date.now() - writingSince) / 1000) : 0}s
         </>
       ) : (
         <>waiting · {s.context ? `${Math.round(s.context / 1024)}K of context` : "loaded"}</>

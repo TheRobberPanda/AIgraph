@@ -67,6 +67,7 @@ pub fn run() {
             commands::continue_session,
             commands::install_llama_server,
             commands::runtime_status,
+            commands::reset_runtime,
             commands::voice_status,
             commands::install_voice,
             commands::speak,

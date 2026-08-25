@@ -412,12 +412,17 @@ struct CompletionMessage {
 
 /// Generous enough for a long session's worth of ideas, tight enough that a
 /// runaway generation fails in seconds rather than minutes.
-/// Enough for a long conversation's worth of ideas, in a language that spends
-/// more tokens per word than English does. The old 4096 truncated a Polish
-/// session mid-object, and truncated JSON is indistinguishable from a model
-/// that cannot follow the format — the failure was reported as the wrong
-/// problem entirely.
-const EXTRACT_MAX_TOKENS: u32 = 16_000;
+/// A ceiling, not a target.
+///
+/// This was raised to 16000 to stop a Polish session being truncated, which
+/// worked and cost four times the worst-case wait: a local model writing at
+/// thirteen tokens a second takes twenty minutes to fill that, and filling it
+/// is exactly what a model does when nothing else stops it. The bound that
+/// belongs here is on the number of ideas — see `json_schema` — so the model
+/// stops when it is finished rather than when it is cut off. This is what is
+/// left over for the rare long one, and a truncation now keeps whatever
+/// completed rather than losing the session.
+const EXTRACT_MAX_TOKENS: u32 = 5_000;
 
 #[async_trait]
 impl IdeaExtractor for OpenAiCompat {

@@ -74,9 +74,6 @@ pub struct AppState {
     /// Position in the current drain: (which one, how many). Read by the
     /// progress display so "digesting" can say how far along it is.
     queue_progress: Mutex<(i64, i64)>,
-    /// Last reading of the server's generated-token counter, and when, so a
-    /// rate can be worked out between two polls.
-    generation_mark: Mutex<Option<(u64, std::time::Instant)>>,
     /// Set when someone asks a drain to stop. Checked between conversations —
     /// stopping mid-read would waste the reading already done.
     stop_drain: Mutex<bool>,
@@ -114,7 +111,6 @@ impl AppState {
             continuing: Mutex::new(None),
             queue_progress: Mutex::new((0, 0)),
             stop_drain: Mutex::new(false),
-            generation_mark: Mutex::new(None),
             embedded: Mutex::new(crate::llm::embedded::Embedded::new(
                 db_path.parent().unwrap_or(std::path::Path::new(".")),
             )),
@@ -1369,56 +1365,27 @@ pub struct RuntimeStatus {
     /// Prompt tokens that were already cached, and so cost nothing.
     pub prompt_cached: u64,
     pub context: u64,
-    /// Tokens written so far in this run, and how fast they are arriving.
-    /// There is no percentage for this: the model stops when it stops, and a
-    /// fraction of a cap it will never reach is worse than a plain count.
-    pub written: u64,
-    pub tokens_per_second: f32,
+
     /// Present only when the server is ours and answering.
     pub reachable: bool,
 }
 
-/// Tokens written since this run started, and the rate right now.
+/// Put the model's own settings back where they started.
 ///
-/// From the server's own counter rather than anything inferred. `/slots`
-/// reports the prompt and says nothing about generation, which is where the
-/// minutes go — so without this the readout went quiet for the whole part of
-/// the wait anyone would want to watch.
-async fn generation_progress(host: &str, state: &AppState) -> (u64, f32) {
-    let Ok(resp) = reqwest::Client::new()
-        .get(format!("{host}/metrics"))
-        .timeout(std::time::Duration::from_millis(500))
-        .send()
-        .await
-    else {
-        return (0, 0.0);
-    };
-    let Ok(text) = resp.text().await else { return (0, 0.0) };
-    let counter = text
-        .lines()
-        .find(|l| l.starts_with("llamacpp:tokens_predicted_total"))
-        .and_then(|l| l.split_whitespace().last())
-        .and_then(|n| n.parse::<f64>().ok())
-        .unwrap_or(0.0) as u64;
-
-    let now = std::time::Instant::now();
-    let mut mark = state.generation_mark.lock().await;
-    let rate = match *mark {
-        // Reset rather than reported when the counter goes backwards, which
-        // means the server restarted under us.
-        Some((prev, at)) if counter >= prev => {
-            let secs = now.duration_since(at).as_secs_f32();
-            if secs > 0.15 { (counter - prev) as f32 / secs } else { 0.0 }
-        }
-        _ => 0.0,
-    };
-    let start = match *mark {
-        Some((_, _)) => None,
-        None => Some(counter),
-    };
-    let _ = start;
-    *mark = Some((counter, now));
-    (counter, rate)
+/// Only the runtime block. Everything else in Settings is about the app, and a
+/// reset that also turned off the voice and forgot which folder you were in is
+/// a reset nobody dares press.
+#[tauri::command]
+pub async fn reset_runtime(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Settings, String> {
+    let mut settings = state.settings.lock().await.clone();
+    settings.runtime = crate::settings::Runtime::default();
+    settings.save(&state.data_dir).map_err(|e| e.to_string())?;
+    *state.settings.lock().await = settings.clone();
+    let _ = app.emit("settings:changed", settings.clone());
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -1443,7 +1410,6 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus,
         .iter()
         .find(|s| s.get("is_processing").and_then(|b| b.as_bool()).unwrap_or(false));
     let Some(slot) = busy else {
-        *state.generation_mark.lock().await = None;
         return Ok(RuntimeStatus {
             phase: "idle".into(),
             context: slots.first().map(|s| num(s, "n_ctx")).unwrap_or(0),
@@ -1453,10 +1419,7 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus,
     };
     let total = num(slot, "n_prompt_tokens");
     let done = num(slot, "n_prompt_tokens_processed");
-    let (written, rate) = generation_progress(&host, &state).await;
     Ok(RuntimeStatus {
-        written,
-        tokens_per_second: rate,
         // Reading the prompt and writing the answer are different waits, and
         // only one of them has an end you can see coming.
         phase: if total > 0 && done < total { "reading" } else { "writing" }.into(),

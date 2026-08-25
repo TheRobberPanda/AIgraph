@@ -250,12 +250,15 @@ export interface RuntimeStatus {
   prompt_total: number;
   prompt_cached: number;
   context: number;
-  /** Tokens written so far in this run, and how fast. */
-  written: number;
-  tokens_per_second: number;
   reachable: boolean;
 }
 
 export function runtimeStatus(): Promise<RuntimeStatus> {
   return invoke<RuntimeStatus>("runtime_status");
+}
+
+
+/** Put the model's own settings back where they started. */
+export function resetRuntime(): Promise<Settings> {
+  return invoke<Settings>("reset_runtime");
 }

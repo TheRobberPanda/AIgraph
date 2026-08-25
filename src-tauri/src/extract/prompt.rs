@@ -34,6 +34,12 @@ pub fn json_schema() -> serde_json::Value {
             },
             "ideas": {
                 "type": "array",
+                // What actually stops a long reply. Grammar-constrained
+                // sampling honours this, so the model closes the array instead
+                // of writing until a token limit cuts it off — which is how a
+                // ten-minute read becomes a twenty-minute one. Stripped again
+                // for Anthropic, whose strict schemas reject it.
+                "maxItems": 14,
                 "items": {
                     "type": "object",
                     "required": ["title", "claim", "quote", "category", "reasoning", "notes"],
