@@ -1,8 +1,20 @@
 # sherpa-onnx ships as shared libraries that land beside the binary in
 # target/. Without an rpath the packaged app builds cleanly and then fails at
 # startup with "error while loading shared libraries" — so search $ORIGIN.
+#
+# `$ORIGIN/..` is for cargo's own layout, not for the bundle: test binaries are
+# built into target/debug/deps/ while the libraries stay in target/debug/, so
+# without the second entry `cargo test` fails to load its own binaries on any
+# machine that does not happen to have LD_LIBRARY_PATH set. That is every clean
+# checkout and every CI runner.
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
+rustflags = [
+  "-C", "link-arg=-Wl,-rpath,$ORIGIN",
+  "-C", "link-arg=-Wl,-rpath,$ORIGIN/..",
+]
 
 [target.aarch64-unknown-linux-gnu]
-rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
+rustflags = [
+  "-C", "link-arg=-Wl,-rpath,$ORIGIN",
+  "-C", "link-arg=-Wl,-rpath,$ORIGIN/..",
+]
