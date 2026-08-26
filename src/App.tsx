@@ -252,7 +252,8 @@ export default function App() {
    *  the rest of them are read. */
   const [callMode, setCallMode] = useState(false);
   const voiceOn = voiceSetting || callMode;
-  const [idleMinutes, setIdleMinutes] = useState(30);
+  const [idleMinutes, setIdleMinutes] = useState(10);
+  const [autoFile, setAutoFile] = useState(false);
   const [idleOpen, setIdleOpen] = useState(false);
   /** Which workspace panel is filling the pane, if any. */
   const [expanded, setExpanded] = useState<"map" | "ideas" | "conversations" | null>(null);
@@ -279,6 +280,7 @@ export default function App() {
       // screen with the call view before anyone had asked for either. Every
       // reload did it again, which is what the blank window turned out to be.
       setIdleMinutes(s.idle_minutes);
+      setAutoFile(s.auto_file);
       setLayout(s.layout);
     });
     const un = listen<{ voice?: string; call_mode?: boolean; layout?: "simple" | "advanced" }>(
@@ -1134,21 +1136,38 @@ export default function App() {
           <div className="idle-pick">
             <button
               className="icon-btn"
-              data-tip={`Filed after ${idleMinutes} minutes of quiet`}
+              data-tip={
+                autoFile
+                  ? `Filed after ${idleMinutes} minutes of quiet`
+                  : "Filed when you press Done, never on its own"
+              }
               onClick={() => setIdleOpen((o) => !o)}
             >
               <IconClock />
             </button>
             {idleOpen && (
               <ul className="idle-list">
+                <li>
+                  <button
+                    className={autoFile ? "pick-option" : "pick-option on"}
+                    onClick={() => {
+                      setAutoFile(false);
+                      setIdleOpen(false);
+                      void patchSetting({ auto_file: false });
+                    }}
+                  >
+                    Turned off
+                  </button>
+                </li>
                 {[10, 30, 60, 120].map((m) => (
                   <li key={m}>
                     <button
-                      className={idleMinutes === m ? "pick-option on" : "pick-option"}
+                      className={autoFile && idleMinutes === m ? "pick-option on" : "pick-option"}
                       onClick={() => {
+                        setAutoFile(true);
                         setIdleMinutes(m);
                         setIdleOpen(false);
-                        void patchSetting({ idle_minutes: m });
+                        void patchSetting({ auto_file: true, idle_minutes: m });
                       }}
                     >
                       {m < 60 ? `${m} min` : `${m / 60} hr`}

@@ -86,6 +86,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::startup,
             commands::select_provider,
@@ -147,6 +148,7 @@ pub fn run() {
             commands::active_models,
             commands::choose_model,
             commands::transcripts_dir,
+            commands::set_transcripts_dir,
             commands::reextract_all,
             commands::key_status,
             commands::set_anthropic_key,

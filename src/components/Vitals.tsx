@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   embeddedStatus,
   runtimeStatus,
@@ -21,15 +21,43 @@ import { IconPlay, IconStop } from "./Icons";
  * `llama-server`'s own `/slots` rather than from anything the app infers, so
  * it is worth trusting when something is wrong.
  */
+/**
+ * Tokens a second, from the movement between two polls.
+ *
+ * Returns null until there is a second sample to compare with, and whenever
+ * the counters go backwards — which happens at the start of every new request,
+ * where a rate carried over from the last one would be a lie.
+ */
+function measure(
+  last: React.MutableRefObject<{ at: number; read: number; wrote: number } | null>,
+  r: RuntimeStatus,
+): number | null {
+  const now = Date.now();
+  const prev = last.current;
+  last.current = { at: now, read: r.prompt_done, wrote: r.decoded };
+  if (r.phase !== "reading" && r.phase !== "writing") return null;
+  if (!prev) return null;
+  const seconds = (now - prev.at) / 1000;
+  if (seconds <= 0) return null;
+  const moved =
+    r.phase === "reading" ? r.prompt_done - prev.read : r.decoded - prev.wrote;
+  if (moved <= 0) return null;
+  return moved / seconds;
+}
+
 export default function Vitals({ onChanged }: { onChanged?: () => void }) {
   const [open, setOpen] = useState(false);
   const [s, setS] = useState<RuntimeStatus | null>(null);
   const [engine, setEngine] = useState<EmbeddedStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  /** When the writing phase began, so the wait can be counted in seconds.
-   *  llama.cpp's own token counters only move when a request finishes, so
-   *  there is nothing live to count instead. */
+  /** When the writing phase began, so the wait can be counted in seconds. */
   const [writingSince, setWritingSince] = useState<number | null>(null);
+  /** Tokens a second, worked out from how far the counters moved between two
+   *  polls. The server reports totals, not a rate, so the rate is the
+   *  difference — which is also the only number here that reflects what is
+   *  happening now rather than what has happened since the request began. */
+  const [rate, setRate] = useState<number | null>(null);
+  const last = useRef<{ at: number; read: number; wrote: number } | null>(null);
   const [, tick] = useState(0);
 
   // Whether the model is up is worth knowing wherever you are — it is the
@@ -76,6 +104,7 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
           setWritingSince((was) =>
             r.phase === "writing" ? was ?? Date.now() : null,
           );
+          setRate(measure(last, r));
         })
         .catch(() => {});
     void poll();
@@ -83,6 +112,7 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
     return () => {
       alive = false;
       clearInterval(id);
+      last.current = null;
     };
   }, [open]);
 
@@ -119,8 +149,7 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
     );
   }
 
-  const pct =
-    s && s.prompt_total > 0 ? Math.round((s.prompt_done / s.prompt_total) * 100) : null;
+  const speed = rate === null ? null : `${rate < 10 ? rate.toFixed(1) : Math.round(rate)} tok/s`;
 
   return (
     <>
@@ -129,17 +158,14 @@ export default function Vitals({ onChanged }: { onChanged?: () => void }) {
       {!s?.reachable ? (
         "no local server"
       ) : s.phase === "reading" ? (
-        <>
-          reading what you said · {pct}% ({s.prompt_done} of {s.prompt_total} tokens)
-          {s.prompt_cached > 0 && ` · ${s.prompt_cached} already cached`}
-        </>
+        <>reading what you said{speed && ` · ${speed}`}</>
       ) : s.phase === "writing" ? (
-        // Seconds, not tokens and not a percentage. The model stops when it
-        // stops, so there is no fraction to show — and llama.cpp's token
-        // counters only move once a request has finished, so there is nothing
-        // live to count either. How long it has been going is true.
+        // Speed and elapsed time, not a percentage: the model stops when it
+        // stops, so there is no fraction of anything to show. A rate says
+        // whether it is slow, and the clock says how long it has been.
         <>
-          writing the answer · {writingSince ? Math.round((Date.now() - writingSince) / 1000) : 0}s
+          writing the answer{speed && ` · ${speed}`} ·{" "}
+          {writingSince ? Math.round((Date.now() - writingSince) / 1000) : 0}s
         </>
       ) : (
         <>waiting · {s.context ? `${Math.round(s.context / 1024)}K of context` : "loaded"}</>

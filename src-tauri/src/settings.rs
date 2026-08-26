@@ -36,7 +36,14 @@ pub struct Settings {
     /// a root font-size multiplier, so it scales text, spacing and controls
     /// together rather than just the type.
     pub ui_scale: u32,
-    /// Minutes of silence before a session is considered finished.
+    /// File a conversation by itself once it has gone quiet.
+    ///
+    /// Off. Walking away from a half-finished thought and coming back to find
+    /// it filed — and read, and turned into ideas — is the app deciding you
+    /// were done when you were making tea. Pressing Done is not a burden;
+    /// having a conversation ended for you is.
+    pub auto_file: bool,
+    /// Minutes of silence before that happens, when it is switched on.
     pub idle_minutes: u32,
     /// Where the plain-markdown copies go. Empty means the default location.
     pub transcripts_dir: String,
@@ -65,6 +72,13 @@ pub struct Settings {
     /// between asking and hearing. Worth turning on for something genuinely
     /// hard, which is not most of what gets said to this app.
     pub reasoning: bool,
+    /// The language the model is asked to answer and write in.
+    ///
+    /// `Auto` follows whatever the person is writing, which is right until it
+    /// is not: a short first message, or one with a name in it, is not much to
+    /// go on, and a model that guesses wrong answers a Polish speaker in
+    /// English. Naming it settles the question.
+    pub language: Language,
     /// Seconds of quiet in a call before what you said is sent.
     ///
     /// Thinking out loud has pauses in it, and a short wait cuts people off
@@ -87,6 +101,68 @@ pub enum Layout {
     Simple,
     /// The map, the conversations and the ideas all around the talking.
     Advanced,
+}
+
+/// The language the app works in.
+///
+/// A short list on purpose: these are the ones actually tested end to end,
+/// through extraction, digests and quote verification. Adding a name here that
+/// nobody has run a conversation in would be a promise rather than a feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    #[default]
+    Auto,
+    English,
+    Polish,
+    Spanish,
+}
+
+/// The language every prompt is currently pinned to.
+///
+/// Held apart from the settings file because prompts are built deep inside the
+/// extractor, the digest and the chat, in places that have no reason to know
+/// what a settings file is. Threading one enum through all of them would touch
+/// a dozen signatures to say one thing that never varies within a run.
+static PINNED: std::sync::RwLock<Language> = std::sync::RwLock::new(Language::Auto);
+
+/// Point every prompt at a language. Called when settings are loaded or saved.
+pub fn pin_language(language: Language) {
+    if let Ok(mut p) = PINNED.write() {
+        *p = language;
+    }
+}
+
+/// The pinned language, or `Auto` if nothing has pinned one.
+pub fn pinned_language() -> Language {
+    PINNED.read().map(|p| *p).unwrap_or_default()
+}
+
+/// The line to add to a prompt so the model answers in the chosen language.
+///
+/// Empty under `Auto`, where the existing rule — follow the source — stands.
+pub fn language_instruction() -> String {
+    match pinned_language().name() {
+        None => String::new(),
+        Some(name) => format!(
+            "\n\nLanguage: write everything in {name}, whatever language the \
+             text you are given is in. Every field, every sentence. The one \
+             exception is a quote, which is copied character for character \
+             from the source and never translated.\n"
+        ),
+    }
+}
+
+impl Language {
+    /// The name to put in a prompt, in English, as the schemas expect.
+    pub fn name(self) -> Option<&'static str> {
+        match self {
+            Language::Auto => None,
+            Language::English => Some("English"),
+            Language::Polish => Some("Polish"),
+            Language::Spanish => Some("Spanish"),
+        }
+    }
 }
 
 /// How a reply gets read out.
@@ -189,7 +265,8 @@ impl Default for Settings {
         Self {
             theme: Theme::Auto,
             ui_scale: 100,
-            idle_minutes: 30,
+            auto_file: false,
+            idle_minutes: 10,
             transcripts_dir: String::new(),
             chat: None,
             extraction: None,
@@ -197,6 +274,7 @@ impl Default for Settings {
             voice: Voice::Off,
             recall: true,
             reasoning: false,
+            language: Language::Auto,
             call_silence_seconds: 5,
             runtime: Runtime::default(),
             layout: Layout::default(),
@@ -214,10 +292,14 @@ impl Settings {
     /// A corrupt or half-written file yields defaults rather than an error: it
     /// is a preferences file, and refusing to start over it would be absurd.
     pub fn load(dir: &Path) -> Self {
-        std::fs::read_to_string(Self::path(dir))
+        let loaded: Self = std::fs::read_to_string(Self::path(dir))
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Pin here rather than at the call site: every way into the app reads
+        // settings, and only one of them would remember to do this.
+        pin_language(loaded.language);
+        loaded
     }
 
     pub fn save(&self, dir: &Path) -> std::io::Result<()> {
@@ -280,7 +362,7 @@ mod tests {
     fn a_corrupt_file_yields_defaults_rather_than_failing() {
         let dir = tmpdir("corrupt");
         std::fs::write(Settings::path(&dir), "{ not json").unwrap();
-        assert_eq!(Settings::load(&dir).idle_minutes, 30);
+        assert_eq!(Settings::load(&dir).idle_minutes, 10);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -293,6 +375,28 @@ mod tests {
         assert_eq!(s.idle_minutes, 7);
         assert_eq!(s.theme, Theme::Auto);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Coming back to an unfinished conversation is the default behaviour.
+    #[test]
+    fn nothing_is_filed_by_itself_unless_asked() {
+        assert!(!Settings::default().auto_file);
+    }
+
+    /// A language nobody chose is a language the source decides.
+    #[test]
+    fn language_starts_out_following_the_text() {
+        assert_eq!(Settings::default().language, Language::Auto);
+        assert_eq!(Language::Auto.name(), None);
+    }
+
+    /// The pinned language is what reaches the prompts, or nothing at all.
+    #[test]
+    fn pinning_a_language_puts_its_name_in_the_prompt() {
+        pin_language(Language::Polish);
+        assert!(language_instruction().contains("Polish"));
+        pin_language(Language::Auto);
+        assert!(language_instruction().is_empty());
     }
 
     #[test]

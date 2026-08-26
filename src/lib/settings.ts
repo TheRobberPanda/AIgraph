@@ -13,6 +13,9 @@ export interface ModelChoice {
 export interface Settings {
   theme: Theme;
   ui_scale: number;
+  /** File a conversation by itself once it has gone quiet. Off. */
+  auto_file: boolean;
+  /** Minutes of quiet before that happens, when it is switched on. */
   idle_minutes: number;
   transcripts_dir: string;
   chat: ModelChoice | null;
@@ -24,6 +27,8 @@ export interface Settings {
   recall: boolean;
   /** Let the model think out loud before answering. */
   reasoning: boolean;
+  /** The language everything is written in. "auto" follows the text. */
+  language: Language;
   /** Seconds of quiet in a call before what you said is sent. */
   call_silence_seconds: number;
   runtime: Runtime;
@@ -34,6 +39,16 @@ export interface Settings {
 export type Layout = "simple" | "advanced";
 
 export type Voice = "off" | "system" | "neural";
+
+export type Language = "auto" | "english" | "polish" | "spanish";
+
+/** The languages on offer, and what to call them on screen. */
+export const LANGUAGES: { value: Language; label: string }[] = [
+  { value: "auto", label: "Follow what I write" },
+  { value: "english", label: "English" },
+  { value: "polish", label: "Polski" },
+  { value: "spanish", label: "Espa\u00f1ol" },
+];
 
 /** How the model that runs inside the app is run. */
 export interface Runtime {
@@ -84,6 +99,11 @@ export function chooseModel(
 
 export function transcriptsDir(): Promise<string> {
   return invoke<string>("transcripts_dir");
+}
+
+/** Move where transcripts are written from here on. "" means the default. */
+export function setTranscriptsDir(path: string): Promise<string> {
+  return invoke<string>("set_transcripts_dir", { path });
 }
 
 /** Re-read every conversation, or only those in one folder. */
@@ -249,6 +269,8 @@ export interface RuntimeStatus {
   prompt_done: number;
   prompt_total: number;
   prompt_cached: number;
+  /** Tokens written so far in this request. */
+  decoded: number;
   context: number;
   reachable: boolean;
 }

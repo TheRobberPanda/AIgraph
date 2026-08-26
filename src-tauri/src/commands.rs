@@ -526,7 +526,22 @@ pub async fn end_session(
 }
 
 pub async fn is_session_idle(state: &AppState) -> bool {
-    state.session.lock().await.as_ref().map(|s| s.is_idle(chrono::Utc::now())).unwrap_or(false)
+    let (auto_file, timeout) = {
+        let s = state.settings.lock().await;
+        (s.auto_file, s.idle_timeout())
+    };
+    if !auto_file {
+        // Filing is switched off: an unfinished conversation stays open until
+        // the person says it is finished.
+        return false;
+    }
+    state
+        .session
+        .lock()
+        .await
+        .as_ref()
+        .map(|s| s.is_idle_after(chrono::Utc::now(), timeout))
+        .unwrap_or(false)
 }
 
 /// Whether the current session has gone quiet long enough to be over.
@@ -1262,6 +1277,9 @@ pub struct RuntimeStatus {
     pub prompt_total: u64,
     /// Prompt tokens that were already cached, and so cost nothing.
     pub prompt_cached: u64,
+    /// Tokens written so far in this request. Counts up while the model is
+    /// writing, which is what makes a live rate possible to work out.
+    pub decoded: u64,
     pub context: u64,
 
     /// Present only when the server is ours and answering.
@@ -1281,6 +1299,7 @@ pub async fn reset_runtime(
     let mut settings = state.settings.lock().await.clone();
     settings.runtime = crate::settings::Runtime::default();
     settings.save(&state.data_dir).map_err(|e| e.to_string())?;
+    crate::settings::pin_language(settings.language);
     *state.settings.lock().await = settings.clone();
     let _ = app.emit("settings:changed", settings.clone());
     Ok(settings)
@@ -1316,6 +1335,10 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus,
     };
     let total = num(slot, "n_prompt_tokens");
     let done = num(slot, "n_prompt_tokens_processed");
+    // Buried one level down, in the array llama.cpp uses for speculative
+    // decoding. The first entry is the real one.
+    let decoded =
+        slot.get("next_token").and_then(|n| n.get(0)).map(|n| num(n, "n_decoded")).unwrap_or(0);
     Ok(RuntimeStatus {
         // Reading the prompt and writing the answer are different waits, and
         // only one of them has an end you can see coming.
@@ -1323,6 +1346,7 @@ pub async fn runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus,
         prompt_done: done,
         prompt_total: total,
         prompt_cached: num(slot, "n_prompt_tokens_cache"),
+        decoded,
         context: num(slot, "n_ctx"),
         reachable: true,
     })
@@ -1582,6 +1606,7 @@ pub async fn save_settings(
     // What was saved before, so a save can tell what this one actually changed.
     let previous = state.settings.lock().await.clone();
     settings.save(&state.data_dir).map_err(|e| e.to_string())?;
+    crate::settings::pin_language(settings.language);
     *state.settings.lock().await = settings.clone();
 
     // Only when *this* save changed the choice.
@@ -1674,6 +1699,38 @@ pub async fn choose_model(
 #[tauri::command]
 pub async fn transcripts_dir(state: State<'_, AppState>) -> Result<String, String> {
     Ok(state.settings.lock().await.transcripts_path(&state.md_dir).to_string_lossy().to_string())
+}
+
+/// Move where transcripts are written from here on.
+///
+/// Only new ones. Transcripts already on disk stay where they were written —
+/// moving a folder of files behind someone's back is not a settings change,
+/// and the app is not the only thing that may be pointing at them.
+///
+/// An empty path means "back to the default", which is how the setting starts.
+#[tauri::command]
+pub async fn set_transcripts_dir(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    let trimmed = path.trim().to_string();
+    if !trimmed.is_empty() {
+        let dir = std::path::Path::new(&trimmed);
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot use {trimmed}: {e}"))?;
+        // Being able to name a folder is not the same as being able to write
+        // in it, and finding that out at the moment a session is archived is
+        // finding it out too late.
+        let probe = dir.join(".aigraph-write-test");
+        std::fs::write(&probe, b"").map_err(|e| format!("cannot write in {trimmed}: {e}"))?;
+        let _ = std::fs::remove_file(&probe);
+    }
+    let mut settings = state.settings.lock().await.clone();
+    settings.transcripts_dir = trimmed;
+    settings.save(&state.data_dir).map_err(|e| e.to_string())?;
+    *state.settings.lock().await = settings.clone();
+    let _ = app.emit("settings:changed", settings.clone());
+    Ok(settings.transcripts_path(&state.md_dir).to_string_lossy().to_string())
 }
 
 /// Re-extract every archived session.

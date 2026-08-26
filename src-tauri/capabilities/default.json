@@ -1,11 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimum the UI needs: invoke our own commands, listen for the streaming-token events they emit, and run the window's own titlebar (there is no OS one).",
-  "windows": ["main"],
+  "description": "Minimum the UI needs: invoke our own commands, listen for the streaming-token events they emit, run the window's own titlebar (there is no OS one), and ask the OS for a folder when someone moves where transcripts are kept.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "opener:default",
+    "dialog:allow-open",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",

@@ -9,7 +9,8 @@
 use crate::llm::{IdeaExtractor, LlmError};
 
 pub fn build(claim: &str, strong: &[String], weak: &[String], quotes: &[String]) -> String {
-    let style = crate::extract::style::RULES;
+    let style =
+        format!("{}{}", crate::extract::style::RULES, crate::settings::language_instruction());
     let list = |items: &[String]| {
         if items.is_empty() {
             "  (none noted)".to_string()

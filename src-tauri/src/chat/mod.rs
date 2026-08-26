@@ -130,6 +130,7 @@ impl Conversation {
             system: Some({
                 let mut sys = String::from(style::SYSTEM_PROMPT);
                 sys.push_str(style::NAVIGATION);
+                sys.push_str(&crate::settings::language_instruction());
                 if self.call_mode {
                     sys.push_str(style::CALL_MODE);
                 }

@@ -48,7 +48,15 @@ impl ActiveSession {
     }
 
     pub fn is_idle(&self, now: DateTime<Utc>) -> bool {
-        self.idle_for(now) >= IDLE_TIMEOUT
+        self.is_idle_after(now, IDLE_TIMEOUT)
+    }
+
+    /// Whether the session has been quiet for at least `timeout`.
+    ///
+    /// The caller passes the window because how long counts as "gone" is the
+    /// person's decision, not this module's.
+    pub fn is_idle_after(&self, now: DateTime<Utc>, timeout: Duration) -> bool {
+        self.idle_for(now) >= timeout
     }
 }
 

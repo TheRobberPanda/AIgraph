@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { open as pickFolder } from "@tauri-apps/plugin-dialog";
 import Fold from "./Fold";
 import { useNoWheel } from "../lib/noWheel";
 import Engine from "./Engine";
@@ -12,7 +13,9 @@ import {
   saveSettings,
   embeddedStatus,
   transcriptsDir,
+  setTranscriptsDir,
   voiceStatus,
+  LANGUAGES,
   type EmbeddedStatus,
   type Settings as S,
   type Theme,
@@ -36,6 +39,28 @@ export default function Settings() {
   const silenceRef = useNoWheel<HTMLInputElement>();
   const [s, setS] = useState<S | null>(null);
   const [dir, setDir] = useState("");
+  const [dirError, setDirError] = useState("");
+
+  /** Ask the OS for a folder, and only keep it if it can actually be used. */
+  async function chooseDir() {
+    setDirError("");
+    const picked = await pickFolder({ directory: true, multiple: false, defaultPath: dir });
+    if (typeof picked !== "string") return;
+    await moveTranscripts(picked);
+  }
+
+  async function useDefaultDir() {
+    setDirError("");
+    await moveTranscripts("");
+  }
+
+  async function moveTranscripts(path: string) {
+    try {
+      setDir(await setTranscriptsDir(path));
+    } catch (e) {
+      setDirError(String(e));
+    }
+  }
   const [speech, setSpeech] = useState<{ installed: boolean; mb: number } | null>(null);
   const [voice, setVoice] = useState<{ installed: boolean; download_mb: number } | null>(null);
   const [server, setServer] = useState<EmbeddedStatus | null>(null);
@@ -103,6 +128,31 @@ export default function Settings() {
               onClick={() => void update({ theme: t.value })}
             >
               {t.label}
+            </button>
+          ))}
+        </div>
+      </Fold>
+
+      <Fold
+        title="Language"
+        summary={LANGUAGES.find((l) => l.value === s.language)!.label}
+        {...fold("language")}
+      >
+        <p className="blurb">
+          What the model answers in, and what your notes and ideas are written
+          in. Left to follow what you write, a short first message is not much
+          to go on and you can get an English answer to a Polish question.
+          Naming the language settles it. Quotes are never translated: they are
+          found by searching your own words for them.
+        </p>
+        <div className="row">
+          {LANGUAGES.map((l) => (
+            <button
+              key={l.value}
+              className={s.language === l.value ? "btn on" : "btn"}
+              onClick={() => void update({ language: l.value })}
+            >
+              {l.label}
             </button>
           ))}
         </div>
@@ -264,23 +314,58 @@ export default function Settings() {
         </div>
       </Fold>
 
-      <Fold title="Ending a session" summary={s.idle_minutes < 60 ? `${s.idle_minutes} min` : `${s.idle_minutes / 60} hr`} {...fold("idle")}>
-                <p className="blurb">Idle timeout before a session is filed.</p>
+      <Fold
+        title="Ending a session"
+        summary={
+          !s.auto_file
+            ? "when you say so"
+            : s.idle_minutes < 60
+              ? `${s.idle_minutes} min of quiet`
+              : `${s.idle_minutes / 60} hr of quiet`
+        }
+        {...fold("idle")}
+      >
+        <p className="blurb">
+          A conversation is filed when you press Done. It can also file itself
+          once you have been quiet for a while, which is convenient until you
+          walk away from something half-finished and come back to find it
+          filed, read and turned into ideas.
+        </p>
         <div className="row">
+          <button
+            className={s.auto_file ? "btn" : "btn on"}
+            onClick={() => void update({ auto_file: false })}
+          >
+            Turned off
+          </button>
           {[10, 30, 60, 120].map((m) => (
             <button
               key={m}
-              className={s.idle_minutes === m ? "btn on" : "btn"}
-              onClick={() => void update({ idle_minutes: m })}
+              className={s.auto_file && s.idle_minutes === m ? "btn on" : "btn"}
+              onClick={() => void update({ auto_file: true, idle_minutes: m })}
             >
-              {m < 60 ? `${m} min` : `${m / 60} hr`}
+              After {m < 60 ? `${m} min` : `${m / 60} hr`} of quiet
             </button>
           ))}
         </div>
       </Fold>
 
       <Fold title="Transcripts" {...fold("transcripts")}>
-                <p className="path">{dir}</p>
+        <p className="blurb">
+          Every conversation is also written out as a plain Markdown file, so
+          the record outlives this app. Move the folder and new transcripts go
+          there; the ones already written stay where they are.
+        </p>
+        <p className="path">{dir}</p>
+        {dirError && <p className="blurb warn">{dirError}</p>}
+        <div className="row">
+          <button className="btn" onClick={() => void chooseDir()}>
+            Choose a folder
+          </button>
+          <button className="btn" onClick={() => void useDefaultDir()}>
+            Back to the default
+          </button>
+        </div>
       </Fold>
 
       <Fold title="Dictation" summary={speech?.installed ? "installed" : "not installed"} {...fold("dictation")}>

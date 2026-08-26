@@ -43,7 +43,8 @@ pub fn json_schema() -> serde_json::Value {
 }
 
 pub fn build(replies: &[(i64, String)]) -> String {
-    let style = crate::extract::style::RULES;
+    let style =
+        format!("{}{}", crate::extract::style::RULES, crate::settings::language_instruction());
     let body = replies
         .iter()
         .map(|(ord, text)| format!("### turn {ord}\n{text}"))

@@ -53,6 +53,7 @@ thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tauri-plugin-dialog = "2"
 
 # Signalling a llama-server left behind by a previous run.
 [target."cfg(unix)".dependencies]

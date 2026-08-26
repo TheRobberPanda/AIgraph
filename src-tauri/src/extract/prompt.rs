@@ -107,7 +107,8 @@ pub fn build(transcript: &str) -> String {
 /// same subject every session — "ethics", "moral philosophy", "morality" — and
 /// the map ends up with a colour per conversation instead of per subject.
 pub fn build_with_categories(transcript: &str, known: &[String]) -> String {
-    let style = crate::extract::style::RULES;
+    let style =
+        format!("{}{}", crate::extract::style::RULES, crate::settings::language_instruction());
     let known_block = if known.is_empty() {
         String::new()
     } else {

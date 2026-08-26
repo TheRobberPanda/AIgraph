@@ -99,7 +99,16 @@ pub async fn run_with_progress(
     first.conversation = notes;
     first.title = title;
 
-    if first.rejected.is_empty() {
+    // Retried only when the first pass went badly enough to be worth paying
+    // for twice.
+    //
+    // It used to retry whenever a single quote failed, which on a language the
+    // model spells imperfectly is almost every session — one bad quote out of
+    // three doubled the reading time, every time, to recover an idea that was
+    // often mangled the second time too. A session that kept most of what it
+    // found is finished; the drop rate on the Ideas page is where an honest
+    // account of the rest belongs.
+    if !worth_retrying(&first) {
         return Ok(first);
     }
 
@@ -217,6 +226,24 @@ mod tests {
         vec![Turn { id: 1, role: Role::User, text: "latency is the real problem here".into() }]
     }
 
+    /// Losing one of three is a normal result, not a reason to read it twice.
+    #[tokio::test]
+    async fn a_mostly_good_pass_is_not_read_again() {
+        let ex = Scripted {
+            passes: vec![vec![
+                idea("latency is the real"),
+                idea("problem here"),
+                idea("never said this"),
+            ]],
+            calls: AtomicUsize::new(0),
+        };
+        let out = run(&ex, &turns()).await.unwrap();
+        assert_eq!(out.ideas.len(), 2);
+        assert_eq!(out.rejected.len(), 1);
+        assert!(!out.retried, "one bad quote in three is not worth a second pass");
+        assert_eq!(ex.calls.load(Ordering::SeqCst), 1, "the model was asked once");
+    }
+
     #[tokio::test]
     async fn clean_pass_does_not_retry() {
         let ex = Scripted {
@@ -247,7 +274,11 @@ mod tests {
     #[tokio::test]
     async fn worse_retry_is_discarded() {
         let ex = Scripted {
-            passes: vec![vec![idea("latency is the real problem"), idea("nope")], vec![]],
+            // Two of three lost, which is bad enough to be worth asking again.
+            passes: vec![
+                vec![idea("latency is the real problem"), idea("nope"), idea("also nope")],
+                vec![],
+            ],
             calls: AtomicUsize::new(0),
         };
         let out = run(&ex, &turns()).await.unwrap();
@@ -259,6 +290,18 @@ mod tests {
     fn drop_rate_of_nothing_is_zero_not_nan() {
         assert_eq!(Extraction::default().drop_rate(), 0.0);
     }
+}
+
+/// Whether a second pass is likely to be worth the wait.
+///
+/// Nothing survived, or most of it was thrown away. Anything better than that
+/// is a normal result rather than a failure — models misquote occasionally and
+/// the verifier is there to catch it, not to trigger a rerun.
+fn worth_retrying(first: &Extraction) -> bool {
+    if first.rejected.is_empty() {
+        return false;
+    }
+    first.ideas.is_empty() || first.drop_rate() > 0.5
 }
 
 /// The transcript as the extractor should see it.
