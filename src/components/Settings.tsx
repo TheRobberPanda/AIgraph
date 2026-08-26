@@ -139,11 +139,17 @@ export default function Settings() {
         {...fold("language")}
       >
         <p className="blurb">
-          What the model answers in, and what your notes and ideas are written
-          in. Left to follow what you write, a short first message is not much
-          to go on and you can get an English answer to a Polish question.
-          Naming the language settles it. Quotes are never translated: they are
+          Two things at once: what the model answers in and what your notes and
+          ideas are written in, and what the app's own buttons and labels say.
+          Left to follow what you write, a short first message is not much to
+          go on and you can get an English answer to a Polish question. Naming
+          the language settles both. Quotes are never translated: they are
           found by searching your own words for them.
+        </p>
+        <p className="blurb">
+          The app's own text is translated as it comes up rather than all at
+          once, so a screen not yet covered stays in English inside an
+          otherwise Polish or Spanish app — legible either way, never blank.
         </p>
         <div className="row">
           {LANGUAGES.map((l) => (

@@ -5,6 +5,7 @@ import { longDate } from "../lib/format";
 import Confirm from "./Confirm";
 import Sheet from "./Sheet";
 import { IconTrash } from "./Icons";
+import { t, useLang } from "../lib/i18n";
 
 /**
  * What is waiting to be read, and a way to say no to any of it.
@@ -16,6 +17,7 @@ import { IconTrash } from "./Icons";
  * queue to be visible.
  */
 export default function Queue({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
+  useLang();
   const [rows, setRows] = useState<SessionSummary[] | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,19 +36,17 @@ export default function Queue({ onClose, onChanged }: { onClose: () => void; onC
       <div className="pane-inner">
         <header className="head">
           <button className="btn" onClick={onClose}>
-            ← Back
+            {t("back")}
           </button>
           <span className="muted">
-            {rows === null
-              ? "Loading…"
-              : `${rows.length} waiting to be read`}
+            {rows === null ? t("queue_loading") : t("queue_count", { n: rows.length })}
           </span>
         </header>
 
         {error && <p className="error">{error}</p>}
 
         {rows !== null && rows.length === 0 ? (
-          <p className="empty">Nothing waiting.</p>
+          <p className="empty">{t("queue_empty")}</p>
         ) : (
           <ul className="list">
             {(rows ?? []).map((s) => (

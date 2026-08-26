@@ -13,8 +13,10 @@ import {
   IconClose,
   IconCall,
   IconClock,
+  IconSpeaker,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
+import { t as tr, useLang } from "./lib/i18n";
 import Confirm from "./components/Confirm";
 import Sheet from "./components/Sheet";
 import Call from "./components/Call";
@@ -83,13 +85,10 @@ import {
 type Tab = "chat" | "map" | "ideas" | "settings";
 const TABS: Tab[] = ["chat", "map", "ideas", "settings"];
 
-/** What each place is called. One map, so the rail and the URL agree. */
-const TAB_NAMES: Record<Tab, string> = {
-  chat: "Think",
-  map: "Map",
-  ideas: "Ideas",
-  settings: "Settings",
-};
+/** What each place is called, in the app's own language. */
+function tabName(tab: Tab): string {
+  return tr(`tab_${tab}` as const);
+}
 
 /** One icon per tab, so a place can be told apart at a glance rather than by
  *  reading its label — the label stays too, since an icon alone is ambiguous
@@ -171,6 +170,10 @@ function WindowControls() {
 }
 
 export default function App() {
+  // Re-renders whenever the app's own language changes, so the tab names and
+  // tooltips built with `tr()` above pick up the new one immediately rather
+  // than waiting for some unrelated state change to trigger a render.
+  useLang();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -472,6 +475,22 @@ export default function App() {
    * the answer back is half a phone call — so pressing the button does all of
    * it, and pressing it again undoes all of it.
    */
+  /**
+   * Read-aloud on the chat itself, next to the call button.
+   *
+   * The setting in the Settings tab is the same switch, but it took three
+   * clicks to reach the moment a reply was already being read at you and you
+   * wanted it to stop, permanently, not just for this one reply. Off by
+   * default outside a call: call mode ORs itself into `voiceOn` regardless of
+   * this, so turning it off here never silences a call in progress.
+   */
+  function toggleVoice() {
+    const on = !voiceSetting;
+    setVoiceSetting(on);
+    void patchSetting({ voice: on ? voiceKind : "off" });
+    if (!on) stopSpeaking();
+  }
+
   async function toggleCall(on: boolean) {
     setCallMode(on);
     void patchSetting({ call_mode: on });
@@ -783,7 +802,7 @@ export default function App() {
                   }}
                 >
                   <Icon className="nav-icon" />
-                  {TAB_NAMES[t]}
+                  {tabName(t)}
                 </button>
               );
             })}
@@ -848,7 +867,7 @@ export default function App() {
                   setDeep(null);
                   setView(t);
                 }}
-                data-tip={TAB_NAMES[t]}
+                data-tip={tabName(t)}
               >
                 <Icon className="nav-icon" />
               </button>
@@ -1095,7 +1114,7 @@ export default function App() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={provider ? "Start anywhere" : "Connecting…"}
+          placeholder={provider ? tr("chat_placeholder_ready") : tr("chat_placeholder_connecting")}
           disabled={!provider}
           rows={1}
           autoFocus
@@ -1106,13 +1125,18 @@ export default function App() {
               from becoming a quote that looks authoritative. In a call there is
               nowhere to edit, so `heard` sends after a pause instead. */}
           <Mic onPhrase={heard} onSpeaking={setHearing} disabled={streaming} />
+          {!callMode && (
+            <button
+              className={voiceSetting ? "icon-btn on" : "icon-btn"}
+              data-tip={voiceSetting ? tr("voice_button_on") : tr("voice_button_off")}
+              onClick={toggleVoice}
+            >
+              <IconSpeaker />
+            </button>
+          )}
           <button
             className={callMode ? "icon-btn on" : "icon-btn"}
-            data-tip={
-              callMode
-                ? "Call mode on — short answers, read aloud"
-                : "Call mode — short answers, read aloud"
-            }
+            data-tip={callMode ? tr("call_button_on") : tr("call_button_off")}
             onClick={() => void toggleCall(!callMode)}
           >
             <IconCall />
@@ -1181,7 +1205,7 @@ export default function App() {
             className="btn btn-send"
             onClick={() => void send()}
             disabled={!draft.trim() || streaming || !provider}
-            data-tip="Send (Enter)"
+            data-tip={tr("chat_send_tip")}
           >
             <IconSend />
             Send

@@ -222,6 +222,13 @@ pub fn run() {
                         Ok(None) => {}
                         Err(e) => tracing::error!(error = %e, "failed to archive on exit"),
                     }
+                    // `Embedded`'s own `Drop` stops the server too, but relying
+                    // on that here means relying on Tauri actually dropping
+                    // managed state on the way out — which is how a model kept
+                    // running after the window closed, holding its RAM and
+                    // VRAM until something else needed them and failed to get
+                    // them. Stopping it explicitly does not depend on that.
+                    commands::stop_embedded_now(&state).await;
                 });
             }
         });

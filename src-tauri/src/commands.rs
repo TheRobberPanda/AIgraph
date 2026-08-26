@@ -1513,6 +1513,13 @@ pub async fn stop_embedded(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// As [`stop_embedded`], for callers that only have the state itself — the
+/// exit handler runs outside any Tauri command, so it has no `State<'_, _>`
+/// to extract from.
+pub async fn stop_embedded_now(state: &AppState) {
+    state.embedded.lock().await.stop();
+}
+
 #[tauri::command]
 pub async fn folders(state: State<'_, AppState>) -> Result<Vec<crate::store::Folder>, String> {
     state.store.lock().await.folders().map_err(|e| e.to_string())
