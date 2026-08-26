@@ -12,6 +12,25 @@ The map is the product. The chat is what gets it out of your head.
 Free, open source, local-first: it runs a model on your own machine by default,
 and nothing said to it has to leave.
 
+
+![The map: conversations as large dots, the ideas that came out of them as small ones](docs/screenshots/map.png)
+
+*The map. Large dots are conversations, small ones the ideas taken from them,
+coloured by subject. An idea you returned to is shared between the
+conversations it came up in, which is the only thing that links one to
+another.*
+
+![The ideas list, one conversation expanded to show what was taken from it](docs/screenshots/ideas.png)
+
+*What came out of each conversation. The line at the top is the honesty metric:
+how many ideas were recorded, and how many were thrown away because their quote
+could not be found in what you actually said.*
+
+![The conversation view, with the model chip at the bottom left](docs/screenshots/think.png)
+
+*Where you talk. The chip at the bottom left is which model is answering — the
+app opens here rather than on a setup screen.*
+
 ## Install
 
 **Linux** — download the `.AppImage`, make it executable, run it:
