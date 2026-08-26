@@ -443,6 +443,11 @@ impl Embedded {
         // Counters for the readout. `/slots` reports the prompt but says
         // nothing about generation, which is where the time actually goes.
         cmd.arg("--metrics");
+        // Thinking off at the server, so it is off for anything that forgets
+        // to ask — and off for the tokens nobody sees, which on a local model
+        // are the ones that cost the minutes. Chat still turns it back on per
+        // request when the setting says to.
+        cmd.arg("--reasoning").arg("off");
         // llama.cpp's flag is the negative one. Off by default there, so it is
         // only passed when the setting says to keep the cache on the CPU.
         if !rt.kv_cache_on_gpu {

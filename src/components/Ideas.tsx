@@ -50,6 +50,12 @@ function elapsed(since: string): string {
   return `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }
 
+/** A duration, in the units it is actually worth reading in. */
+function minutes(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
 /** How many separate conversations support this idea. */
 function sessionsFor(idea: Idea): number {
   return new Set(idea.evidence.map((e) => e.session_id)).size;
@@ -266,6 +272,33 @@ export default function Ideas({
               </span>
             </p>
           )
+        )}
+      </div>
+      )}
+
+      {/* What the last read cost, kept on screen after it finishes. A digest
+          that took four minutes is a complaint; 6,200 tokens read at 41/s and
+          900 written at 3/s is something that can be acted on. */}
+      {progress?.last && !running && (
+      <div className="diag">
+        <span className="muted">last read</span>
+        <span>
+          <strong>{minutes(progress.last.seconds)}</strong>
+        </span>
+        {progress.last.retried && <span className="muted">read twice</span>}
+        {progress.last.cost?.calls > 0 && (
+          <>
+            <span>
+              {progress.last.cost.read_tokens.toLocaleString()} in
+              {progress.last.read_per_second != null &&
+                ` · ${Math.round(progress.last.read_per_second)} tok/s`}
+            </span>
+            <span>
+              {progress.last.cost.wrote_tokens.toLocaleString()} out
+              {progress.last.wrote_per_second != null &&
+                ` · ${Math.round(progress.last.wrote_per_second)} tok/s`}
+            </span>
+          </>
         )}
       </div>
       )}

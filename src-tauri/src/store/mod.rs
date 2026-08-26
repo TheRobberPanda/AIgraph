@@ -1232,12 +1232,28 @@ impl Store {
     /// Offered to the model at extraction time so it reuses a subject it has met
     /// before rather than inventing a near-synonym.
     pub fn categories(&self) -> Result<Vec<String>> {
+        self.categories_in(None)
+    }
+
+    /// The categories in one folder, or in all of them.
+    ///
+    /// Scoped, because this list is handed to the extractor as "reuse one of
+    /// these exactly as written" — and a Polish conversation offered a list of
+    /// English categories takes the invitation, files itself under "business
+    /// planning", and the tags on that folder's map come out in a language
+    /// nobody there is speaking. Folders already separate what belongs
+    /// together; the vocabulary should follow them.
+    pub fn categories_in(&self, folder: Option<i64>) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT category, COUNT(*) c FROM ideas
-             WHERE category <> '' GROUP BY category ORDER BY c DESC, category
+            "SELECT i.category, COUNT(*) c FROM ideas i
+             WHERE i.category <> ''
+               AND (?1 IS NULL OR EXISTS (
+                     SELECT 1 FROM evidence e JOIN sessions s ON s.id = e.session_id
+                     WHERE e.idea_id = i.id AND s.folder_id = ?1))
+             GROUP BY i.category ORDER BY c DESC, i.category
              LIMIT 40",
         )?;
-        let rows = stmt.query_map([], |r| r.get(0))?;
+        let rows = stmt.query_map([folder], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
     }
 

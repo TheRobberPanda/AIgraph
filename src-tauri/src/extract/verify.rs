@@ -98,6 +98,26 @@ pub fn verify(idea: &RawIdea, turns: &[Turn]) -> VerifyResult {
         return Ok(out);
     }
 
+    // Last resort: the longest stretch of the quote that really was said.
+    //
+    // A model transcribing 459 characters of Polish wrote "Jeśli" where the
+    // transcript says "Jeżeli", and the whole idea — every other character of
+    // it correct — was thrown away. Losing a real thought over one substituted
+    // word is a worse failure than the one the strictness is there to prevent.
+    //
+    // The guarantee is unchanged: what gets stored is a span of the person's
+    // own words, found by searching their text. We keep the part that verifies
+    // and drop the part that does not, rather than dropping the idea.
+    for turn in turns.iter().filter(|t| t.role == Role::User) {
+        if let Some(loc) = longest_run(&turn.text, needle, turn.id) {
+            hits.push(loc);
+        }
+    }
+
+    if let Some(best) = hits.iter().max_by_key(|h| h.end_byte - h.start_byte) {
+        return Ok(best.clone());
+    }
+
     // Not in any user turn. Distinguish "the model quoted the assistant" from
     // "the model made it up" — they call for different fixes.
     for turn in turns.iter().filter(|t| t.role == Role::Assistant) {
@@ -211,6 +231,77 @@ fn normalized_find(haystack: &str, needle: &str, turn_id: i64) -> Option<Located
     })
 }
 
+/// The longest run of `needle` that appears verbatim in `haystack`.
+///
+/// Only worth having if what comes back is still recognisably the quote, so a
+/// run has to be both long in itself and most of what was proposed. A dozen
+/// words lifted out of a paragraph would point at the wrong sentence, which is
+/// the failure this whole module exists to prevent.
+fn longest_run(haystack: &str, needle: &str, turn_id: i64) -> Option<Located> {
+    /// Shortest run worth keeping, in normalized bytes.
+    const FLOOR: usize = 40;
+    /// And it has to be this much of what the model proposed.
+    const SHARE: f32 = 0.6;
+
+    let hay = normalize(haystack);
+    let ned = normalize(needle);
+    let text = ned.text.trim();
+    if text.len() < FLOOR {
+        return None;
+    }
+    let want = ((text.len() as f32 * SHARE) as usize).max(FLOOR);
+
+    // Runs start at a word, so the span reads as a phrase rather than opening
+    // mid-syllable.
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(text.match_indices(' ').map(|(i, _)| i + 1))
+        .filter(|i| text.len() - i >= want)
+        .collect();
+
+    let mut best: Option<(usize, usize)> = None;
+    for start in starts {
+        // A run that fits also fits when shortened, so the longest one that
+        // fits can be found by halving rather than by trying every length.
+        let (mut lo, mut hi) = (want, text.len() - start);
+        while lo <= hi {
+            let mid = (lo + hi) / 2;
+            let end = start + mid;
+            if !text.is_char_boundary(end) || !hay.text.contains(&text[start..end]) {
+                if mid == want {
+                    break;
+                }
+                hi = mid - 1;
+            } else {
+                if best.map(|(s, e)| e - s).unwrap_or(0) < mid {
+                    best = Some((start, end));
+                }
+                lo = mid + 1;
+            }
+        }
+    }
+
+    let (from, to) = best?;
+    let run = &text[from..to];
+    let at = hay.text.find(run)?;
+    let start_byte = *hay.starts.get(at)?;
+    let end_byte = *hay.ends.get(at + run.len() - 1)?;
+    if start_byte >= end_byte
+        || !haystack.is_char_boundary(start_byte)
+        || !haystack.is_char_boundary(end_byte)
+    {
+        return None;
+    }
+
+    Some(Located {
+        turn_id,
+        start_byte,
+        end_byte,
+        matched_text: haystack[start_byte..end_byte].to_string(),
+        ambiguous: hay.text[at + run.len()..].contains(run),
+        normalized_match: true,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +315,30 @@ mod tests {
             category: String::new(),
             notes: vec![],
         }
+    }
+
+    /// The case that started this: one word wrong at the head of a long quote.
+    #[test]
+    fn one_substituted_word_does_not_cost_the_whole_idea() {
+        let said = "Jeżeli chodzi o płatności i podatki, jak to zrobić najlepiej, żeby było \
+                    to najbardziej uproszczone i żeby nie było problemów z urzędem skarbowym.";
+        // "Jeśli" for "Jeżeli", and nothing else changed.
+        let claimed = said.replacen("Jeżeli", "Jeśli", 1);
+        let got = verify(&idea(&claimed), &[user(1, said)]).unwrap();
+        assert!(got.normalized_match, "found the long way round");
+        assert!(said.contains(&got.matched_text), "and what it found is real text");
+        assert!(
+            got.matched_text.contains("urzędem skarbowym"),
+            "kept the substance, not just the opening"
+        );
+    }
+
+    /// The part that verifies has to still be most of the quote.
+    #[test]
+    fn a_handful_of_matching_words_is_not_a_quote() {
+        let said = "latency is the real problem here and everything else follows from it";
+        let claimed = "latency is the real problem here but I invented this whole second half                        of the sentence and the third part of it as well, at some length";
+        assert_eq!(verify(&idea(claimed), &[user(1, said)]), Err(Rejection::NotFound));
     }
 
     fn user(id: i64, text: &str) -> Turn {

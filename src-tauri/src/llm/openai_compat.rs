@@ -217,8 +217,10 @@ impl ChatProvider for OpenAiCompat {
         // `enable_thinking` template argument is what LM Studio and vLLM pass
         // through to the chat template. Sending both is how one request works
         // against either.
+        // Said either way round. The embedded server is started with thinking
+        // off, so a request that wants it has to ask.
+        body["reasoning"] = serde_json::json!(if req.reasoning { "on" } else { "off" });
         if !req.reasoning {
-            body["reasoning"] = serde_json::json!("off");
             body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
         }
 
@@ -342,7 +344,13 @@ impl OpenAiCompat {
             },
         });
         if disable_reasoning {
+            // Three spellings of one thing, because three families of server
+            // read different ones and ignore the rest. Extraction is a
+            // mechanical structured task: a model that thinks its way through
+            // it spends the whole token budget and returns no JSON at all.
             body["reasoning_effort"] = serde_json::json!("none");
+            body["reasoning"] = serde_json::json!("off");
+            body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
         }
 
         let resp = self
@@ -360,6 +368,10 @@ impl OpenAiCompat {
 
         let completion: Completion =
             resp.json().await.map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        // What this call actually cost, straight from the server. Recorded
+        // before anything can fail below, so a run that ends badly still
+        // accounts for the time it spent.
+        crate::llm::meter::record(completion.timings.as_ref());
 
         let Some(choice) = completion.choices.first() else {
             return Err(LlmError::BadOutput("no choices in response".into()));
@@ -397,6 +409,10 @@ impl OpenAiCompat {
 #[derive(Deserialize)]
 struct Completion {
     choices: Vec<CompletionChoice>,
+    /// llama.cpp's own measurement of the call. Absent on servers that do not
+    /// report one.
+    #[serde(default)]
+    timings: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]

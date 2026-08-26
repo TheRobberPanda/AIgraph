@@ -141,16 +141,26 @@ pub fn pinned_language() -> Language {
 /// The line to add to a prompt so the model answers in the chosen language.
 ///
 /// Empty under `Auto`, where the existing rule — follow the source — stands.
+///
+/// Said twice, once in English and once in the language itself. The English
+/// sentence is the one the model parses; the native one is the one that
+/// actually moves it. A small quantised model reading a wall of English
+/// instructions answers in English however plainly the English told it not to,
+/// and a single imperative in the target language pulls harder than a
+/// paragraph about it.
 pub fn language_instruction() -> String {
-    match pinned_language().name() {
-        None => String::new(),
-        Some(name) => format!(
-            "\n\nLanguage: write everything in {name}, whatever language the \
-             text you are given is in. Every field, every sentence. The one \
-             exception is a quote, which is copied character for character \
-             from the source and never translated.\n"
-        ),
-    }
+    let language = pinned_language();
+    let (Some(name), Some(native)) = (language.name(), language.imperative()) else {
+        return String::new();
+    };
+    format!(
+        "\n\n## Language: {name}\n\n\
+         {native}\n\n\
+         Write every field in {name}, whatever language the text you are given \
+         is in: titles, claims, categories, reasoning, notes, all of it. The \
+         one exception is a quote, which is copied character for character \
+         from the source and never translated.\n"
+    )
 }
 
 impl Language {
@@ -161,6 +171,16 @@ impl Language {
             Language::English => Some("English"),
             Language::Polish => Some("Polish"),
             Language::Spanish => Some("Spanish"),
+        }
+    }
+
+    /// The same instruction, written in the language it is asking for.
+    pub fn imperative(self) -> Option<&'static str> {
+        match self {
+            Language::Auto => None,
+            Language::English => Some("Write everything in English."),
+            Language::Polish => Some("Pisz wszystko po polsku."),
+            Language::Spanish => Some("Escribe todo en español."),
         }
     }
 }

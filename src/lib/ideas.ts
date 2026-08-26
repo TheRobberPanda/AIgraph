@@ -73,6 +73,16 @@ export interface LastExtraction {
   drop_rate: number;
   seconds: number;
   retried: boolean;
+  /** What the model measured itself doing, summed over every pass. */
+  cost: {
+    calls: number;
+    read_tokens: number;
+    read_ms: number;
+    wrote_tokens: number;
+    wrote_ms: number;
+  };
+  read_per_second: number | null;
+  wrote_per_second: number | null;
   error: string | null;
 }
 

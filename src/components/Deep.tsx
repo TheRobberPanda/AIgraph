@@ -296,6 +296,30 @@ function Reply({ text, digest }: { text: string; digest: string | null }) {
 }
 
 /** An idea's file: everything supporting it, and how it has changed. */
+/** One entry per conversation, oldest first, however many quotes it holds. */
+function conversations(evidence: IdeaView["evidence"]) {
+  const seen = new Map<number, IdeaView["evidence"][number]>();
+  for (const e of evidence) {
+    if (!seen.has(e.session_id)) seen.set(e.session_id, e);
+  }
+  return [...seen.values()];
+}
+
+/**
+ * Whether a margin note says anything the claim does not.
+ *
+ * A local model asked to read an idea back will sometimes hand back the idea,
+ * and a section headed "In the margin" containing the sentence directly above
+ * it is worse than no section at all.
+ */
+function worthShowing(dive: string | null, claim: string): boolean {
+  if (!dive || !dive.trim()) return false;
+  const flatten = (t: string) =>
+    t.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " ").trim();
+  const [d, c] = [flatten(dive), flatten(claim)];
+  return !(d === c || d.startsWith(c) || c.startsWith(d));
+}
+
 export function IdeaFile({
   ideaId,
   onOpenConversation,
@@ -354,41 +378,6 @@ export function IdeaFile({
           <h2 className="deep-claim">{view.claim}</h2>
           <Nudges strong={view.strong} weak={view.weak} />
 
-          <section className="dive">
-            <h3 className="section">In the margin</h3>
-            {dive ? (
-              <>
-                <div className="dive-text">
-                  {dive.split(/\n\s*\n/).map((para, i) => (
-                    <p key={i}>{para}</p>
-                  ))}
-                </div>
-                <button
-                  className="btn"
-                  disabled={diving}
-                  onClick={() => void think(true)}
-                >
-                  {diving ? "Thinking…" : "Read it again"}
-                </button>
-              </>
-            ) : (
-              <>
-                <p className="blurb">
-                  A few lines in the margin: what would need to be understood to
-                  use this idea, and where it would be pushed hardest.
-                </p>
-                <button
-                  className={diving ? "btn busy" : "btn"}
-                  disabled={diving}
-                  onClick={() => void think()}
-                >
-                  {diving && <span className="spinner" aria-hidden="true" />}
-                  {diving ? "Reading…" : "Read it back"}
-                </button>
-              </>
-            )}
-          </section>
-
           <h3 className="section">Said here</h3>
           {view.evidence.map((e) => (
             <div key={e.id} className="evidence">
@@ -397,37 +386,59 @@ export function IdeaFile({
                 {e.normalized && <span className="tag">loose match</span>}
               </blockquote>
               {e.reasoning && <p className="why-inline">{e.reasoning}</p>}
-              <button className="link" onClick={() => onOpenConversation(e.session_id)}>
-                {plainDate(e.started_at)} — open the conversation →
-              </button>
             </div>
           ))}
 
-          {view.revisions.length > 0 && (
-            <>
-              <h3 className="section">How it changed</h3>
-              {view.revisions.map((r) => (
-                <div key={r.id} className="revision">
-                  <p className="was">was: “{r.prev_claim}”</p>
-                  <p className="muted">
-                    rewritten {plainDate(r.created_at)} ·{" "}
-                    {(r.confidence * 100).toFixed(0)}% confident
-                    {r.reverted_at && " · reverted"}
-                  </p>
-                  {!r.reverted_at && (
-                    // Rewriting is the only thing here that can destroy
-                    // something you wrote, so undoing it stays one click away.
-                    <button
-                      className="btn"
-                      onClick={() => revertRevision(r.id).then(load).catch((e) => setError(String(e)))}
-                    >
-                      Restore this wording
-                    </button>
-                  )}
-                </div>
-              ))}
-            </>
+          {/* One link per conversation, at the bottom. It used to sit under
+              every quote, so a single conversation that said something three
+              times offered the same link three times. */}
+          <div className="sources">
+            {conversations(view.evidence).map((c) => (
+              <button key={c.session_id} className="link" onClick={() => onOpenConversation(c.session_id)}>
+                {plainDate(c.started_at)} — open the conversation →
+              </button>
+            ))}
+          </div>
+
+          {/* Below the evidence, not above it: the model's reading of an idea
+              is worth less than the words the idea came from, and putting it
+              first pushed those off the screen. */}
+          {worthShowing(dive, view.claim) ? (
+            <section className="dive">
+              <h3 className="section">In the margin</h3>
+              <div className="dive-text">
+                {dive!.split(/\n\s*\n/).map((para, i) => (
+                  <p key={i}>{para}</p>
+                ))}
+              </div>
+            </section>
+          ) : (
+            <div className="sources">
+              <button
+                className={diving ? "link busy" : "link"}
+                disabled={diving}
+                onClick={() => void think(true)}
+              >
+                {diving ? "Reading…" : "Read it back — what this would need, and where it breaks"}
+              </button>
+            </div>
           )}
+
+          {/* One quiet line. The wording, the date and the confidence were
+              three lines of furniture around one fact; what actually has to
+              survive is the undo, because rewriting is the only thing here
+              that can destroy something you wrote. */}
+          {view.revisions.filter((r) => !r.reverted_at).map((r) => (
+            <p key={r.id} className="revision-line muted">
+              rewritten {plainDate(r.created_at)} ·{" "}
+              <button
+                className="link"
+                onClick={() => revertRevision(r.id).then(load).catch((e) => setError(String(e)))}
+              >
+                undo
+              </button>
+            </p>
+          ))}
         </>
       )}
     </div>

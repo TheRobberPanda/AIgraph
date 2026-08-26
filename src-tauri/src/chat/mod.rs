@@ -109,6 +109,16 @@ impl Conversation {
         }
     }
 
+    /// Take back the last thing said, when it never reached the model.
+    ///
+    /// Only ever removes a trailing user turn, so it cannot silently swallow
+    /// an exchange that did happen.
+    pub fn drop_last_user(&mut self) {
+        if self.messages.last().map(|m| m.role == Role::User).unwrap_or(false) {
+            self.messages.pop();
+        }
+    }
+
     /// Rewind to before a turn, dropping it and everything said after it.
     ///
     /// Chat is sequential — a later reply can only be understood in light of

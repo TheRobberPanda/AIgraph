@@ -154,6 +154,12 @@ pub struct LastExtraction {
     pub drop_rate: f32,
     pub seconds: i64,
     pub retried: bool,
+    /// What the model measured itself doing. Kept after the run finishes,
+    /// because the question "why did that take four minutes" is always asked
+    /// afterwards.
+    pub cost: crate::llm::meter::Tally,
+    pub read_per_second: Option<f64>,
+    pub wrote_per_second: Option<f64>,
     pub error: Option<String>,
 }
 
@@ -348,7 +354,7 @@ pub async fn send_message(
     };
 
     let emitter = app.clone();
-    let reply = provider
+    let streamed = provider
         .chat_stream(&request, &move |kind, text| {
             // Reasoning goes out on its own channel so the UI can show that
             // something is happening without ever treating it as the reply.
@@ -358,8 +364,21 @@ pub async fn send_message(
             };
             let _ = emitter.emit(event, Token { text: text.to_string() });
         })
-        .await
-        .map_err(|e| e.to_string())?;
+        .await;
+
+    // A turn that got no answer is not a turn. Left in place, the next attempt
+    // pushes the same words again and the conversation ends up holding the
+    // question twice — which is then read as the person having said it twice,
+    // and noted as such in the margin.
+    let reply = match streamed {
+        Ok(reply) => reply,
+        Err(e) => {
+            if let Some(convo) = state.conversation.lock().await.as_mut() {
+                convo.drop_last_user();
+            }
+            return Err(e.to_string());
+        }
+    };
 
     if let Some(convo) = state.conversation.lock().await.as_mut() {
         convo.push_assistant(&reply);
@@ -607,6 +626,7 @@ pub async fn extract_session_inner(
     };
 
     let started = chrono::Utc::now();
+    crate::llm::meter::reset();
     state
         .store
         .lock()
@@ -653,7 +673,11 @@ pub async fn extract_session_inner(
     // take minutes on a local model, and holding it would freeze the whole app.
     // Hand the model the categories already in use so it reuses them instead of
     // coining a synonym for a subject it has seen before.
-    let known = state.store.lock().await.categories().unwrap_or_default();
+    let known = {
+        let store = state.store.lock().await;
+        let folder = store.session_folder(session_id).ok();
+        store.categories_in(folder).unwrap_or_default()
+    };
 
     let result =
         crate::extract::run_with_progress(extractor.as_ref(), &turns, &known, &move |phase| {
@@ -663,6 +687,7 @@ pub async fn extract_session_inner(
 
     pump.abort();
     let seconds = (chrono::Utc::now() - started).num_seconds();
+    let cost = crate::llm::meter::read();
 
     match result {
         Ok(extraction) => {
@@ -674,6 +699,11 @@ pub async fn extract_session_inner(
                 drop_rate = extraction.drop_rate(),
                 retried = extraction.retried,
                 seconds,
+                calls = cost.calls,
+                read_tokens = cost.read_tokens,
+                wrote_tokens = cost.wrote_tokens,
+                read_per_second = cost.read_per_second(),
+                wrote_per_second = cost.wrote_per_second(),
                 "extracted"
             );
             reconcile_and_save(state, session_id, &extraction, &provider_label, &model)
@@ -695,6 +725,9 @@ pub async fn extract_session_inner(
                     drop_rate: extraction.drop_rate(),
                     seconds,
                     retried: extraction.retried,
+                    cost,
+                    read_per_second: cost.read_per_second(),
+                    wrote_per_second: cost.wrote_per_second(),
                     error: None,
                 },
             )
@@ -716,6 +749,9 @@ pub async fn extract_session_inner(
                     drop_rate: 0.0,
                     seconds,
                     retried: false,
+                    cost,
+                    read_per_second: cost.read_per_second(),
+                    wrote_per_second: cost.wrote_per_second(),
                     error: Some(msg.clone()),
                 },
             )

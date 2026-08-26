@@ -113,8 +113,11 @@ pub fn build_with_categories(transcript: &str, known: &[String]) -> String {
         String::new()
     } else {
         format!(
-            "\n\nCategories already in use. Reuse one wherever it fits, exactly \
-             as written, rather than coining a near-synonym:\n{}\n",
+            "\n\nCategories already in use in this folder. Reuse one wherever it \
+             fits, exactly as written, rather than coining a near-synonym. If \
+             none of them is in the same language as the transcript, ignore \
+             this list entirely and write a new category in the language of \
+             the transcript:\n{}\n",
             known.iter().map(|c| format!("  {c}")).collect::<Vec<_>>().join("\n")
         )
     };
@@ -158,22 +161,28 @@ For each idea return:
   "language" above. Lowercase. Prefer a category
   already in use over coining a near-synonym.
 - "reasoning": two or three sentences, in the language named in "language"
-  above, that make the idea stand on its own.
+  above, answering **why** — why this is held, on the evidence of the
+  transcript itself.
 
-  A quote is rarely enough on its own to know what was meant. "It basically
-  socializes the losses of the American empire" is a sentence someone can read
-  back a month later without recovering the thought behind it. So: say what is
-  being claimed, what it is a claim *about*, and what makes it worth recording
-  — the thing that would otherwise have to be reconstructed by rereading the
-  whole conversation.
+  Not a restatement of the claim in longer words. The claim already says what
+  is thought. This says what it rests on: the reason given, the case it was
+  drawn from, the thing it is a reaction to. Where the transcript gives a
+  reason, that reason is the answer and it goes here. Where it gives none, say
+  what the position commits its holder to instead, or what it is arguing
+  against — something the claim alone does not already carry.
 
-  Draw on the surrounding transcript, not only on the quoted words. The point
-  is to crystallise the thought, not to paraphrase the sentence.
+  "It basically socializes the losses of the American empire" is a sentence
+  someone can read back a month later without recovering the thought behind
+  it. What belongs here is the part that has to be reconstructed by rereading
+  the whole conversation otherwise.
 
-  Do not write "the user" or "the speaker" anywhere, in this field or any other.
-  State what the words do, not who did it: not "The user characterizes this as a
-  dilemma" but "Frames it as a choice between two bad outcomes." Drop the subject
-  entirely rather than name one.
+  Draw on the surrounding transcript, not only on the quoted words.
+
+  About the thinking, never about the person doing it. Do not write "the user"
+  or "the speaker" anywhere, in this field or any other. State what the words
+  do, not who did it: not "The user characterizes this as a dilemma" but
+  "Frames it as a choice between two bad outcomes." Drop the subject entirely
+  rather than name one.
 - "notes": questions or observations, ONLY where there is a real one. See below.
 
 ## Notes are optional, and usually absent
@@ -187,6 +196,11 @@ genuinely load-bearing. It is not a critique quota.
   two is normal; more than three means the transcript was unusually rich.
 - A note must be specific to this idea and say something that could not be said
   about any other idea. "This could be more specific" is not a note.
+- **A note is about the thinking, never about the person or the conversation.**
+  How someone writes, how often they repeat themselves, how long they took to
+  get to the question, what they seem to want — none of that is a note. It is
+  not an observation about an idea, it is an observation about a person, and it
+  is not what this is for. Engage with the claim or write nothing.
 - Mark each note "supports" where it strengthens the idea, or "questions" where
   a specific part of the argument does not hold.
 - **A "questions" note names the flawed step, not the general topic.** Point at
@@ -221,7 +235,10 @@ identifies the conversation at a glance, so it must be specific to what was
 actually said, never generic.
 
 Also return "conversation": notes on the whole stretch of thinking, under the
-same rules — usually none, and never more than two.
+same rules — usually none, and never more than two. These are about the
+argument taken as a whole: a thread left hanging, a tension between two things
+said, a question the whole line of thinking runs into. Never about the person
+or about how the conversation was conducted.
 
 Return JSON: {{"language": "...", "title": "...", "ideas": [...],
 "conversation": {{"notes": [...]}}}}.
