@@ -145,6 +145,15 @@ For each idea return:
   of many should know what is actually being claimed without opening the idea.
   Whatever the shortest true sentence is, however many words that takes — most
   land under ten.
+
+  It must be a STATEMENT — a real sentence with a subject and a verb that
+  asserts something, the same test the claim has to pass. It is never a
+  summary of what was discussed and never a suggestion of what to look at.
+  Reject anything shaped like "X and Y", "X as Y", "X vs Y", or "X in the
+  context of Y" — that is a label for a topic, not a claim about it, and a
+  label is what this field must never be. If what you have written could be
+  filed under a folder tab, it is wrong; rewrite it as the sentence that
+  belongs on the page inside that folder.
 - "claim": one sentence, in the words as spoken.
 
   **Where a sentence already stands on its own, use it exactly as spoken.** That

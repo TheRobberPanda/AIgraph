@@ -886,13 +886,20 @@ export default function App() {
         )}
         <div className="topbar-spacer" />
 
-        {/* Centered independent of everything else in this bar, and in the
-            bar itself rather than the status line at the bottom — an
-            expanded panel or the call view can cover that, and knowing what
-            you're talking to shouldn't depend on what else is on screen. */}
-        <div className="topbar-model" data-tauri-drag-region>
-          {provider ? `${provider.label} · ${modelName(provider.model)}` : "no model"}
-        </div>
+        {/* Centered independent of everything else in this bar, and in the bar
+            itself rather than floating over the composer — where it used to
+            sit, and where it covered whatever else was down there once the
+            window got narrow or a call was open. Still where you reach for
+            it while thinking: after a bad answer, usually, and a settings
+            tab for it means leaving the thing that prompted the question. */}
+        <button
+          className={`model-chip topbar-model${showModels ? " on" : provider ? "" : " missing"}`}
+          data-tip={provider ? "Which model is answering" : "Nothing to talk to yet — pick a model"}
+          onClick={() => setShowModels((v) => !v)}
+        >
+          <IconModels className="nav-icon" />
+          <span>{provider ? modelName(provider.model) : "No model — pick one"}</span>
+        </button>
 
         {pending > 0 && (
           <span className="row digest-group">
@@ -1019,19 +1026,6 @@ export default function App() {
 
         <div className="ws-center">
       <div className={turns.length === 0 && !justArchived ? "think opening" : "think"}>
-      {/* Which model is answering, at the edge of the conversation it is
-          answering in. Changing it is a thing you do *while* thinking — after
-          a bad answer, usually — and sending someone to a settings tab for it
-          means leaving the thing that prompted the question. */}
-      <button
-        className={`model-chip${showModels ? " on" : provider ? "" : " missing"}`}
-        data-tip={provider ? "Which model is answering" : "Nothing to talk to yet — pick a model"}
-        onClick={() => setShowModels((v) => !v)}
-      >
-        <IconModels className="nav-icon" />
-        <span>{provider ? modelName(provider.model) : "No model — pick one"}</span>
-      </button>
-
       {showModels && (
         <Drawer
           title="Which model is answering"

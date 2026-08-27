@@ -171,18 +171,15 @@ input, textarea {
 /* Fixed to the bar's own centre regardless of how wide anything else on
    either side is, and pinned to the bar's z-index — the one thing on screen
    that should never end up covered or squeezed by something else opening. */
+/* Fixed to the bar's own centre regardless of how wide anything else on
+   either side is — the one thing on screen that should never end up covered
+   or squeezed by something else opening. */
 .topbar-model {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  max-width: min(40vw, 26rem);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.78rem;
-  color: var(--muted);
-  pointer-events: none;
+  max-width: min(40vw, 22rem);
 }
 
 /* Kept for the composer bar once a conversation is under way. */
@@ -1142,13 +1139,29 @@ textarea.field { font-family: var(--mono); font-size: 0.76rem; resize: vertical;
   font-size: 0.92rem;
   line-height: 1.5;
 }
-/* The quote backing the reasoning above it — supporting context, not the
-   main text, so it reads smaller and after the "why" rather than before it. */
-.context-quote {
-  margin: 0.3rem 0 0.9rem;
-  font-size: 0.82rem;
-  color: var(--faint);
+/* The citation at the bottom of an idea's file: what it rests on and when it
+   was said, styled and behaving like a source rather than a labeled button —
+   the whole thing is the control, so nothing here reads as chrome. */
+.quote-source {
+  display: block;
+  width: 100%;
+  margin: 0 0 0.7rem;
+  padding: 0.6rem 0.8rem;
+  border: none;
+  border-left: 2px solid var(--line);
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
 }
+.quote-source:hover { background: var(--surface); border-left-color: var(--accent); }
+.quote-source blockquote {
+  margin: 0 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.quote-date { font-size: 0.72rem; color: var(--faint); }
 .notes { display: flex; flex-direction: column; gap: 0.25rem; }
 .note {
   display: flex; align-items: baseline; gap: 0.45rem;
@@ -1584,7 +1597,7 @@ blockquote {
   /* Room at the bottom for the chip that opened it, which stays above this
      and so stays clickable — pressing it again is the obvious way to put the
      panel away, and it only works if the panel does not cover it. */
-  padding: 0.9rem 0.9rem 3.4rem;
+  padding: 0.9rem;
   background: color-mix(in srgb, var(--bg) 55%, transparent);
 }
 .drawer {
@@ -1614,14 +1627,6 @@ blockquote {
 
 /* The model, at the left edge of the conversation it is answering in. */
 .model-chip {
-  position: absolute;
-  /* Above the drawer it opens, so it can close it again. */
-  z-index: 45;
-  /* Bottom rather than top: it sits with the other things you reach for while
-     talking, not over the first thing you read. */
-  bottom: 0.6rem;
-  left: 0.6rem;
-  z-index: 3;
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;

@@ -294,14 +294,6 @@ function Reply({ text, digest }: { text: string; digest: string | null }) {
 }
 
 /** An idea's file: everything supporting it, and how it has changed. */
-/** One entry per conversation, oldest first, however many quotes it holds. */
-function conversations(evidence: IdeaView["evidence"]) {
-  const seen = new Map<number, IdeaView["evidence"][number]>();
-  for (const e of evidence) {
-    if (!seen.has(e.session_id)) seen.set(e.session_id, e);
-  }
-  return [...seen.values()];
-}
 
 /**
  * Whether a margin note says anything the claim does not.
@@ -377,27 +369,11 @@ export function IdeaFile({
           {view.title !== view.claim && <p className="deep-subclaim">{view.claim}</p>}
           <Nudges strong={view.strong} weak={view.weak} />
 
-          <h3 className="section">Why</h3>
           {view.evidence.map((e) => (
             <div key={e.id} className="evidence">
               {e.reasoning && <p className="why-inline">{e.reasoning}</p>}
-              <blockquote className="context-quote">
-                “{e.quote}”
-                {e.normalized && <span className="tag">loose match</span>}
-              </blockquote>
             </div>
           ))}
-
-          {/* One button per conversation, at the bottom. It used to sit under
-              every quote, so a single conversation that said something three
-              times offered the same button three times. */}
-          <div className="sources">
-            {conversations(view.evidence).map((c) => (
-              <button key={c.session_id} className="btn" onClick={() => onOpenConversation(c.session_id)}>
-                Open the conversation — {plainDate(c.started_at)}
-              </button>
-            ))}
-          </div>
 
           {/* Below the evidence, not above it: the model's reading of an idea
               is worth less than the words the idea came from, and putting it
@@ -438,6 +414,24 @@ export function IdeaFile({
                 undo
               </button>
             </p>
+          ))}
+
+          {/* The words this rests on, at the very bottom — this is where a
+              quote belongs, not floating in the middle of the reading. Each
+              is the whole citation: what was said and when, and opens the
+              conversation it was said in, the way a citation would. */}
+          {view.evidence.map((e) => (
+            <button
+              key={e.id}
+              className="quote-source"
+              onClick={() => onOpenConversation(e.session_id)}
+            >
+              <blockquote>
+                “{e.quote}”
+                {e.normalized && <span className="tag">loose match</span>}
+              </blockquote>
+              <span className="quote-date">{plainDate(e.started_at)}</span>
+            </button>
           ))}
         </>
       )}
