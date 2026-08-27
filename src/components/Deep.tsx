@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown";
 import Sheet from "./Sheet";
+import { IconChevron } from "./Icons";
 import { dateTime, plainDate } from "../lib/format";
 import {
   conversationView,
@@ -269,8 +270,8 @@ function Reply({ text, digest }: { text: string; digest: string | null }) {
     return (
       <div className="turn assistant">
         <div className="digest">{digest}</div>
-        <button className="link" onClick={() => setFull(true)}>
-          read the answer in full
+        <button className="icon-btn expand-toggle" data-tip="Read the answer in full" onClick={() => setFull(true)}>
+          <IconChevron />
         </button>
       </div>
     );
@@ -280,8 +281,12 @@ function Reply({ text, digest }: { text: string; digest: string | null }) {
     <div className={`turn assistant${!digest && long && !full ? " clipped" : ""}`}>
       <Markdown>{!digest && long && !full ? `${text.slice(0, 420)}…` : text}</Markdown>
       {(digest || long) && (
-        <button className="link" onClick={() => setFull(!full && !digest ? true : false)}>
-          {digest ? "show the short version" : full ? "show less" : `show all ${text.length} characters`}
+        <button
+          className={`icon-btn expand-toggle${digest || full ? " flip" : ""}`}
+          data-tip={digest ? "Show the short version" : full ? "Show less" : `Show all ${text.length} characters`}
+          onClick={() => setFull(!full && !digest ? true : false)}
+        >
+          <IconChevron />
         </button>
       )}
     </div>

@@ -168,6 +168,23 @@ input, textarea {
 }
 .topbar-spacer { flex: 1; }
 
+/* Fixed to the bar's own centre regardless of how wide anything else on
+   either side is, and pinned to the bar's z-index — the one thing on screen
+   that should never end up covered or squeezed by something else opening. */
+.topbar-model {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: min(40vw, 26rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
 /* Kept for the composer bar once a conversation is under way. */
 .folder-chip {
   flex: none;
@@ -866,6 +883,10 @@ button { font-family: inherit; }
 .icon-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--accent); }
 .icon-btn.on { color: var(--accent); border-color: var(--accent); }
 .icon-btn:disabled { opacity: 0.45; cursor: default; }
+/* Collapse/expand: smaller and borderless, sitting under the text it opens
+   rather than reading as a separate control. */
+.expand-toggle { width: 1.6rem; height: 1.6rem; border: none; margin-top: 0.1rem; }
+.expand-toggle.flip { transform: rotate(180deg); }
 
 .modal-overlay {
   position: fixed;

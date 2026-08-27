@@ -136,12 +136,15 @@ they had.
 
 For each idea return:
 
-- "title": two to six words, in the language named in "language" above, naming
-  what the idea actually is, written from what
-  it means, not sliced out of its own sentence. "Giving as a hedge against
-  envy", not the first few words of the claim. This is what identifies the
-  idea at a glance in a list of many, so it must say something the claim's
-  first words don't already say.
+- "title": a short sentence, in the language named in "language" above, that
+  works standing alone as BOTH the name of the idea and a statement of it — not
+  a label pointing at the idea from outside, the idea itself in as few words as
+  it can be said. "Language mastery is unrelated to emotional stability", not
+  "Language Mastery And Emotional Stability" and not the first few words of the
+  claim sliced off. Say the position, not the topic: a reader scanning a list
+  of many should know what is actually being claimed without opening the idea.
+  Whatever the shortest true sentence is, however many words that takes — most
+  land under ten.
 - "claim": one sentence, in the words as spoken.
 
   **Where a sentence already stands on its own, use it exactly as spoken.** That
@@ -161,8 +164,10 @@ For each idea return:
   "language" above. Lowercase. Prefer a category
   already in use over coining a near-synonym.
 - "reasoning": two or three sentences, in the language named in "language"
-  above, answering **why** — why this is held, on the evidence of the
-  transcript itself.
+  above, that answer the question the title itself poses. "Language mastery is
+  unrelated to emotional stability" poses "Why is language mastery unrelated
+  to emotional stability?" — answer exactly that, using the transcript as the
+  evidence.
 
   Not a restatement of the claim in longer words. The claim already says what
   is thought. This says what it rests on: the reason given, the case it was
@@ -234,11 +239,15 @@ said in it. Name the subject, not the format: "American Economic Empire", not
 identifies the conversation at a glance, so it must be specific to what was
 actually said, never generic.
 
-Also return "conversation": notes on the whole stretch of thinking, under the
-same rules — usually none, and never more than two. These are about the
-argument taken as a whole: a thread left hanging, a tension between two things
-said, a question the whole line of thinking runs into. Never about the person
-or about how the conversation was conducted.
+Also return "conversation": at most one or two notes on the whole stretch of
+thinking, under the same rules as a note above — never about the person or how
+the conversation was conducted. Build a short account of the argument the way
+the person themselves would state its conclusion, then press on it: the
+assumption doing more work than the case made for it, the step the conclusion
+doesn't actually follow from, the alternative explanation the argument never
+rules out. Name the actual weak point, not "this could be examined further."
+A note that only restates or summarizes what was said, with nothing pressed
+on, is not a note — leave "conversation" empty rather than write one.
 
 Return JSON: {{"language": "...", "title": "...", "ideas": [...],
 "conversation": {{"notes": [...]}}}}.

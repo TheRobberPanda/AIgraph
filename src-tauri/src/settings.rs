@@ -88,13 +88,9 @@ pub struct Settings {
     /// not to feel stuck.
     pub call_silence_seconds: u32,
     /// Seconds of open microphone with nothing said before dictation stops
-    /// itself. Zero means never.
-    ///
-    /// Push-to-think dictation left running behind a person who got up is a
-    /// microphone recording an empty room until someone notices — the mic-on
-    /// indicator is one dot in a busy toolbar, easy not to see. Two minutes by
-    /// default; can be turned off for anyone who wants it to stay open no
-    /// matter how long the pause.
+    /// itself. Zero means never, and is the default: dictation is something
+    /// someone actively started, and stopping it for them is a decision they
+    /// didn't ask for. Available for anyone who wants that safety net anyway.
     pub mic_timeout_seconds: u32,
     /// How the model bundled with the app is run, when that is the one in use.
     pub runtime: Runtime,
@@ -326,7 +322,7 @@ impl Default for Settings {
             language: Language::Auto,
             chat_stance: ChatStance::Challenge,
             call_silence_seconds: 5,
-            mic_timeout_seconds: 120,
+            mic_timeout_seconds: 0,
             runtime: Runtime::default(),
             layout: Layout::default(),
         }

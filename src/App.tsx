@@ -251,13 +251,23 @@ export default function App() {
   const streamingRef = useRef(false);
   /** Something was said while the model was answering, and is still waiting. */
   const queuedRef = useRef(false);
+  /**
+   * The exchange currently in flight or being read aloud, so a barge-in can
+   * find its way back to before it happened. Set when it is sent, cleared
+   * once it is either kept or unwound.
+   */
+  const activeExchangeRef = useRef<{ index: number; text: string } | null>(null);
+  /** Talking over the model mid-answer: stop reading, drop what it was
+   *  saying, and fold the continuation into the message that triggered it
+   *  rather than sending it as a second, separate one. */
+  const interruptedRef = useRef(false);
   /** In a call right now. Never restored from settings — see the note where
    *  the rest of them are read. */
   const [callMode, setCallMode] = useState(false);
   const voiceOn = voiceSetting || callMode;
   const [idleMinutes, setIdleMinutes] = useState(10);
   const [autoFile, setAutoFile] = useState(false);
-  const [micTimeout, setMicTimeout] = useState(120);
+  const [micTimeout, setMicTimeout] = useState(0);
   const [idleOpen, setIdleOpen] = useState(false);
   /** Which workspace panel is filling the pane, if any. */
   const [expanded, setExpanded] = useState<"map" | "ideas" | "conversations" | null>(null);
@@ -454,6 +464,32 @@ export default function App() {
   // keep showing a conversation the backend has already filed away.
   useEffect(() => onSpeakingChange(setTalking), []);
 
+  /**
+   * Talking over the model: interrupt it.
+   *
+   * Firing on `hearing` catches the moment speech starts rather than waiting
+   * for a phrase to finish transcribing, so reading stops the instant someone
+   * begins talking rather than a beat later. Two different moments this can
+   * happen in: while the model is still writing (`streaming`), where nothing
+   * can be unwound until that settles — `sendText`'s `finally` handles that
+   * case — or while a finished reply is only being read aloud (`talking`),
+   * where the exchange is already fully committed and there is nothing left
+   * to wait for, so it is unwound right here.
+   */
+  useEffect(() => {
+    if (!callMode || !hearing) return;
+    if (!activeExchangeRef.current || interruptedRef.current) return;
+    if (!streaming && !talking) return;
+    interruptedRef.current = true;
+    stopSpeaking();
+    if (!streaming) {
+      const ex = activeExchangeRef.current;
+      activeExchangeRef.current = null;
+      interruptedRef.current = false;
+      unwindInterrupted(ex);
+    }
+  }, [hearing, callMode, streaming, talking]);
+
   useEffect(() => {
     const p = onArchived((a) => {
       setTurns([]);
@@ -563,6 +599,22 @@ export default function App() {
     await sendText(draft.trim());
   }
 
+  /**
+   * Undo a call-mode exchange that was talked over, so the continuation can
+   * join the message that triggered it instead of arriving as a second one.
+   *
+   * `rewindConversation` truncates the live conversation to before `index` —
+   * dropping both the user turn and, once it landed, the assistant reply the
+   * backend already recorded — while the visible turns are sliced off the
+   * same way here, so the two never disagree about what was actually said.
+   */
+  function unwindInterrupted(ex: { index: number; text: string }) {
+    setTurns((t) => t.slice(0, ex.index));
+    void rewindConversation(ex.index).catch(() => {});
+    heardRef.current = [ex.text, heardRef.current].filter(Boolean).join(" ").trim();
+    setHeardText(heardRef.current);
+  }
+
   async function sendText(text: string) {
     if (!text || streaming) return;
     // Said rather than swallowed. Without this, pressing Send with no model
@@ -577,15 +629,21 @@ export default function App() {
     setError(null);
     pendingSpeech.current = "";
     streamingRef.current = true;
+    interruptedRef.current = false;
     setStreaming(true);
     setThinking(false);
     setThoughtChars(0);
+    activeExchangeRef.current = { index: turns.length, text };
     setTurns((t) => [...t, { role: "user", content: text }, { role: "assistant", content: "" }]);
 
     try {
       const reply = await sendMessage(
         text,
         (chunk) => {
+          // Talked over: the model is still writing, but nothing more of it
+          // reaches the screen or the speakers from here — `finally` below
+          // unwinds the whole exchange once this settles.
+          if (interruptedRef.current) return;
           setThinking(false);
           setTurns((t) => {
             const next = [...t];
@@ -610,43 +668,59 @@ export default function App() {
         // in front of the user's own is exactly backwards for this app. Only the
         // fact that it is thinking, and roughly how long, is surfaced.
         (chunk) => {
+          if (interruptedRef.current) return;
           setThinking(true);
           setThoughtChars((n) => n + chunk.length);
         },
       );
 
-      // The marker is the app's own plumbing, not something that was said —
-      // strip it before it is shown or archived, then act on it.
-      const { open, text: clean } = parseReply(reply);
-      if (clean !== reply) {
-        setTurns((t) => {
-          const next = [...t];
-          next[next.length - 1] = { role: "assistant", content: clean };
-          return next;
-        });
-      }
-      if (open) {
-        // In simple mode there is nothing to expand — it is a different page.
-        // "conversations" and "ideas" are one place now.
-        if (layout === "simple") setView(open === "conversations" ? "ideas" : open);
-        else setExpanded(open);
-      }
-      // Whatever did not end in a full stop — the last clause of the answer.
-      if (voiceOn) {
-        const tail = pendingSpeech.current.trim();
-        pendingSpeech.current = "";
-        if (tail) speakNext(tail, voiceKind === "neural");
+      if (interruptedRef.current) {
+        // Unwound below, in `finally` — nothing here should still act on a
+        // reply that's about to be discarded.
+      } else {
+        // The marker is the app's own plumbing, not something that was said —
+        // strip it before it is shown or archived, then act on it.
+        const { open, text: clean } = parseReply(reply);
+        if (clean !== reply) {
+          setTurns((t) => {
+            const next = [...t];
+            next[next.length - 1] = { role: "assistant", content: clean };
+            return next;
+          });
+        }
+        if (open) {
+          // In simple mode there is nothing to expand — it is a different page.
+          // "conversations" and "ideas" are one place now.
+          if (layout === "simple") setView(open === "conversations" ? "ideas" : open);
+          else setExpanded(open);
+        }
+        // Whatever did not end in a full stop — the last clause of the answer.
+        if (voiceOn) {
+          const tail = pendingSpeech.current.trim();
+          pendingSpeech.current = "";
+          if (tail) speakNext(tail, voiceKind === "neural");
+        }
       }
     } catch (e) {
-      setError(String(e));
-      setTurns((t) => t.slice(0, -1));
+      if (!interruptedRef.current) {
+        setError(String(e));
+        setTurns((t) => t.slice(0, -1));
+      }
     } finally {
       streamingRef.current = false;
       setStreaming(false);
-      // Whatever was said while it was answering goes now.
-      if (queuedRef.current) {
-        queuedRef.current = false;
-        if (heardRef.current.trim()) flushCall();
+      if (interruptedRef.current) {
+        interruptedRef.current = false;
+        const ex = activeExchangeRef.current;
+        activeExchangeRef.current = null;
+        if (ex) unwindInterrupted(ex);
+      } else {
+        activeExchangeRef.current = null;
+        // Whatever was said while it was answering goes now.
+        if (queuedRef.current) {
+          queuedRef.current = false;
+          if (heardRef.current.trim()) flushCall();
+        }
       }
       setThinking(false);
       inputRef.current?.focus();
@@ -811,6 +885,14 @@ export default function App() {
           </div>
         )}
         <div className="topbar-spacer" />
+
+        {/* Centered independent of everything else in this bar, and in the
+            bar itself rather than the status line at the bottom — an
+            expanded panel or the call view can cover that, and knowing what
+            you're talking to shouldn't depend on what else is on screen. */}
+        <div className="topbar-model" data-tauri-drag-region>
+          {provider ? `${provider.label} · ${modelName(provider.model)}` : "no model"}
+        </div>
 
         {pending > 0 && (
           <span className="row digest-group">
@@ -1328,7 +1410,6 @@ export default function App() {
       <Tooltip />
 
       <div className="statusbar">
-        {provider ? `${provider.label} · ${modelName(provider.model)}` : "no model"}
         {provider?.kind === "embedded" && <Vitals onChanged={() => void recheck()} />}
         <button
           className="status-toggle"

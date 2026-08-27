@@ -221,6 +221,16 @@ export function IconClock(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** A chevron — expands what's collapsed. Flip with a `.flip` class for the
+ *  opposite direction rather than a second icon nobody would tell apart. */
+export function IconChevron(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="12" height="12" {...props}>
+      <path d="M5 8.5 10 13.5 15 8.5" />
+    </Base>
+  );
+}
+
 export function IconDownload(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
