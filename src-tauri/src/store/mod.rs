@@ -109,6 +109,7 @@ pub struct StoredEvidence {
 pub struct ConversationView {
     pub session_id: i64,
     pub started_at: String,
+    pub title: String,
     pub model: String,
     pub turns: Vec<ViewTurn>,
     pub strong: Vec<String>,
@@ -807,10 +808,10 @@ impl Store {
 
     /// A conversation with every extracted span marked in place.
     pub fn conversation_view(&self, session_id: i64) -> Result<ConversationView> {
-        let (started_at, model): (String, String) = self.conn.query_row(
-            "SELECT started_at, model FROM sessions WHERE id = ?1",
+        let (started_at, title, model): (String, String, String) = self.conn.query_row(
+            "SELECT started_at, COALESCE(title, ''), model FROM sessions WHERE id = ?1",
             [session_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
 
         // Offsets on `evidence` are relative to the turn, which is exactly the
@@ -892,7 +893,7 @@ impl Store {
         }
 
         let (strong, weak) = self.nudges_for("session_nudges", "session_id", session_id)?;
-        Ok(ConversationView { session_id, started_at, model, turns, strong, weak })
+        Ok(ConversationView { session_id, started_at, title, model, turns, strong, weak })
     }
 
     /// One idea, with everything that supports it and how it has changed.

@@ -20,6 +20,7 @@ export interface ViewTurn {
 export interface ConversationView {
   session_id: number;
   started_at: string;
+  title: string;
   model: string;
   turns: ViewTurn[];
   strong: string[];

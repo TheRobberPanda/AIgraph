@@ -37,7 +37,6 @@ function Nudges({ strong, weak }: { strong: string[]; weak: string[] }) {
       )}
       {weak.length > 0 && (
         <section>
-          <h3 className="section">Left open</h3>
           <div className="notes">
             {weak.map((t, i) => (
               <p key={i} className="note weak">
@@ -143,9 +142,7 @@ export function ConversationFile({
       <header className="head">
         <button className="btn" onClick={onClose}>← Back</button>
         {view && (
-          <span className="muted">
-            {dateTime(view.started_at)} · {view.model}
-          </span>
+          <span className="muted">{view.title || dateTime(view.started_at)}</span>
         )}
       </header>
 
@@ -159,12 +156,10 @@ export function ConversationFile({
               it, not a replacement for it. */}
           <div className="deep-split">
           <div className="deep-main">
-          <h3 className="section">The conversation</h3>
           <div className="deep-transcript" ref={transcriptRef}>
             {view.turns.map((turn) =>
               turn.role === "user" ? (
                 <p key={turn.id} className="turn user">
-                  <span className="who">said</span>
                   {turn.segments.map((seg, i) =>
                     seg.idea_id === null ? (
                       <span key={i}>{seg.text}</span>
@@ -198,7 +193,7 @@ export function ConversationFile({
           </div>
 
           <aside className="deep-aside">
-          <h2 className="taken-head">Taken from it</h2>
+          <h2 className="taken-head">Extracted ideas</h2>
           {taken.length === 0 ? (
             <p className="blurb">Nothing was recorded from this one.</p>
           ) : (
@@ -273,7 +268,6 @@ function Reply({ text, digest }: { text: string; digest: string | null }) {
   if (digest && !full) {
     return (
       <div className="turn assistant">
-        <span className="who">answered</span>
         <div className="digest">{digest}</div>
         <button className="link" onClick={() => setFull(true)}>
           read the answer in full
@@ -284,7 +278,6 @@ function Reply({ text, digest }: { text: string; digest: string | null }) {
 
   return (
     <div className={`turn assistant${!digest && long && !full ? " clipped" : ""}`}>
-      <span className="who">answered</span>
       <Markdown>{!digest && long && !full ? `${text.slice(0, 420)}…` : text}</Markdown>
       {(digest || long) && (
         <button className="link" onClick={() => setFull(!full && !digest ? true : false)}>
@@ -375,27 +368,28 @@ export function IdeaFile({
         <p className="muted">Loading…</p>
       ) : (
         <>
-          <h2 className="deep-claim">{view.claim}</h2>
+          <h2 className="deep-claim">{view.title}</h2>
+          {view.title !== view.claim && <p className="deep-subclaim">{view.claim}</p>}
           <Nudges strong={view.strong} weak={view.weak} />
 
-          <h3 className="section">Said here</h3>
+          <h3 className="section">Why</h3>
           {view.evidence.map((e) => (
             <div key={e.id} className="evidence">
-              <blockquote>
+              {e.reasoning && <p className="why-inline">{e.reasoning}</p>}
+              <blockquote className="context-quote">
                 “{e.quote}”
                 {e.normalized && <span className="tag">loose match</span>}
               </blockquote>
-              {e.reasoning && <p className="why-inline">{e.reasoning}</p>}
             </div>
           ))}
 
-          {/* One link per conversation, at the bottom. It used to sit under
+          {/* One button per conversation, at the bottom. It used to sit under
               every quote, so a single conversation that said something three
-              times offered the same link three times. */}
+              times offered the same button three times. */}
           <div className="sources">
             {conversations(view.evidence).map((c) => (
-              <button key={c.session_id} className="link" onClick={() => onOpenConversation(c.session_id)}>
-                {plainDate(c.started_at)} — open the conversation →
+              <button key={c.session_id} className="btn" onClick={() => onOpenConversation(c.session_id)}>
+                Open the conversation — {plainDate(c.started_at)}
               </button>
             ))}
           </div>
@@ -415,10 +409,11 @@ export function IdeaFile({
           ) : (
             <div className="sources">
               <button
-                className={diving ? "link busy" : "link"}
+                className={diving ? "btn busy" : "btn"}
                 disabled={diving}
                 onClick={() => void think(true)}
               >
+                {diving && <span className="spinner" aria-hidden="true" />}
                 {diving ? "Reading…" : "Read it back — what this would need, and where it breaks"}
               </button>
             </div>

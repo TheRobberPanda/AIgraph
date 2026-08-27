@@ -83,16 +83,18 @@ pub fn read() -> Tally {
 mod tests {
     use super::*;
 
+    // One test, not two: `reset`/`record`/`read` share one process-wide static,
+    // so two tests touching it run as one no matter how they're written —
+    // `cargo test`'s default parallelism was interleaving them and each saw
+    // the other's numbers. Combined here rather than serialized, since they
+    // were really assertions about one sequence of calls to begin with.
     #[test]
-    fn a_run_with_no_timings_reports_nothing_rather_than_zero() {
+    fn a_run_is_measured_and_a_fresh_one_starts_from_nothing() {
         reset();
         record(None);
-        assert!(!read().measured());
+        assert!(!read().measured(), "no timings reported means nothing to measure");
         assert_eq!(read().wrote_per_second(), None);
-    }
 
-    #[test]
-    fn passes_add_up() {
         reset();
         let pass = serde_json::json!({
             "prompt_n": 1000, "prompt_ms": 2000.0,

@@ -1112,6 +1112,22 @@ textarea.field { font-family: var(--mono); font-size: 0.76rem; resize: vertical;
   border-left: 3px solid var(--accent);
   text-wrap: balance;
 }
+/* The claim as spoken, under the title that names it. Quieter than the
+   title — it's the source material, not the headline. */
+.deep-subclaim {
+  margin: -0.6rem 0 0.85rem;
+  padding-left: 0.75rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+/* The quote backing the reasoning above it — supporting context, not the
+   main text, so it reads smaller and after the "why" rather than before it. */
+.context-quote {
+  margin: 0.3rem 0 0.9rem;
+  font-size: 0.82rem;
+  color: var(--faint);
+}
 .notes { display: flex; flex-direction: column; gap: 0.25rem; }
 .note {
   display: flex; align-items: baseline; gap: 0.45rem;
@@ -1893,18 +1909,6 @@ blockquote {
   color: var(--muted);
   font-size: 0.8rem;
 }
-
-/* Who is speaking, marked once per turn rather than by changing typeface. */
-.who {
-  display: block;
-  margin-bottom: 0.15rem;
-  font-family: var(--mono);
-  font-size: 0.58rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--faint);
-}
-.turn.user .who { color: color-mix(in srgb, var(--accent) 75%, var(--faint)); }
 
 /* The short version of an answer. Set as a note rather than as speech. */
 .digest { font-size: 0.85rem; line-height: 1.55; color: var(--muted); }
