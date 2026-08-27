@@ -35,6 +35,7 @@ export function parseReply(text: string): Parsed {
 function forSpeech(text: string): string {
   return text
     .replace(MARKER, "")
+    .replace(/\[\[recall:\d+\]\]/g, "")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/[*_`#>]/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")

@@ -212,10 +212,10 @@ pub fn run() {
         .expect("error while building AIgraph")
         .run(|app, event| {
             // Closing the app must not discard an unfinished session either.
-            if let tauri::RunEvent::ExitRequested { .. } = event {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 use tauri::Manager;
                 let state = app.state::<commands::AppState>();
-                tauri::async_runtime::block_on(async {
+                let stop_result = tauri::async_runtime::block_on(async {
                     match commands::end_session_inner(&state, session::EndReason::AppClosing).await
                     {
                         Ok(Some(a)) => tracing::info!(session = a.session_id, "archived on exit"),
@@ -227,9 +227,31 @@ pub fn run() {
                     // managed state on the way out — which is how a model kept
                     // running after the window closed, holding its RAM and
                     // VRAM until something else needed them and failed to get
-                    // them. Stopping it explicitly does not depend on that.
-                    commands::stop_embedded_now(&state).await;
+                    // them. Stopping it explicitly does not depend on that,
+                    // and the app does not close until this returns — closing
+                    // instantly and hoping the server catches up is the same
+                    // bug with extra steps.
+                    commands::stop_embedded_now(&state).await
                 });
+                if let Err(e) = stop_result {
+                    tracing::error!(error = %e, "failed to stop the embedded model on exit");
+                    // The window stays open rather than vanishing on top of a
+                    // model that is still holding its memory — a closed
+                    // window with no error is indistinguishable from "it
+                    // worked", and that is the one outcome this has to avoid.
+                    api.prevent_exit();
+                    use tauri_plugin_dialog::DialogExt;
+                    app.dialog()
+                        .message(format!(
+                            "AIgraph could not stop the local model:\n\n{e}\n\n\
+                             The window has stayed open so this isn't hidden. \
+                             You can try closing again, or end the process \
+                             yourself before quitting."
+                        ))
+                        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                        .title("Could not stop the model")
+                        .blocking_show();
+                }
             }
         });
 }

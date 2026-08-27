@@ -18,12 +18,10 @@ import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 import {
   extractionProgress,
-  getDiagnostics,
   listIdeas,
   reextractSession,
   onExtractionProgress,
   onIdeasChanged,
-  type Diagnostics,
   type ExtractionProgress,
   type Evidence,
   type Idea,
@@ -61,12 +59,6 @@ function sessionsFor(idea: Idea): number {
   return new Set(idea.evidence.map((e) => e.session_id)).size;
 }
 
-const REASON_LABELS: Record<string, string> = {
-  not_found: "not in the transcript",
-  attributed_to_assistant: "quoted the assistant",
-  empty_quote: "empty quote",
-};
-
 /**
  * A plain list of extracted ideas.
  *
@@ -86,7 +78,6 @@ export default function Ideas({
 }) {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [diag, setDiag] = useState<Diagnostics | null>(null);
   // Which conversations are open. Was the inverse — a set of closed ones —
   // which meant anything newly extracted arrived expanded and the list grew
   // unreadable on its own.
@@ -112,7 +103,6 @@ export default function Ideas({
   const refresh = useCallback(() => {
     void listIdeas(folder).then(setIdeas);
     void listSessions(folder).then(setSessions);
-    void getDiagnostics().then(setDiag);
     void listFolders().then(setFolders);
   }, [folder]);
 
@@ -301,33 +291,6 @@ export default function Ideas({
           </>
         )}
       </div>
-      )}
-
-      {diag && (
-        <div className="diag">
-          {/* What is on screen, not what is in the database — the two differ
-              as soon as a folder is chosen, and showing the global count
-              beside an empty list reads as a bug. */}
-          <span>
-            <strong>{shown.length}</strong> ideas
-            {subjects.size > 0 && <span className="muted"> of {ideas.length}</span>}
-          </span>
-          {/* The honesty metric. Shown rather than logged, because a drop rate
-              nobody looks at is a drop rate nobody fixes. */}
-          <span>
-            <strong>{(diag.drop_rate * 100).toFixed(0)}%</strong> dropped
-          </span>
-          {diag.normalized > 0 && (
-            <span>
-              {diag.normalized} loose {diag.normalized === 1 ? "match" : "matches"}
-            </span>
-          )}
-          {diag.by_reason.map(([reason, n]) => (
-            <span key={reason} className="reason">
-              {n} {REASON_LABELS[reason] ?? reason}
-            </span>
-          ))}
-        </div>
       )}
 
       <div className="row filters">

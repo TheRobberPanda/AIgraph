@@ -29,8 +29,13 @@ export interface Settings {
   reasoning: boolean;
   /** The language everything is written in. "auto" follows the text. */
   language: Language;
+  /** Whether the chat pushes back on what's said, or just helps lay it out. */
+  chat_stance: ChatStance;
   /** Seconds of quiet in a call before what you said is sent. */
   call_silence_seconds: number;
+  /** Seconds of open microphone with nothing said before dictation stops
+   *  itself outside a call. 0 means never. */
+  mic_timeout_seconds: number;
   runtime: Runtime;
   layout: Layout;
 }
@@ -39,6 +44,9 @@ export interface Settings {
 export type Layout = "simple" | "advanced";
 
 export type Voice = "off" | "system" | "neural";
+
+/** Argue the substance, or just help lay it out. */
+export type ChatStance = "challenge" | "organize";
 
 export type Language = "auto" | "english" | "polish" | "spanish";
 

@@ -4,21 +4,49 @@
 //!
 //! The chat carries no persona, no tool definitions, no retrieved context, and
 //! no extraction instructions — nothing built from what the user said or from
-//! what the app knows. The one exception is [`style::SYSTEM_PROMPT`]: a fixed
-//! house voice, identical for every conversation and every provider, asking for
-//! direct engagement over agreeableness. It is a product decision, not a quiet
-//! addition — see `style.rs`.
+//! what the app knows. The one exception is the system prompt: a fixed house
+//! voice, identical for every conversation and every provider that shares its
+//! stance. There are two of them — [`style::SYSTEM_PROMPT`], which argues, and
+//! [`style::ORGANIZE_SYSTEM_PROMPT`], which doesn't — and which one is sent is
+//! a setting the person chose, not something built from what they said. It is
+//! a product decision, not a quiet addition — see `style.rs`.
 //!
 //! This is enforced two ways:
 //!
 //! 1. [`Conversation`] only ever grows by real user and assistant turns; the
-//!    system prompt is carried separately and is always the same constant.
+//!    system prompt is carried separately and is always one of the two fixed
+//!    constants.
 //! 2. `tests/chat_purity.rs` asserts the serialized request body carries
-//!    nothing but the user's own words and that one fixed string.
+//!    nothing but the user's own words and one of those two fixed strings.
 
 pub mod style;
 
 use crate::llm::types::{ChatRequest, Message, Role};
+
+/// Remove `[[recall:N]]` markers from a reply.
+///
+/// The marker earns its keep for exactly as long as the reply is fresh on
+/// screen and there's a UI on the other end to turn it into a highlight — a
+/// stored turn, a future prompt, or a transcript file has no such UI, so it
+/// gets a plain sentence instead of a bracketed number nobody there can use.
+pub fn strip_recall_markers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("[[recall:") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("]]") {
+            Some(end) => rest = &rest[start + end + 2..],
+            None => {
+                // Unterminated — a truncated stream, most likely. Drop the
+                // dangling fragment rather than show it.
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
 
 #[derive(Debug, Clone)]
 pub struct Conversation {
@@ -26,17 +54,21 @@ pub struct Conversation {
     messages: Vec<Message>,
     /// Short answers, because they are being spoken rather than read.
     call_mode: bool,
-    /// Titles of ideas already recorded, when the setting asks for them.
+    /// Ideas already recorded, by id and title, when the setting asks for them.
     ///
     /// The only user-derived thing that ever reaches the system prompt. It is
     /// off by construction unless someone turns it on, and the purity test
-    /// checks the shape without it.
-    recall: Vec<String>,
+    /// checks the shape without it. The id travels with the title so a reply
+    /// that draws on one can mark exactly which — see [`style::RECALL_TAIL`].
+    recall: Vec<(i64, String)>,
     /// Whether recall has been decided for this conversation. Distinct from
     /// the list being empty, which is a legitimate answer.
     recall_set: bool,
     /// Whether the model may think out loud before answering.
     reasoning: bool,
+    /// Argue the substance, or just help lay it out. See
+    /// [`crate::settings::ChatStance`].
+    stance: crate::settings::ChatStance,
 }
 
 impl Conversation {
@@ -48,6 +80,7 @@ impl Conversation {
             recall: Vec::new(),
             recall_set: false,
             reasoning: false,
+            stance: crate::settings::ChatStance::Challenge,
         }
     }
 
@@ -63,12 +96,16 @@ impl Conversation {
         self.call_mode = on;
     }
 
+    pub fn set_stance(&mut self, stance: crate::settings::ChatStance) {
+        self.stance = stance;
+    }
+
     /// Hand the model what has already been thought, by title.
     ///
     /// Titles scale linearly, so this is capped. Past the cap it becomes a
     /// retrieval problem — an embedding shortlist over titles, which is the
     /// same machinery reconciliation already uses.
-    pub fn set_recall(&mut self, titles: Vec<String>) {
+    pub fn set_recall(&mut self, titles: Vec<(i64, String)>) {
         self.recall = titles;
         self.recall_set = true;
     }
@@ -138,7 +175,10 @@ impl Conversation {
             messages: self.messages.clone(),
             reasoning: self.reasoning,
             system: Some({
-                let mut sys = String::from(style::SYSTEM_PROMPT);
+                let mut sys = String::from(match self.stance {
+                    crate::settings::ChatStance::Challenge => style::SYSTEM_PROMPT,
+                    crate::settings::ChatStance::Organize => style::ORGANIZE_SYSTEM_PROMPT,
+                });
                 sys.push_str(style::NAVIGATION);
                 sys.push_str(&crate::settings::language_instruction());
                 if self.call_mode {
@@ -146,8 +186,10 @@ impl Conversation {
                 }
                 if !self.recall.is_empty() {
                     sys.push_str(style::RECALL);
-                    for title in &self.recall {
-                        sys.push_str("\n- ");
+                    for (id, title) in &self.recall {
+                        sys.push_str("\n- [");
+                        sys.push_str(&id.to_string());
+                        sys.push_str("] ");
                         sys.push_str(title);
                     }
                     sys.push_str(style::RECALL_TAIL);
@@ -174,6 +216,48 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_one_marker_and_leaves_the_sentence() {
+        assert_eq!(
+            strip_recall_markers("Debt cuts both ways.[[recall:12]] So does trust."),
+            "Debt cuts both ways. So does trust."
+        );
+    }
+
+    #[test]
+    fn strips_several_markers_in_one_reply() {
+        assert_eq!(
+            strip_recall_markers("First point.[[recall:1]]\n\nSecond point.[[recall:2]]"),
+            "First point.\n\nSecond point."
+        );
+    }
+
+    #[test]
+    fn a_reply_with_no_marker_is_untouched() {
+        assert_eq!(strip_recall_markers("Nothing recalled here."), "Nothing recalled here.");
+    }
+
+    #[test]
+    fn a_marker_cut_off_mid_stream_is_dropped_rather_than_shown_raw() {
+        assert_eq!(strip_recall_markers("Debt cuts both ways.[[recall:1"), "Debt cuts both ways.");
+    }
+
+    #[test]
+    fn organize_stance_replaces_the_argumentative_prompt() {
+        let mut c = Conversation::new("m");
+        c.push_user("something");
+        c.set_stance(crate::settings::ChatStance::Organize);
+        let sys = c.to_request().system.unwrap();
+        assert!(sys.starts_with(style::ORGANIZE_SYSTEM_PROMPT));
+        assert!(!sys.starts_with(style::SYSTEM_PROMPT));
+    }
+
+    #[test]
+    fn the_default_stance_is_unchanged_from_before_the_setting_existed() {
+        let c = Conversation::new("m");
+        assert!(c.to_request().system.unwrap().starts_with(style::SYSTEM_PROMPT));
+    }
 
     #[test]
     fn request_contains_only_the_conversation_and_the_fixed_house_voice() {

@@ -29,6 +29,7 @@ export interface ConversationView {
 export interface IdeaEvidence {
   id: number;
   session_id: number;
+  turn_id: number;
   started_at: string;
   quote: string;
   reasoning: string;

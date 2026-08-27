@@ -159,7 +159,7 @@ pub struct Embedded {
 
 impl Drop for Embedded {
     fn drop(&mut self) {
-        self.stop();
+        let _ = self.stop();
     }
 }
 
@@ -495,21 +495,71 @@ impl Embedded {
         self.log.as_ref().map(|l| l.lock().unwrap().iter().cloned().collect()).unwrap_or_default()
     }
 
-    pub fn stop(&mut self) {
+    /// Stop the server, and confirm it is actually gone.
+    ///
+    /// Used to be `let _ =` on both the kill and the wait — which reported
+    /// success whether or not the process died, and closing the app is
+    /// exactly the moment nobody is still watching to notice it didn't. A
+    /// stuck server keeps its model loaded in RAM and VRAM until something
+    /// else needs that memory and fails to get it, which is a much worse
+    /// place to discover this than here.
+    pub fn stop(&mut self) -> Result<(), String> {
         if let Some(mut c) = self.child.take() {
-            let _ = c.kill();
-            let _ = c.wait();
+            // `Child::kill` is SIGKILL, not the SIGTERM the orphan path below
+            // sends — but there is no socket left to close cleanly if the
+            // process this is signaling is about to be orphaned by the app
+            // exiting anyway, so an immediate, certain death is the right
+            // trade here.
+            let killed = c.kill();
+            let waited = c.wait();
             let _ = std::fs::remove_file(self.pid_path());
-            return;
+            return match waited {
+                Ok(_) => Ok(()),
+                Err(e) => match killed {
+                    Err(ke) => Err(format!("could not signal the model's process: {ke}")),
+                    Ok(()) => {
+                        Err(format!("signalled the model but could not confirm it stopped: {e}"))
+                    }
+                },
+            };
         }
         // Nothing of ours in this process, but possibly one from a previous
         // run. Stopping has to reach that too, or the button says "stop" and
         // the model stays loaded.
-        if let Some(pid) = self.orphan_pid() {
-            kill(pid);
-            let _ = std::fs::remove_file(self.pid_path());
+        let Some(pid) = self.orphan_pid() else { return Ok(()) };
+
+        kill(pid);
+        if !wait_for_death(pid) {
+            // It ignored SIGTERM. One more, harder, chance before giving up.
+            hard_kill(pid);
+        }
+        let _ = std::fs::remove_file(self.pid_path());
+        if wait_for_death(pid) {
+            Ok(())
+        } else {
+            Err(format!(
+                "the model's process (pid {pid}) did not stop. It may still be                  holding its memory — you may need to end it yourself."
+            ))
         }
     }
+}
+
+/// Poll briefly for a pid to actually disappear, rather than trusting a signal
+/// send to mean a process death.
+#[cfg(unix)]
+fn wait_for_death(pid: u32) -> bool {
+    for _ in 0..15 {
+        if !is_llama_server(pid) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    !is_llama_server(pid)
+}
+
+#[cfg(not(unix))]
+fn wait_for_death(_pid: u32) -> bool {
+    true
 }
 
 /// Used only when the release list cannot be reached. Not a pin — see
@@ -687,6 +737,20 @@ fn is_llama_server(pid: u32) -> bool {
 #[cfg(not(unix))]
 fn is_llama_server(_pid: u32) -> bool {
     true
+}
+
+#[cfg(unix)]
+fn hard_kill(pid: u32) {
+    // SAFETY: same pid, already verified as our llama-server, that just
+    // proved it will not go quietly.
+    unsafe {
+        libc::kill(pid as i32, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn hard_kill(pid: u32) {
+    let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).status();
 }
 
 #[cfg(unix)]

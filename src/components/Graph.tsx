@@ -201,7 +201,20 @@ function ruleset(width: number) {
   };
 }
 
-export default function Graph({ folder }: { folder: number | null }) {
+export default function Graph({
+  folder,
+  onOpenFile,
+}: {
+  folder: number | null;
+  /**
+   * Open a node's file over the whole app instead of in the map's own side
+   * panel. Passed when the map itself is confined to a small pane — inside
+   * the advanced layout's workspace — where a second panel opening within
+   * that pane has nowhere to be but cramped. Full-page map keeps its own
+   * side panel, which has room to be one.
+   */
+  onOpenFile?: (kind: "idea" | "conversation", id: number) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const paletteRef = useRef<Palette>(readPalette());
   const nodesRef = useRef<Node[]>([]);
@@ -276,9 +289,22 @@ export default function Graph({ folder }: { folder: number | null }) {
   } | null>(null);
   /** Following a link out of an idea's file to the conversation it came from,
    *  which swaps the panel rather than stacking. */
-  const openConversation = useRef((id: number) =>
-    setPanel((p) => (p?.kind === "conversation" && p.id === id ? null : { kind: "conversation", id })),
-  );
+  const openConversation = useRef((id: number) => {
+    if (onOpenFile) {
+      onOpenFile("conversation", id);
+      return;
+    }
+    setPanel((p) => (p?.kind === "conversation" && p.id === id ? null : { kind: "conversation", id }));
+  });
+  useEffect(() => {
+    openConversation.current = (id: number) => {
+      if (onOpenFile) {
+        onOpenFile("conversation", id);
+        return;
+      }
+      setPanel((p) => (p?.kind === "conversation" && p.id === id ? null : { kind: "conversation", id }));
+    };
+  }, [onOpenFile]);
 
   const toScreen = useCallback((n: { x?: number; y?: number }, w: number, h: number) => {
     const v = viewRef.current;
@@ -1054,6 +1080,11 @@ export default function Graph({ folder }: { folder: number | null }) {
           const id = hit.data.kind === "idea" ? hit.data.idea_id : hit.data.session_id;
           if (id === null) return;
           const kind = hit.data.kind === "idea" ? "idea" : "conversation";
+          if (onOpenFile) {
+            focusOn(hit);
+            onOpenFile(kind, id);
+            return;
+          }
           if (panelRef.current?.kind === kind && panelRef.current.id === id) {
             focusNodeRef.current = null;
             revealRef.current = new Set();
@@ -1241,7 +1272,7 @@ export default function Graph({ folder }: { folder: number | null }) {
 
       </div>
 
-      {panel && (
+      {!onOpenFile && panel && (
         <FilePanel side={panelSide} onSideChange={setPanelSide} width={panelWidth} onWidthChange={setPanelWidth}>
           {panel.kind === "idea" ? (
             <IdeaFile

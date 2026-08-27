@@ -14,12 +14,14 @@ import {
   embeddedStatus,
   transcriptsDir,
   setTranscriptsDir,
+  reextractAll,
   voiceStatus,
   LANGUAGES,
   type EmbeddedStatus,
   type Settings as S,
   type Theme,
 } from "../lib/settings";
+import Confirm from "./Confirm";
 
 import {
   downloadSpeechModel,
@@ -39,6 +41,9 @@ export default function Settings() {
   const silenceRef = useNoWheel<HTMLInputElement>();
   const [s, setS] = useState<S | null>(null);
   const [dir, setDir] = useState("");
+  const [offerRedigest, setOfferRedigest] = useState<string | null>(null);
+  const [redigesting, setRedigesting] = useState(false);
+  const [redigestNote, setRedigestNote] = useState<string | null>(null);
   const [dirError, setDirError] = useState("");
 
   /** Ask the OS for a folder, and only keep it if it can actually be used. */
@@ -156,7 +161,16 @@ export default function Settings() {
             <button
               key={l.value}
               className={s.language === l.value ? "btn on" : "btn"}
-              onClick={() => void update({ language: l.value })}
+              onClick={() => {
+                const was = s.language;
+                void update({ language: l.value }).then(() => {
+                  // Nothing already read gets rewritten on its own — the
+                  // switch changes what happens from here forward, and
+                  // whether to go back and redo the rest is a real question,
+                  // not a side effect of picking a language.
+                  if (l.value !== was) setOfferRedigest(l.label);
+                });
+              }}
             >
               {l.label}
             </button>
@@ -302,6 +316,35 @@ export default function Settings() {
         </div>
       </Fold>
 
+      <Fold
+        title="How it responds"
+        summary={s.chat_stance === "challenge" ? "Pushes back" : "Organizes"}
+        {...fold("stance")}
+      >
+        <p className="blurb">
+          Two different things to come here for. Pushing back is the sharper
+          tool for a thought you want tested — it finds the weakest part and
+          presses on it. Organizing is for a thought you want laid out, not
+          argued with: it works on structure and leaves the substance alone.
+          Neither is more correct; they answer different reasons for being
+          here.
+        </p>
+        <div className="row">
+          <button
+            className={s.chat_stance === "challenge" ? "btn on" : "btn"}
+            onClick={() => void update({ chat_stance: "challenge" })}
+          >
+            Push back
+          </button>
+          <button
+            className={s.chat_stance === "organize" ? "btn on" : "btn"}
+            onClick={() => void update({ chat_stance: "organize" })}
+          >
+            Just organize
+          </button>
+        </div>
+      </Fold>
+
       <Fold title="Recall" summary={s.recall ? "on" : "off"} {...fold("recall")}>
                 <p className="blurb">
           Hands the conversation the titles of ideas already recorded in this
@@ -412,11 +455,36 @@ export default function Settings() {
           <li>Ideas are recorded by a model taking notes. It can misread, so every idea links back to the exact words it came from.</li>
           <li>An idea the model cannot quote is discarded rather than shown. The Ideas page reports how often that happens.</li>
           <li>Notes in the margin are the model's, marked <b>AI</b>, and never become recorded ideas.</li>
-          <li>The chat is asked to argue rather than agree — the same fixed instruction every time, regardless of model. Nothing about this app or its extraction is added.</li>
+          <li>The chat runs on one of two fixed instructions, chosen in <i>How it responds</i> above — arguing the substance, or organizing it without arguing — the same one every time regardless of model. Nothing about this app or its extraction is added.</li>
           <li>With Recall on, the chat is also handed the <i>titles</i> of ideas already recorded in the folder you are in. Nothing else of yours reaches it, and turning Recall off removes even that.</li>
           <li>Nothing leaves this machine unless a remote model is chosen in Models.</li>
         </ul>
       </Fold>
+
+      {redigesting && <p className="blurb">Reading everything again…</p>}
+      {redigestNote && <p className="blurb">{redigestNote}</p>}
+
+      {offerRedigest && (
+        <Confirm
+          title={`Read everything again in ${offerRedigest}? Ideas already recorded keep the language they were written in — only conversations you re-read from now on come out in ${offerRedigest}.`}
+          onCancel={() => setOfferRedigest(null)}
+          onConfirm={() => {
+            setOfferRedigest(null);
+            setRedigesting(true);
+            setRedigestNote(null);
+            reextractAll()
+              .then((n) =>
+                setRedigestNote(
+                  n > 0
+                    ? `Reading ${n} conversation${n === 1 ? "" : "s"} again in ${offerRedigest}.`
+                    : "Nothing to read again yet.",
+                ),
+              )
+              .catch((e) => setRedigestNote(String(e)))
+              .finally(() => setRedigesting(false));
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -257,6 +257,7 @@ export default function App() {
   const voiceOn = voiceSetting || callMode;
   const [idleMinutes, setIdleMinutes] = useState(10);
   const [autoFile, setAutoFile] = useState(false);
+  const [micTimeout, setMicTimeout] = useState(120);
   const [idleOpen, setIdleOpen] = useState(false);
   /** Which workspace panel is filling the pane, if any. */
   const [expanded, setExpanded] = useState<"map" | "ideas" | "conversations" | null>(null);
@@ -284,6 +285,7 @@ export default function App() {
       // reload did it again, which is what the blank window turned out to be.
       setIdleMinutes(s.idle_minutes);
       setAutoFile(s.auto_file);
+      setMicTimeout(s.mic_timeout_seconds);
       setLayout(s.layout);
     });
     const un = listen<{ voice?: string; call_mode?: boolean; layout?: "simple" | "advanced" }>(
@@ -922,7 +924,14 @@ export default function App() {
             </span>
           </button>
           <div className="ws-body">
-            <Graph folder={folderId} />
+            <Graph
+              folder={folderId}
+              // Advanced mode confines the map to a pane beside the
+              // conversation — opening a node's file there has no room to be
+              // anything but cramped, so it opens over the whole app instead.
+              // Full-page map (simple mode) keeps its own roomy side panel.
+              onOpenFile={layout === "advanced" ? (kind, id) => setDeep({ kind, id }) : undefined}
+            />
           </div>
         </section>
 
@@ -1124,7 +1133,16 @@ export default function App() {
               edits before anything becomes a turn, which keeps a misheard word
               from becoming a quote that looks authoritative. In a call there is
               nowhere to edit, so `heard` sends after a pause instead. */}
-          <Mic onPhrase={heard} onSpeaking={setHearing} disabled={streaming} />
+          <Mic
+            onPhrase={heard}
+            onSpeaking={setHearing}
+            disabled={streaming}
+            timeoutSeconds={micTimeout}
+            onTimeoutChange={(secs) => {
+              setMicTimeout(secs);
+              void patchSetting({ mic_timeout_seconds: secs });
+            }}
+          />
           {!callMode && (
             <button
               className={voiceSetting ? "icon-btn on" : "icon-btn"}

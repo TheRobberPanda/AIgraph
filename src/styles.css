@@ -555,7 +555,13 @@ input, textarea {
 .sheet .pane-inner { flex: 1; min-height: 0; }
 
 /* Opens upward — it sits at the bottom of the window. */
-.idle-pick { position: relative; display: inline-flex; }
+.idle-pick { position: relative; display: inline-flex; align-items: center; }
+.mic-caret {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--muted); font-size: 0.7rem; line-height: 1;
+  padding: 0 0.3rem; margin-left: -0.15rem; align-self: stretch;
+}
+.mic-caret:hover { color: var(--fg); }
 .idle-list {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -1177,6 +1183,88 @@ blockquote {
 .why em { color: var(--muted); font-style: normal; }
 .dive-text { font-size: 0.88rem; line-height: 1.6; margin-bottom: 0.6rem; }
 .dive-text p { margin: 0 0 0.6rem; }
+
+/* ---- Recall highlight: a reply drawing on something recorded earlier ---- */
+
+.recall-hit { position: relative; display: inline; }
+.recall-hit > .md,
+.recall-hit > * {
+  background: color-mix(in srgb, var(--gold) 14%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--gold) 45%, transparent);
+  border-radius: 4px;
+  cursor: default;
+}
+.recall-hit:hover > * { background: color-mix(in srgb, var(--gold) 24%, transparent); }
+
+/* Styled like a cropped screenshot someone sent you: a caption above a fixed
+   frame, with everything but the relevant line pushed out of focus and off
+   the edge rather than resized to fit. */
+.recall-card {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 0.4rem);
+  z-index: 20;
+  width: min(26rem, 80vw);
+  background: var(--surface-lift);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  animation: recall-in 120ms ease;
+}
+@keyframes recall-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.recall-card-head {
+  padding: 0.4rem 0.65rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.recall-card-frame {
+  position: relative;
+  max-height: 6.4rem;
+  padding: 0.65rem 0.75rem;
+  overflow: hidden;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--fg);
+  /* The frame crops rather than shrinks — a fade at the bottom says there is
+     more, the way the bottom of a cropped screenshot does. */
+  mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
+}
+.recall-blur {
+  filter: blur(2.5px);
+  opacity: 0.45;
+  user-select: none;
+}
+.recall-focus {
+  background: color-mix(in srgb, var(--gold) 30%, transparent);
+  box-shadow: inset 0 -1px 0 var(--gold);
+  border-radius: 2px;
+  padding: 0.03em 0.1em;
+}
+.recall-card-loading {
+  height: 2.4rem;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--surface) 25%,
+    var(--surface-lift) 50%,
+    var(--surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: recall-shimmer 1.1s ease infinite;
+}
+@keyframes recall-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.recall-card-miss { color: var(--muted); font-size: 0.82rem; }
 
 /* ---- Rendered markdown ---- */
 

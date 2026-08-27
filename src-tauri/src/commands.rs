@@ -318,9 +318,9 @@ pub async fn send_message(
         }
     }
 
-    let (call_mode, recall, reasoning) = {
+    let (call_mode, recall, reasoning, stance) = {
         let s = state.settings.lock().await;
-        (s.call_mode, s.recall, s.reasoning)
+        (s.call_mode, s.recall, s.reasoning, s.chat_stance)
     };
 
     // What has already been thought, by title, so the reply can connect the
@@ -345,6 +345,7 @@ pub async fn send_message(
         let mut guard = state.conversation.lock().await;
         let convo = guard.as_mut().ok_or("no conversation")?;
         convo.set_call_mode(call_mode);
+        convo.set_stance(stance);
         convo.set_reasoning(reasoning);
         if let Some(titles) = titles {
             convo.set_recall(titles);
@@ -380,8 +381,12 @@ pub async fn send_message(
         }
     };
 
+    // Kept out of anything that persists: the marker means nothing to a
+    // future request, to extraction, or to the transcript file — it exists
+    // only so this one response can be highlighted in this one window.
+    let archived = crate::chat::strip_recall_markers(&reply);
     if let Some(convo) = state.conversation.lock().await.as_mut() {
-        convo.push_assistant(&reply);
+        convo.push_assistant(&archived);
     }
     if let Some(s) = state.session.lock().await.as_mut() {
         s.touch();
@@ -935,7 +940,9 @@ async fn release_model_if_asked(state: &AppState) {
     let mut embedded = state.embedded.lock().await;
     if embedded.is_running() {
         tracing::info!("releasing the embedded model — keep in memory is off");
-        embedded.stop();
+        if let Err(e) = embedded.stop() {
+            tracing::warn!(error = %e, "failed to release the embedded model");
+        }
     }
 }
 
@@ -1430,7 +1437,9 @@ pub async fn install_llama_server(
     flavour: Option<String>,
 ) -> Result<(), String> {
     // Stopped first: the running server holds the file being replaced.
-    state.embedded.lock().await.stop();
+    if let Err(e) = state.embedded.lock().await.stop() {
+        return Err(format!("could not stop the running model before installing: {e}"));
+    }
     let flavour = flavour.unwrap_or_else(|| "cpu".into());
     let handle = app.clone();
     let embedded = crate::llm::embedded::Embedded::new(&state.data_dir);
@@ -1466,7 +1475,7 @@ pub async fn start_embedded(
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    state.embedded.lock().await.stop();
+    let _ = state.embedded.lock().await.stop();
     Err("llama-server did not come up in time".into())
 }
 
@@ -1509,15 +1518,14 @@ pub async fn download_model_file(
 
 #[tauri::command]
 pub async fn stop_embedded(state: State<'_, AppState>) -> Result<(), String> {
-    state.embedded.lock().await.stop();
-    Ok(())
+    state.embedded.lock().await.stop()
 }
 
 /// As [`stop_embedded`], for callers that only have the state itself — the
 /// exit handler runs outside any Tauri command, so it has no `State<'_, _>`
 /// to extract from.
-pub async fn stop_embedded_now(state: &AppState) {
-    state.embedded.lock().await.stop();
+pub async fn stop_embedded_now(state: &AppState) -> Result<(), String> {
+    state.embedded.lock().await.stop()
 }
 
 #[tauri::command]

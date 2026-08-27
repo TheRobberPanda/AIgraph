@@ -96,7 +96,7 @@ fn recall_adds_nothing_until_it_is_asked_for() {
 
     let mut on = Conversation::new("llama3.2");
     on.push_user("ownership is a debt");
-    on.set_recall(vec!["Entitlement as the source of gratitude".into()]);
+    on.set_recall(vec![(7, "Entitlement as the source of gratitude".into())]);
     let loud = serde_json::to_value(on.to_request()).unwrap();
     let with = loud["system"].as_str().unwrap();
 

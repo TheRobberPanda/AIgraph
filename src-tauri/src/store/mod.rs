@@ -161,6 +161,7 @@ pub struct IdeaView {
 pub struct IdeaEvidence {
     pub id: i64,
     pub session_id: i64,
+    pub turn_id: i64,
     pub started_at: String,
     pub quote: String,
     pub reasoning: String,
@@ -628,23 +629,23 @@ impl Store {
     /// Scoped to a folder, because a folder is a separate line of thinking and
     /// crossing them is exactly what folders exist to prevent. Titled ideas
     /// only — an untitled one would be handed over as an empty bullet.
-    pub fn idea_titles(&self, folder: Option<i64>, limit: usize) -> Result<Vec<String>> {
+    pub fn idea_titles(&self, folder: Option<i64>, limit: usize) -> Result<Vec<(i64, String)>> {
         let sql = match folder {
             Some(_) => {
-                "SELECT DISTINCT i.title FROM ideas i
+                "SELECT DISTINCT i.id, i.title FROM ideas i
                    JOIN evidence e ON e.idea_id = i.id
                    JOIN sessions s ON s.id = e.session_id
                   WHERE i.title <> '' AND COALESCE(s.folder_id, 1) = ?1
                   ORDER BY i.updated_at DESC LIMIT ?2"
             }
             None => {
-                "SELECT title FROM ideas
+                "SELECT id, title FROM ideas
                   WHERE title <> '' AND ?1 IS NULL
                   ORDER BY updated_at DESC LIMIT ?2"
             }
         };
         let mut stmt = self.conn.prepare(sql)?;
-        let rows = stmt.query_map(params![folder, limit as i64], |r| r.get(0))?;
+        let rows = stmt.query_map(params![folder, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -904,7 +905,7 @@ impl Store {
         let title = if title.is_empty() { claim.clone() } else { title };
 
         let mut ev = self.conn.prepare(
-            "SELECT e.id, e.session_id, s.started_at, e.quote, e.reasoning, e.normalized
+            "SELECT e.id, e.session_id, e.turn_id, s.started_at, e.quote, e.reasoning, e.normalized
              FROM evidence e JOIN sessions s ON s.id = e.session_id
              WHERE e.idea_id = ?1 ORDER BY s.started_at",
         )?;
@@ -913,10 +914,11 @@ impl Store {
                 Ok(IdeaEvidence {
                     id: r.get(0)?,
                     session_id: r.get(1)?,
-                    started_at: r.get(2)?,
-                    quote: r.get(3)?,
-                    reasoning: r.get(4)?,
-                    normalized: r.get::<_, i64>(5)? != 0,
+                    turn_id: r.get(2)?,
+                    started_at: r.get(3)?,
+                    quote: r.get(4)?,
+                    reasoning: r.get(5)?,
+                    normalized: r.get::<_, i64>(6)? != 0,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

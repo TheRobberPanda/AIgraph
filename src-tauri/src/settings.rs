@@ -72,6 +72,8 @@ pub struct Settings {
     /// between asking and hearing. Worth turning on for something genuinely
     /// hard, which is not most of what gets said to this app.
     pub reasoning: bool,
+    /// Whether the chat pushes back on what's said, or just helps lay it out.
+    pub chat_stance: ChatStance,
     /// The language the model is asked to answer and write in.
     ///
     /// `Auto` follows whatever the person is writing, which is right until it
@@ -85,6 +87,15 @@ pub struct Settings {
     /// mid-sentence. Five is long enough to gather a thought and short enough
     /// not to feel stuck.
     pub call_silence_seconds: u32,
+    /// Seconds of open microphone with nothing said before dictation stops
+    /// itself. Zero means never.
+    ///
+    /// Push-to-think dictation left running behind a person who got up is a
+    /// microphone recording an empty room until someone notices — the mic-on
+    /// indicator is one dot in a busy toolbar, easy not to see. Two minutes by
+    /// default; can be turned off for anyone who wants it to stay open no
+    /// matter how long the pause.
+    pub mic_timeout_seconds: u32,
     /// How the model bundled with the app is run, when that is the one in use.
     pub runtime: Runtime,
     /// Whether the map, ideas and conversations sit around the conversation
@@ -101,6 +112,24 @@ pub enum Layout {
     Simple,
     /// The map, the conversations and the ideas all around the talking.
     Advanced,
+}
+
+/// Whether the chat is asked to argue, or asked to stay out of the way.
+///
+/// Argument is the sharper tool for testing whether a thought holds up, and
+/// it is wrong for someone who came to lay a thought out and look at it, not
+/// defend it — a challenge lands as a fight when nobody asked for a debate.
+/// Neither is a "better" default; they are for different reasons to be here,
+/// and only the person having the conversation knows which one this is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatStance {
+    /// Find the weakest part of what was said and press on it. Today's
+    /// default, and the app's original voice.
+    #[default]
+    Challenge,
+    /// Help structure and clarify without arguing the substance.
+    Organize,
 }
 
 /// The language the app works in.
@@ -295,7 +324,9 @@ impl Default for Settings {
             recall: true,
             reasoning: false,
             language: Language::Auto,
+            chat_stance: ChatStance::Challenge,
             call_silence_seconds: 5,
+            mic_timeout_seconds: 120,
             runtime: Runtime::default(),
             layout: Layout::default(),
         }
