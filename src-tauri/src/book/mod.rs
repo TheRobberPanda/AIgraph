@@ -499,7 +499,11 @@ pub fn render(book: &Book) -> Result<Vec<u8>, BookError> {
     // exist once the book has been set, and a page cannot be pushed in front
     // of pages that already follow it. A line per chapter and a line per idea
     // under it, so the reserve has to account for both.
-    let per_page = ((FLOOR - MARGIN_TOP - 18.0) / BODY_LEAD).floor().max(1.0) as usize;
+    // Sized on the *tallest* line a contents can hold — a chapter — rather
+    // than the average. These pages cannot break when they fill up: they were
+    // reserved before there was anything to put on them, so the count has to
+    // be one that cannot overflow rather than one that usually doesn't.
+    let per_page = ((FLOOR - MARGIN_TOP - 18.0) / (BODY_LEAD + 1.0)).floor().max(1.0) as usize;
     let lines = book.chapters.len() + book.ideas + usize::from(book.conclusion.is_some());
     let sheets = lines.div_ceil(per_page).max(1);
     let contents: Vec<PdfLayerReference> = (0..sheets)
