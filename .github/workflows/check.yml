@@ -8,7 +8,12 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-22.04
+    # 24.04, not 22.04 — see the note in release.yml. The prebuilt
+    # onnxruntime that `ort-sys` downloads is compiled against glibc 2.38 and
+    # libstdc++ from GCC 13, so on 22.04 the test binary does not link at all:
+    # `undefined symbol: __isoc23_strtol`, out of libort_sys.rlib, which reads
+    # like a test failure (exit 101) and is not one.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Build dependencies
