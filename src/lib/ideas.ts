@@ -149,12 +149,28 @@ export function deleteIdea(ideaId: number): Promise<void> {
   return invoke("delete_idea", { ideaId });
 }
 
+/** What one of these turns a folder into. */
+export type BookFormat = "pdf" | "markdown";
+
+export interface BookWritten {
+  path: string;
+  ideas: number;
+  chapters: number;
+  /** Set when the book came out missing something worth mentioning. */
+  note: string | null;
+}
+
 /**
  * Set this folder's ideas as a book and write it to `path`.
  *
- * The folder is what decides the book — the same scope the map and this list
- * already use — so there is nothing to choose but where it goes.
+ * The folder is what decides the book — the same scope the map and the ideas
+ * list already use — so there is nothing to choose but the shape and where it
+ * goes.
  */
-export function exportBook(folder: number | null, path: string): Promise<string> {
-  return invoke<string>("export_book", { folder, path });
+export function exportBook(
+  folder: number | null,
+  path: string,
+  format: BookFormat,
+): Promise<BookWritten> {
+  return invoke<BookWritten>("export_book", { folder, path, format });
 }

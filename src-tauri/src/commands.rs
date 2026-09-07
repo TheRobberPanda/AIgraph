@@ -1533,12 +1533,16 @@ pub async fn stop_embedded_now(state: &AppState) -> Result<(), String> {
 /// The whole document is built in memory and written once. A PDF is not
 /// meaningfully streamable, and a half-written one at a path the person chose
 /// — very possibly over something — is worse than no file at all.
+///
+/// `format` is `pdf` or `markdown`. The book is the same either way; only the
+/// setting of it differs.
 #[tauri::command]
 pub async fn export_book(
     state: State<'_, AppState>,
     folder: Option<i64>,
     path: String,
-) -> Result<String, String> {
+    format: String,
+) -> Result<BookWritten, String> {
     let (rows, name) = {
         let store = state.store.lock().await;
         let rows = store.book_rows(folder).map_err(|e| e.to_string())?;
@@ -1553,12 +1557,51 @@ pub async fn export_book(
         (rows, name)
     };
 
-    let book = crate::book::assemble(&name, rows);
-    let ideas = book.ideas;
-    let pdf = crate::book::render(&book).map_err(|e| e.to_string())?;
-    std::fs::write(&path, pdf).map_err(|e| format!("could not write {path}: {e}"))?;
-    tracing::info!(path, ideas, "wrote a book");
-    Ok(path)
+    let mut book = crate::book::assemble(&name, rows);
+    if book.chapters.is_empty() {
+        return Err("nothing to make a book from — this folder has no recorded ideas yet".into());
+    }
+
+    // The opening and the conclusion need a model. Not having one is a book
+    // without them, not a failure: everything that makes the book *this
+    // person's* is already on the page, and the two written sections are the
+    // only part that isn't.
+    let extractor = state.extractor.lock().await.as_ref().map(|e| e.provider.clone());
+    let mut note = None;
+    match extractor {
+        None => note = Some("No model is loaded, so the opening and conclusion were left out."),
+        Some(model) => {
+            match crate::extract::closing::run(model.as_ref(), &book.title, &book.outline()).await {
+                Ok(closing) => {
+                    book.opening = Some(closing.opening).filter(|o| !o.trim().is_empty());
+                    book.conclusion = Some(closing.conclusion).filter(|c| !c.trim().is_empty());
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "no closing written; the book goes without one");
+                    note = Some("The model could not write the opening and conclusion.");
+                }
+            }
+        }
+    }
+
+    let bytes = match format.as_str() {
+        "markdown" => crate::book::markdown(&book).into_bytes(),
+        _ => crate::book::render(&book).map_err(|e| e.to_string())?,
+    };
+    std::fs::write(&path, bytes).map_err(|e| format!("could not write {path}: {e}"))?;
+    tracing::info!(path, ideas = book.ideas, format, "wrote a book");
+
+    Ok(BookWritten { path, ideas: book.ideas, chapters: book.chapters.len(), note })
+}
+
+/// What came of an export, so the page can say more than "done".
+#[derive(Serialize)]
+pub struct BookWritten {
+    pub path: String,
+    pub ideas: usize,
+    pub chapters: usize,
+    /// Set when the book came out missing something worth mentioning.
+    pub note: Option<&'static str>,
 }
 
 #[tauri::command]

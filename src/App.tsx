@@ -5,6 +5,7 @@ import {
   IconThink,
   IconMap,
   IconIdeas,
+  IconChats,
   IconModels,
   IconSettings,
   IconSend,
@@ -28,6 +29,7 @@ import ContextMenu from "./components/ContextMenu";
 import Tooltip from "./components/Tooltip";
 import FolderPicker from "./components/FolderPicker";
 import Graph from "./components/Graph";
+import Conversations from "./components/Conversations";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
 import SettingsPanel from "./components/Settings";
@@ -82,8 +84,8 @@ import {
  * the same list twice — once with the ideas hidden and once with the
  * conversations reduced to headings.
  */
-type Tab = "chat" | "map" | "ideas" | "settings";
-const TABS: Tab[] = ["chat", "map", "ideas", "settings"];
+type Tab = "chat" | "map" | "ideas" | "said" | "settings";
+const TABS: Tab[] = ["chat", "map", "ideas", "said", "settings"];
 
 /** What each place is called, in the app's own language. */
 function tabName(tab: Tab): string {
@@ -97,10 +99,11 @@ const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>>
   chat: IconThink,
   map: IconMap,
   ideas: IconIdeas,
+  said: IconChats,
   settings: IconSettings,
 };
 
-const MAIN: Tab[] = ["chat", "map", "ideas"];
+const MAIN: Tab[] = ["chat", "map", "ideas", "said"];
 /**
  * Settings only.
  *
@@ -973,7 +976,7 @@ export default function App() {
           conversation, and there was no way to see or change it from either —
           you had to go back to the composer to find out what you were looking
           at. */}
-      {(view === "map" || view === "ideas") && layout === "simple" && (
+      {(view === "map" || view === "ideas" || view === "said") && layout === "simple" && (
         <div className="row scope-bar">
           <button
             className="btn folder-btn"
@@ -990,6 +993,12 @@ export default function App() {
       <div className="pane">
       {view === "settings" ? (
         <SettingsPanel />
+      ) : view === "said" ? (
+        // Its own place rather than a panel in the workspace: this is the
+        // folder seen whole — everything said in it, and what that can be
+        // turned into — which is a thing you go and look at, not something
+        // you keep open beside the talking.
+        <Conversations folder={folderId} />
       ) : (
       // Everything at once rather than one tab at a time: the map and the
       // conversations to the left, the ideas they produced to the right, and

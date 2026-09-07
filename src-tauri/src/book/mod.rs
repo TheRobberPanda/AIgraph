@@ -82,6 +82,31 @@ pub struct Book {
     pub title: String,
     pub chapters: Vec<Chapter>,
     pub ideas: usize,
+    /// What this thinking is about, at the front. Written by the model from
+    /// the ideas — see `extract::closing` — and absent when no model was
+    /// loaded, which is a book without a foreword rather than no book.
+    pub opening: Option<String>,
+    /// What it amounts to, at the back. Same provenance, same caveat.
+    pub conclusion: Option<String>,
+}
+
+/// A line in the contents, and the page it points at.
+struct Mark {
+    text: String,
+    folio: usize,
+    /// Chapters sit flush; the ideas under them are indented and set smaller,
+    /// so the shape of the book is legible from the contents alone.
+    chapter: bool,
+}
+
+impl Book {
+    /// The ideas by subject, as the closing prompt wants them.
+    pub fn outline(&self) -> Vec<(String, Vec<String>)> {
+        self.chapters
+            .iter()
+            .map(|c| (c.name.clone(), c.entries.iter().map(|e| e.statement.clone()).collect()))
+            .collect()
+    }
 }
 
 pub struct Chapter {
@@ -177,7 +202,7 @@ pub fn assemble(folder_name: &str, rows: Vec<BookRow>) -> Book {
     }
 
     let ideas = chapters.iter().map(|c| c.entries.len()).sum();
-    Book { title: folder_name.to_string(), chapters, ideas }
+    Book { title: folder_name.to_string(), chapters, ideas, opening: None, conclusion: None }
 }
 
 /// Collapse the whitespace a transcript carries into running text.
@@ -306,6 +331,9 @@ struct Pen<'a> {
     folio: usize,
     /// Printed at the head of every page of a chapter.
     running: String,
+    /// Which page the entry being set began on, so the contents can point at
+    /// where an idea starts rather than where it happened to end.
+    entry_started_on: usize,
 }
 
 impl<'a> Pen<'a> {
@@ -377,6 +405,67 @@ impl<'a> Pen<'a> {
     }
 }
 
+/// The same book as Markdown.
+///
+/// Not a lesser PDF — a different thing to want. Markdown goes into whatever
+/// someone already writes in, keeps the quotations as quotations, and stays
+/// readable in a terminal in twenty years. The typesetting is what the PDF is
+/// for; this is for the words.
+pub fn markdown(book: &Book) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# {}\n\n", book.title));
+    out.push_str(&format!(
+        "{} idea{} across {} subject{}.\n\n",
+        book.ideas,
+        if book.ideas == 1 { "" } else { "s" },
+        book.chapters.len(),
+        if book.chapters.len() == 1 { "" } else { "s" },
+    ));
+
+    if let Some(opening) = book.opening.as_deref().filter(|o| !o.trim().is_empty()) {
+        out.push_str(&format!("{opening}\n\n"));
+        out.push_str(&format!("*{WRITTEN_HERE}*\n\n"));
+    }
+
+    out.push_str("## Contents\n\n");
+    for chapter in &book.chapters {
+        out.push_str(&format!("- **{}**\n", chapter.name));
+        for entry in &chapter.entries {
+            out.push_str(&format!("  - {}\n", entry.statement));
+        }
+    }
+    out.push('\n');
+
+    for chapter in &book.chapters {
+        out.push_str(&format!("## {}\n\n", chapter.name));
+        for entry in &chapter.entries {
+            out.push_str(&format!("### {}\n\n", entry.statement));
+            if let Some(claim) = &entry.claim {
+                out.push_str(&format!("{claim}\n\n"));
+            }
+            if !entry.why.is_empty() {
+                out.push_str(&format!("{}\n\n", entry.why));
+            }
+            for quote in &entry.quotes {
+                // Blockquote, with the date on its own line inside it, so the
+                // attribution cannot drift away from what it attributes.
+                out.push_str(&format!("> {}\n>\n> — {}\n\n", quote.text, on_day(&quote.said_on)));
+            }
+        }
+    }
+
+    if let Some(conclusion) = book.conclusion.as_deref().filter(|c| !c.trim().is_empty()) {
+        out.push_str(&format!("## In conclusion\n\n{conclusion}\n\n"));
+        out.push_str(&format!("*{WRITTEN_HERE}*\n"));
+    }
+
+    out
+}
+
+/// Said on both the typeset page and the Markdown one, in the same words.
+const WRITTEN_HERE: &str = "Written by the model from the ideas recorded here. \
+     It is the only part of this book that is not drawn from the conversations.";
+
 /// Set the book and hand back the PDF.
 pub fn render(book: &Book) -> Result<Vec<u8>, BookError> {
     if book.chapters.is_empty() {
@@ -401,16 +490,18 @@ pub fn render(book: &Book) -> Result<Vec<u8>, BookError> {
         y: MARGIN_TOP,
         folio: 0,
         running: String::new(),
+        entry_started_on: 0,
     };
 
     cover(&mut pen, book);
 
     // Reserved now and written last: the contents needs page numbers that only
-    // exist once the chapters have been set, and a page cannot be pushed in
-    // front of pages that already follow it. One line per chapter, and
-    // chapters are few, so one page is nearly always the whole of it.
+    // exist once the book has been set, and a page cannot be pushed in front
+    // of pages that already follow it. A line per chapter and a line per idea
+    // under it, so the reserve has to account for both.
     let per_page = ((FLOOR - MARGIN_TOP - 18.0) / BODY_LEAD).floor().max(1.0) as usize;
-    let sheets = book.chapters.len().div_ceil(per_page).max(1);
+    let lines = book.chapters.len() + book.ideas + usize::from(book.conclusion.is_some());
+    let sheets = lines.div_ceil(per_page).max(1);
     let contents: Vec<PdfLayerReference> = (0..sheets)
         .map(|_| {
             let (p, l) = doc.add_page(Mm(PAGE_W), Mm(PAGE_H), "Contents");
@@ -418,7 +509,18 @@ pub fn render(book: &Book) -> Result<Vec<u8>, BookError> {
         })
         .collect();
 
-    let mut marks: Vec<(String, usize)> = Vec::new();
+    // The foreword, if a model wrote one. Before the first chapter and after
+    // the contents, where a foreword goes.
+    if let Some(opening) = book.opening.as_deref().filter(|o| !o.trim().is_empty()) {
+        pen.running = String::new();
+        pen.page_break();
+        pen.y = MARGIN_TOP + 14.0;
+        pen.block(opening, BODY_PT + 0.7, BODY_LEAD + 0.6, 0.0, false, ink());
+        pen.y += 3.0;
+        written_here(&mut pen);
+    }
+
+    let mut marks: Vec<Mark> = Vec::new();
     for chapter in &book.chapters {
         // Chapters open a page of their own — the one place the layout spends
         // paper rather than saving it, because it is what tells a reader they
@@ -430,7 +532,7 @@ pub fn render(book: &Book) -> Result<Vec<u8>, BookError> {
         pen.running = String::new();
         pen.page_break();
         pen.running = chapter.name.clone();
-        marks.push((chapter.name.clone(), pen.folio));
+        marks.push(Mark { text: chapter.name.clone(), folio: pen.folio, chapter: true });
 
         pen.y = MARGIN_TOP + 14.0;
         pen.block(&chapter.name, CHAPTER_PT, CHAPTER_PT * MM_PER_PT * 1.25, 0.0, true, ink());
@@ -438,8 +540,31 @@ pub fn render(book: &Book) -> Result<Vec<u8>, BookError> {
         pen.y += 12.0;
 
         for entry in &chapter.entries {
+            // Recorded before the entry is set, not after: `set_entry` may
+            // break the page part-way through, and the contents should point
+            // at where the idea starts rather than where it ended up.
             set_entry(&mut pen, entry);
+            marks.push(Mark {
+                text: entry.statement.clone(),
+                folio: pen.entry_started_on,
+                chapter: false,
+            });
         }
+    }
+
+    if let Some(conclusion) = book.conclusion.as_deref().filter(|c| !c.trim().is_empty()) {
+        pen.running = String::new();
+        pen.page_break();
+        pen.running = "In conclusion".into();
+        marks.push(Mark { text: "In conclusion".into(), folio: pen.folio, chapter: true });
+
+        pen.y = MARGIN_TOP + 14.0;
+        pen.block("In conclusion", CHAPTER_PT, CHAPTER_PT * MM_PER_PT * 1.25, 0.0, true, ink());
+        rule(&pen, pen.y + 1.5, 26.0, accent());
+        pen.y += 12.0;
+        pen.block(conclusion, BODY_PT + 0.7, BODY_LEAD + 0.6, 0.0, false, ink());
+        pen.y += 3.0;
+        written_here(&mut pen);
     }
 
     write_contents(&doc, &pen, &contents, &marks, per_page);
@@ -470,6 +595,18 @@ fn cover(pen: &mut Pen, book: &Book) {
     pen.text(mark, SMALL_PT, MARGIN_X, PAGE_H - MARGIN_BOTTOM, false, faint());
 }
 
+/// Say plainly that this page is the machine's and not theirs.
+///
+/// Every other word in the book is either something the person said or a
+/// reading of something they said, traceable to a quotation on the same page.
+/// These two sections are not, and a book that blurred that line would be
+/// putting words in someone's mouth in a form they might hand to somebody
+/// else.
+fn written_here(pen: &mut Pen) {
+    pen.room_for(6.0);
+    pen.block(WRITTEN_HERE, SMALL_PT, SMALL_PT * MM_PER_PT * 1.5, 0.0, false, faint());
+}
+
 /// A short rule, used where a page needs a break rather than a heading.
 fn rule(pen: &Pen, y: f32, width: f32, color: Color) {
     pen.layer.set_outline_color(color);
@@ -488,6 +625,7 @@ fn set_entry(pen: &mut Pen, entry: &Entry) {
     // A heading stranded at the foot of a page with nothing under it reads as
     // a mistake, so it takes its first couple of lines with it or moves on.
     pen.room_for(STATEMENT_LEAD * 2.0 + BODY_LEAD * 2.0);
+    pen.entry_started_on = pen.folio;
     pen.y += 3.0;
     pen.block(&entry.statement, STATEMENT_PT, STATEMENT_LEAD, 0.0, true, ink());
     pen.y += 1.6;
@@ -552,7 +690,7 @@ fn write_contents(
     doc: &PdfDocumentReference,
     pen: &Pen,
     pages: &[PdfLayerReference],
-    marks: &[(String, usize)],
+    marks: &[Mark],
     per_page: usize,
 ) {
     let _ = doc;
@@ -569,6 +707,7 @@ fn write_contents(
             y: MARGIN_TOP,
             folio: 0,
             running: String::new(),
+            entry_started_on: 0,
         };
 
         if sheet == 0 {
@@ -576,12 +715,28 @@ fn write_contents(
             here.y += 6.0;
         }
 
-        for (name, folio) in marks.iter().skip(sheet * per_page).take(per_page) {
-            let folio = folio.to_string();
-            let w = here.rm.width(&folio, BODY_PT);
-            here.text(name, BODY_PT, MARGIN_X, here.y, false, ink());
-            here.text(&folio, BODY_PT, PAGE_W - MARGIN_X - w, here.y, false, grey());
-            here.y += BODY_LEAD;
+        for mark in marks.iter().skip(sheet * per_page).take(per_page) {
+            let (pt, indent, color) =
+                if mark.chapter { (BODY_PT, 0.0, ink()) } else { (BODY_PT - 1.2, 5.0, grey()) };
+            let folio = mark.folio.to_string();
+            let w = here.rm.width(&folio, pt);
+            // Truncated rather than wrapped: a contents line that runs to two
+            // lines stops being scannable, which is the only thing a contents
+            // page is for.
+            let room = MEASURE - indent - w - 3.0;
+            let mut line = mark.text.clone();
+            while here.metrics(mark.chapter).width(&line, pt) > room && line.len() > 1 {
+                line.truncate(line.len() - 1);
+                while !line.is_char_boundary(line.len()) {
+                    line.truncate(line.len() - 1);
+                }
+            }
+            if line != mark.text {
+                line.push('\u{2026}');
+            }
+            here.text(&line, pt, MARGIN_X + indent, here.y, mark.chapter, color);
+            here.text(&folio, pt, PAGE_W - MARGIN_X - w, here.y, false, faint());
+            here.y += if mark.chapter { BODY_LEAD + 1.0 } else { BODY_LEAD - 0.6 };
         }
     }
 }
@@ -714,13 +869,61 @@ mod tests {
         let name = folder
             .and_then(|id| store.folders().ok()?.into_iter().find(|f| f.id == id).map(|f| f.name))
             .unwrap_or_else(|| "Everything".into());
-        let book = assemble(&name, store.book_rows(folder).expect("rows"));
+        let mut book = assemble(&name, store.book_rows(folder).expect("rows"));
+        // Stood in rather than generated: this is for looking at the layout,
+        // and the layout does not care who wrote the words.
+        if std::env::var("AIGRAPH_BOOK_CLOSING").is_ok() {
+            book.opening = Some(
+                "This is a stretch of thinking about where obligation comes from, and \
+                 whether any of it was ever agreed to. It runs from theology into \
+                 economics without changing the question."
+                    .into(),
+            );
+            book.conclusion = Some(
+                "The positions here converge on one move: taking a debt that is assumed \
+                 to be owed and asking who agreed to it. Gratitude for existence, \
+                 maintenance as inheritance, and the entitlement of a generation are the \
+                 same argument at three scales. Where they pull apart is on whether the \
+                 absence of an agreement makes the obligation void or merely unchosen, \
+                 and nothing here settles that. What is still open is what replaces the \
+                 debt once it is refused."
+                    .into(),
+            );
+        }
         println!("{}: {} ideas in {} chapters", name, book.ideas, book.chapters.len());
         for c in &book.chapters {
             println!("  {} — {} entries", c.name, c.entries.len());
         }
         std::fs::write(&out, render(&book).expect("render")).expect("write");
         println!("wrote {out}");
+    }
+
+    /// The written sections have to be marked as written, in both formats —
+    /// it is the one place the book is not quoting anybody.
+    #[test]
+    fn the_generated_sections_say_they_were_generated() {
+        let mut book = assemble("Root", vec![row(1, "work", "Teaching does not scale", "q")]);
+        book.opening = Some("An opening.".into());
+        book.conclusion = Some("A conclusion.".into());
+
+        let md = markdown(&book);
+        assert_eq!(md.matches(WRITTEN_HERE).count(), 2, "once under each");
+        assert!(md.contains("## In conclusion"));
+        assert!(md.contains("## Contents"));
+        assert!(md.contains("> q"), "the quote stays a quote");
+
+        assert!(render(&book).is_ok());
+    }
+
+    /// A folder exported with no model loaded is still a book.
+    #[test]
+    fn no_closing_is_a_book_without_one_rather_than_an_error() {
+        let book = assemble("Root", vec![row(1, "work", "Teaching does not scale", "q")]);
+        assert!(book.opening.is_none());
+        let md = markdown(&book);
+        assert!(!md.contains(WRITTEN_HERE));
+        assert!(!md.contains("In conclusion"));
+        assert!(render(&book).is_ok());
     }
 
     #[test]

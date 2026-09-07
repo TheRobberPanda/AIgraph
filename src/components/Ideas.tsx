@@ -10,15 +10,13 @@ import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
 import MoveTo from "./MoveTo";
 import Sheet from "./Sheet";
-import { IconArchive, IconBook, IconPlus, IconRewind, IconTrash } from "./Icons";
+import { IconArchive, IconPlus, IconRewind, IconTrash } from "./Icons";
 import ImportChat from "./ImportChat";
 import { ConversationFile, IdeaFile } from "./Deep";
 import { categoryColor } from "../lib/categories";
-import { save } from "@tauri-apps/plugin-dialog";
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 import {
-  exportBook,
   extractionProgress,
   listIdeas,
   reextractSession,
@@ -91,9 +89,6 @@ export default function Ideas({
   const [moving, setMoving] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
-  /** Set and saved, or the reason it could not be. */
-  const [booking, setBooking] = useState(false);
-  const [bookNote, setBookNote] = useState<string | null>(null);
   /** Subjects being shown. Empty means all of them — the same toggle the map's
    *  legend uses, so a subject is picked out the same way in both places. */
   const [subjects, setSubjects] = useState<Set<string>>(new Set());
@@ -110,34 +105,6 @@ export default function Ideas({
     void listSessions(folder).then(setSessions);
     void listFolders().then(setFolders);
   }, [folder]);
-
-  /** The folder being looked at, by name — the book's title. */
-  const here = folders.find((f) => f.id === (folder ?? ROOT_FOLDER))?.name ?? "Ideas";
-
-  /**
-   * Set this folder's ideas as a book and save it.
-   *
-   * Ask where first: a file written somewhere the person did not choose is a
-   * file they have to go looking for, and this one is meant to be handed to
-   * somebody.
-   */
-  async function makeBook() {
-    setBookNote(null);
-    const path = await save({
-      title: `Save ${here} as a book`,
-      defaultPath: `${here.replace(/[/\\?%*:|"<>]/g, "-")}.pdf`,
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-    });
-    if (!path) return;
-    setBooking(true);
-    try {
-      setBookNote(`Saved to ${await exportBook(folder, path)}`);
-    } catch (e) {
-      setBookNote(String(e));
-    } finally {
-      setBooking(false);
-    }
-  }
 
   /**
    * Group ideas under the conversation that first produced them.
@@ -347,23 +314,7 @@ export default function Ideas({
         >
           <IconArchive />
         </button>
-        {/* The folder is already the scope of everything on this page, so a
-            book of it needs nothing chosen but where to put it. */}
-        <button
-          className={booking ? "icon-btn busy" : "icon-btn"}
-          disabled={booking || ideas.length === 0}
-          data-tip={
-            ideas.length === 0
-              ? "Nothing recorded here to make a book from"
-              : `Make a book of ${here} — ${ideas.length} ideas as a PDF`
-          }
-          onClick={() => void makeBook()}
-        >
-          {booking ? <span className="spinner" aria-hidden="true" /> : <IconBook />}
-        </button>
       </div>
-
-      {bookNote && <p className="blurb">{bookNote}</p>}
 
       {adding && (
         <ImportChat
