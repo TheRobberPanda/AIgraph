@@ -14,6 +14,7 @@
 pub mod book;
 pub mod chat;
 pub mod commands;
+pub mod compose;
 pub mod embed;
 pub mod extract;
 pub mod llm;
@@ -134,6 +135,11 @@ pub fn run() {
             commands::download_model_file,
             commands::folders,
             commands::export_book,
+            commands::compose_load,
+            commands::compose_clear,
+            commands::compose_send,
+            commands::save_text,
+            commands::reset_presets,
             commands::create_folder,
             commands::rename_folder,
             commands::delete_folder,
@@ -155,6 +161,8 @@ pub fn run() {
             commands::key_status,
             commands::set_anthropic_key,
             commands::clear_anthropic_key,
+            commands::set_openrouter_key,
+            commands::clear_openrouter_key,
             commands::idea_deep_dive,
             commands::preview_import,
             commands::import_conversation,

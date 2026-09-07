@@ -29,6 +29,9 @@ pub enum LocalKind {
     Embedded,
     Anthropic,
     ClaudeCli,
+    /// One key, most of the models there are. Speaks the OpenAI API, so it is
+    /// `OpenAiCompat` pointed somewhere else rather than a provider of its own.
+    OpenRouter,
 }
 
 impl LocalKind {
@@ -39,12 +42,13 @@ impl LocalKind {
             LocalKind::Embedded => "In the app",
             LocalKind::Anthropic => "Anthropic",
             LocalKind::ClaudeCli => "Claude CLI",
+            LocalKind::OpenRouter => "OpenRouter",
         }
     }
 
     /// Does using this send your thinking off the machine?
     pub fn is_remote(self) -> bool {
-        matches!(self, LocalKind::Anthropic | LocalKind::ClaudeCli)
+        matches!(self, LocalKind::Anthropic | LocalKind::ClaudeCli | LocalKind::OpenRouter)
     }
 }
 
@@ -100,6 +104,8 @@ pub fn obvious_choice(servers: &[Detected]) -> Option<(&Detected, &ModelInfo)> {
 /// business and the UI should show the choice rather than pick silently.
 /// Where the app's own `llama-server` listens. Loopback only.
 pub const EMBEDDED_HOST: &str = "http://127.0.0.1:8127";
+/// OpenRouter's OpenAI-compatible endpoint.
+pub const OPENROUTER_HOST: &str = "https://openrouter.ai/api/v1";
 
 pub async fn probe_local() -> Vec<Detected> {
     let embedded = async {
@@ -181,6 +187,24 @@ pub async fn probe_local() -> Vec<Detected> {
         })
     };
 
+    // Same reasoning as Anthropic: it appears once there is a key, and the
+    // list comes from the API so it is whatever that key can actually reach.
+    let openrouter = async {
+        let key = crate::secrets::get(crate::secrets::OPENROUTER)?;
+        let models = OpenAiCompat::new(OPENROUTER_HOST, "", Some(key), "openrouter")
+            .list_models()
+            .await
+            .unwrap_or_default();
+        Some(Detected {
+            kind: LocalKind::OpenRouter,
+            host: OPENROUTER_HOST.to_string(),
+            models: models
+                .into_iter()
+                .map(|id| ModelInfo { id, loaded: None, kind: ModelKind::Chat })
+                .collect(),
+        })
+    };
+
     let claude_cli = async {
         if !ClaudeCli::is_available() {
             return None;
@@ -195,7 +219,8 @@ pub async fn probe_local() -> Vec<Detected> {
         })
     };
 
-    let (e, a, b, c, d) = tokio::join!(embedded, ollama, lm_studio, anthropic, claude_cli);
+    let (e, a, b, c, d, f) =
+        tokio::join!(embedded, ollama, lm_studio, anthropic, claude_cli, openrouter);
     // Servers with nothing usable are kept in the list so the UI can say
     // "running, but load a model" instead of "not found", which would send the
     // user hunting the wrong problem.
@@ -204,7 +229,7 @@ pub async fn probe_local() -> Vec<Detected> {
     // "the first usable one" therefore prefers it — which is the right default:
     // it is the one the app is responsible for and the one that needs nothing
     // else installed.
-    [e, a, b, c, d].into_iter().flatten().collect()
+    [e, a, b, c, d, f].into_iter().flatten().collect()
 }
 
 /// Build a chat provider.
@@ -220,6 +245,12 @@ pub fn chat_provider(kind: LocalKind, host: &str, model: &str) -> Arc<dyn ChatPr
         LocalKind::ClaudeCli => {
             Arc::new(ClaudeCli::new((!model.is_empty()).then(|| model.to_string())))
         }
+        LocalKind::OpenRouter => Arc::new(OpenAiCompat::new(
+            OPENROUTER_HOST,
+            model,
+            crate::secrets::get(crate::secrets::OPENROUTER),
+            "openrouter",
+        )),
     }
 }
 
@@ -237,5 +268,11 @@ pub fn extractor(kind: LocalKind, host: &str, model: &str) -> Arc<dyn IdeaExtrac
         LocalKind::ClaudeCli => {
             Arc::new(ClaudeCli::new((!model.is_empty()).then(|| model.to_string())))
         }
+        LocalKind::OpenRouter => Arc::new(OpenAiCompat::new(
+            OPENROUTER_HOST,
+            model,
+            crate::secrets::get(crate::secrets::OPENROUTER),
+            "openrouter",
+        )),
     }
 }

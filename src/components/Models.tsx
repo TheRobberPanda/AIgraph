@@ -7,6 +7,8 @@ import {
   activeModels,
   chooseModel,
   clearAnthropicKey,
+  clearOpenRouterKey,
+  setOpenRouterKey,
   keyStatus,
   setAnthropicKey,
   type ActiveModels,
@@ -84,6 +86,8 @@ export default function Models() {
   const [keys, setKeys] = useState<KeyStatus | null>(null);
   const [keyInput, setKeyInput] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
+  const [routerInput, setRouterInput] = useState("");
+  const [routerBusy, setRouterBusy] = useState(false);
   const [source, setSource] = useState<Source>("local");
 
   const [showAll, setShowAll] = useState(false);
@@ -223,7 +227,8 @@ export default function Models() {
       claudecli: "Claude CLI (subscription)",
     })[kind] ?? kind;
 
-  const isRemote = (kind: string) => kind === "anthropic" || kind === "claudecli";
+  const isRemote = (kind: string) =>
+    kind === "anthropic" || kind === "claudecli" || kind === "openrouter";
 
   async function saveKey() {
     setKeyBusy(true);
@@ -236,6 +241,20 @@ export default function Models() {
       setError(String(e));
     } finally {
       setKeyBusy(false);
+    }
+  }
+
+  async function saveRouterKey() {
+    setRouterBusy(true);
+    setError(null);
+    try {
+      await setOpenRouterKey(routerInput);
+      setRouterInput("");
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRouterBusy(false);
     }
   }
 
@@ -305,6 +324,40 @@ export default function Models() {
             subscription can be used without a key. It rides a plan meant for
             interactive use — a convenience rather than something to depend on.
           </p>
+        )}
+
+        <h2 className="section">OpenRouter</h2>
+        <p className="blurb">
+          One key for most models there are — Claude, GPT, Gemini, Llama and the
+          rest — billed through OpenRouter rather than each provider separately.
+          Whatever the key can reach appears in the pickers above. Transcripts
+          go to OpenRouter and on to whichever model you pick.
+        </p>
+        {keys?.openrouter ? (
+          <div className="row">
+            <span className="tag ready">key saved</span>
+            <button className="btn" onClick={() => clearOpenRouterKey().then(refresh)}>
+              Remove it
+            </button>
+          </div>
+        ) : (
+          <div className="row">
+            <input
+              type="password"
+              className="field"
+              placeholder="sk-or-…"
+              value={routerInput}
+              onChange={(e) => setRouterInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void saveRouterKey()}
+            />
+            <button
+              className="btn"
+              disabled={routerBusy || !routerInput.trim()}
+              onClick={() => void saveRouterKey()}
+            >
+              {routerBusy ? "Checking…" : "Save"}
+            </button>
+          </div>
         )}
       </section>
       )}

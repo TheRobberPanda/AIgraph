@@ -39,6 +39,13 @@ struct Extractor {
 
 pub struct AppState {
     conversation: Mutex<Option<Conversation>>,
+    /// The Make tab's conversation, kept apart from the thinking one above.
+    ///
+    /// Two reasons they are not the same object. The context is different — a
+    /// folder's whole record rather than the last few turns — and nothing said
+    /// here is ever archived or extracted, so letting it share the live
+    /// session would put a request for a TikTok script into the map.
+    compose: Mutex<Option<Composing>>,
     active: Mutex<Option<Active>>,
     session: Mutex<Option<ActiveSession>>,
     store: Mutex<Store>,
@@ -89,6 +96,7 @@ impl AppState {
     ) -> Result<Self, crate::store::StoreError> {
         Ok(Self {
             conversation: Mutex::new(None),
+            compose: Mutex::new(None),
             active: Mutex::new(None),
             session: Mutex::new(None),
             store: Mutex::new(Store::open(db_path)?),
@@ -144,6 +152,15 @@ pub struct RunningExtraction {
     /// A phase name says what is happening; these say how much is left.
     pub index: i64,
     pub total: i64,
+}
+
+/// A Make-tab conversation in progress.
+pub struct Composing {
+    /// Which folder's record is loaded, so switching folders reloads it.
+    folder: Option<i64>,
+    system: String,
+    messages: Vec<crate::llm::types::Message>,
+    packed: crate::compose::Packed,
 }
 
 #[derive(Serialize, Clone)]
@@ -1594,6 +1611,153 @@ pub async fn export_book(
     Ok(BookWritten { path, ideas: book.ideas, chapters: book.chapters.len(), note })
 }
 
+// ------------------------------------------------------------ making things
+
+/// Load a folder's conversations as context, ready to be asked for something.
+///
+/// Reloaded whenever the folder changes, and cheap enough to call on every
+/// visit to the tab: it is one query and some string building, no model.
+#[tauri::command]
+pub async fn compose_load(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+) -> Result<crate::compose::Packed, String> {
+    {
+        // Already loaded for this folder, with an exchange in it worth keeping.
+        let held = state.compose.lock().await;
+        if let Some(c) = held.as_ref() {
+            if c.folder == folder && !c.messages.is_empty() {
+                return Ok(c.packed.clone());
+            }
+        }
+    }
+
+    let (conversations, name) = {
+        let store = state.store.lock().await;
+        let conversations = store.folder_turns(folder).map_err(|e| e.to_string())?;
+        let name = match folder {
+            None => "Everything".to_string(),
+            Some(id) => store
+                .folders()
+                .ok()
+                .and_then(|fs| fs.into_iter().find(|f| f.id == id).map(|f| f.name))
+                .unwrap_or_else(|| "this folder".to_string()),
+        };
+        (conversations, name)
+    };
+
+    let packed = crate::compose::pack(&conversations);
+    let system = crate::compose::system_prompt(&name, &packed);
+    let out = packed.clone();
+    *state.compose.lock().await = Some(Composing { folder, system, messages: Vec::new(), packed });
+    Ok(out)
+}
+
+/// Throw away the exchange, keeping the loaded folder.
+#[tauri::command]
+pub async fn compose_clear(state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(c) = state.compose.lock().await.as_mut() {
+        c.messages.clear();
+    }
+    Ok(())
+}
+
+/// Ask for something, with the folder in front of the model.
+///
+/// Streams on `compose:token`, separately from `chat:token`, so the two
+/// conversations cannot end up writing into each other's window.
+#[tauri::command]
+pub async fn compose_send(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    instruction: String,
+) -> Result<String, String> {
+    let instruction = instruction.trim().to_string();
+    if instruction.is_empty() {
+        return Err("nothing asked".into());
+    }
+
+    // The model *name*, not `model_id()` — that one is label-prefixed for
+    // logging ("openrouter/anthropic/claude-sonnet-4.5") and a server asked
+    // for it replies that no such model exists. The chat path reads the same
+    // field for the same reason.
+    let (provider, model) = {
+        let active = state.active.lock().await;
+        let a = active.as_ref().ok_or("no model selected yet")?;
+        (a.provider.clone(), a.model.clone())
+    };
+
+    let request = {
+        let mut held = state.compose.lock().await;
+        let c = held.as_mut().ok_or("no folder loaded yet")?;
+        c.messages.push(crate::llm::types::Message {
+            role: crate::llm::types::Role::User,
+            content: instruction.clone(),
+        });
+        crate::llm::ChatRequest {
+            model,
+            messages: c.messages.clone(),
+            system: Some(c.system.clone()),
+            // Left alone: making something long out of a folder is exactly the
+            // kind of work reasoning helps with, so this follows the setting
+            // rather than forcing it off the way extraction does.
+            reasoning: state.settings.lock().await.reasoning,
+        }
+    };
+
+    let emitter = app.clone();
+    let streamed = provider
+        .chat_stream(&request, &move |kind, text| {
+            let event = match kind {
+                ChunkKind::Content => "compose:token",
+                ChunkKind::Reasoning => "compose:reasoning",
+            };
+            let _ = emitter.emit(event, Token { text: text.to_string() });
+        })
+        .await;
+
+    match streamed {
+        Ok(reply) => {
+            if let Some(c) = state.compose.lock().await.as_mut() {
+                c.messages.push(crate::llm::types::Message {
+                    role: crate::llm::types::Role::Assistant,
+                    content: reply.clone(),
+                });
+            }
+            Ok(reply)
+        }
+        Err(e) => {
+            // The question goes back with it, so asking again does not stack a
+            // second copy of it on the first.
+            if let Some(c) = state.compose.lock().await.as_mut() {
+                c.messages.pop();
+            }
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Write one answer out. Whatever it is, it is text.
+#[tauri::command]
+pub async fn save_text(path: String, text: String) -> Result<String, String> {
+    std::fs::write(&path, text).map_err(|e| format!("could not write {path}: {e}"))?;
+    Ok(path)
+}
+
+/// Put the Make tab's instructions back to what they shipped as.
+#[tauri::command]
+pub async fn reset_presets(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Settings, String> {
+    let mut settings = state.settings.lock().await.clone();
+    settings.presets = crate::settings::default_presets();
+    settings.save(&state.data_dir).map_err(|e| e.to_string())?;
+    *state.settings.lock().await = settings.clone();
+    let _ = app.emit("settings:changed", settings.clone());
+    Ok(settings)
+}
+
 /// What came of an export, so the page can say more than "done".
 #[derive(Serialize)]
 pub struct BookWritten {
@@ -1903,6 +2067,7 @@ pub struct KeyStatus {
     pub anthropic: bool,
     /// Whether the `claude` CLI is on PATH.
     pub claude_cli: bool,
+    pub openrouter: bool,
 }
 
 #[tauri::command]
@@ -1910,6 +2075,7 @@ pub async fn key_status() -> Result<KeyStatus, String> {
     Ok(KeyStatus {
         anthropic: crate::secrets::get(crate::secrets::ANTHROPIC).is_some(),
         claude_cli: crate::llm::claude_cli::ClaudeCli::is_available(),
+        openrouter: crate::secrets::get(crate::secrets::OPENROUTER).is_some(),
     })
 }
 
@@ -1934,6 +2100,35 @@ pub async fn set_anthropic_key(key: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn clear_anthropic_key() -> Result<(), String> {
     crate::secrets::delete(crate::secrets::ANTHROPIC).map_err(|e| e.to_string())
+}
+
+/// Store an OpenRouter key, after asking it what it can reach.
+///
+/// Same contract as the Anthropic one: the listing is the check, so a typo
+/// fails here rather than three screens later as a chat that will not send.
+#[tauri::command]
+pub async fn set_openrouter_key(key: String) -> Result<Vec<String>, String> {
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        return Err("no key given".into());
+    }
+    let models = crate::llm::openai_compat::OpenAiCompat::new(
+        crate::llm::detect::OPENROUTER_HOST,
+        "",
+        Some(key.clone()),
+        "openrouter",
+    )
+    .list_models()
+    .await
+    .map_err(|e| format!("OpenRouter would not answer with that key: {e}"))?;
+
+    crate::secrets::set(crate::secrets::OPENROUTER, &key).map_err(|e| e.to_string())?;
+    Ok(models)
+}
+
+#[tauri::command]
+pub async fn clear_openrouter_key() -> Result<(), String> {
+    crate::secrets::delete(crate::secrets::OPENROUTER).map_err(|e| e.to_string())
 }
 
 /// The long-form argument about an idea, generated on first open and kept.

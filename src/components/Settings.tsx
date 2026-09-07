@@ -14,6 +14,7 @@ import {
   embeddedStatus,
   transcriptsDir,
   setTranscriptsDir,
+  resetPresets,
   reextractAll,
   voiceStatus,
   LANGUAGES,
@@ -445,6 +446,58 @@ export default function Settings() {
           whoever made it, and is several times faster where there is one.
         </p>
         <Engine onChanged={() => void embeddedStatus().then(setServer).catch(() => {})} />
+      </Fold>
+
+      {/* The Make tab's buttons are only saved instructions, and this is
+          where they can be argued with. A default cannot know what makes a
+          script sound like you rather than like a content farm — that is
+          exactly the sentence worth editing. */}
+      <Fold
+        title="What the Make buttons ask for"
+        summary={`${s.presets.length} instructions`}
+        {...fold("presets")}
+      >
+        <p className="blurb">
+          Each button on the Make tab sends the wording below, with the folder's
+          conversations in front of the model. Change any of it. The name is
+          what the button says; the instruction is what it does.
+        </p>
+        {s.presets.map((preset, i) => (
+          <div key={preset.id} className="preset">
+            <input
+              className="field preset-name"
+              value={preset.name}
+              onChange={(e) => {
+                const presets = [...s.presets];
+                presets[i] = { ...preset, name: e.target.value };
+                setS({ ...s, presets });
+              }}
+              onBlur={() => void update({ presets: s.presets })}
+            />
+            <textarea
+              className="field preset-prompt"
+              rows={4}
+              value={preset.prompt}
+              onChange={(e) => {
+                const presets = [...s.presets];
+                presets[i] = { ...preset, prompt: e.target.value };
+                setS({ ...s, presets });
+              }}
+              // Saved on leaving the box rather than on every keystroke: this
+              // writes a file and emits to every window, and doing that per
+              // character would fight the person typing.
+              onBlur={() => void update({ presets: s.presets })}
+            />
+          </div>
+        ))}
+        <div className="row">
+          <button
+            className="btn"
+            onClick={() => resetPresets().then(setS).catch((e) => setError(String(e)))}
+          >
+            Put them all back
+          </button>
+        </div>
       </Fold>
 
       <Fold title="How this app uses AI" {...fold("ai")}>

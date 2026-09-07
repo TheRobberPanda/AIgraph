@@ -42,3 +42,4 @@ pub fn delete(account: &str) -> Result<(), SecretError> {
 }
 
 pub const ANTHROPIC: &str = "anthropic-api-key";
+pub const OPENROUTER: &str = "openrouter-api-key";

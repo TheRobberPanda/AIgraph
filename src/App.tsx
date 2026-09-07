@@ -6,6 +6,7 @@ import {
   IconMap,
   IconIdeas,
   IconChats,
+  IconBook,
   IconModels,
   IconSettings,
   IconSend,
@@ -30,6 +31,7 @@ import Tooltip from "./components/Tooltip";
 import FolderPicker from "./components/FolderPicker";
 import Graph from "./components/Graph";
 import Conversations from "./components/Conversations";
+import Make from "./components/Make";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
 import SettingsPanel from "./components/Settings";
@@ -84,8 +86,8 @@ import {
  * the same list twice — once with the ideas hidden and once with the
  * conversations reduced to headings.
  */
-type Tab = "chat" | "map" | "ideas" | "said" | "settings";
-const TABS: Tab[] = ["chat", "map", "ideas", "said", "settings"];
+type Tab = "chat" | "map" | "ideas" | "said" | "make" | "settings";
+const TABS: Tab[] = ["chat", "map", "ideas", "said", "make", "settings"];
 
 /** What each place is called, in the app's own language. */
 function tabName(tab: Tab): string {
@@ -100,10 +102,11 @@ const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>>
   map: IconMap,
   ideas: IconIdeas,
   said: IconChats,
+  make: IconBook,
   settings: IconSettings,
 };
 
-const MAIN: Tab[] = ["chat", "map", "ideas", "said"];
+const MAIN: Tab[] = ["chat", "map", "ideas", "said", "make"];
 /**
  * Settings only.
  *
@@ -972,11 +975,18 @@ export default function App() {
         <WindowControls />
       </nav>
 
+      <div className="pane">
       {/* The folder scopes the map and the ideas as much as it scopes the
           conversation, and there was no way to see or change it from either —
           you had to go back to the composer to find out what you were looking
-          at. */}
-      {(view === "map" || view === "ideas" || view === "said") && layout === "simple" && (
+          at.
+
+          Inside the pane, not beside it. `.app` is a three-row grid and this
+          had no row of its own, so it was auto-placed into the last one and
+          spent its life at the bottom of the window, under the status bar,
+          saying "is what you are looking at" about something a screen away. */}
+      {(view === "map" || view === "ideas" || view === "said" || view === "make") &&
+        layout === "simple" && (
         <div className="row scope-bar">
           <button
             className="btn folder-btn"
@@ -989,10 +999,12 @@ export default function App() {
           <span className="row-meta">is what you are looking at</span>
         </div>
       )}
-
-      <div className="pane">
       {view === "settings" ? (
         <SettingsPanel />
+      ) : view === "make" ? (
+        // The other direction: not what was taken out of the folder, but what
+        // the folder can be turned into.
+        <Make folder={folderId} />
       ) : view === "said" ? (
         // Its own place rather than a panel in the workspace: this is the
         // folder seen whole — everything said in it, and what that can be

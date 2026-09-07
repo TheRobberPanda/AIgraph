@@ -2131,3 +2131,38 @@ blockquote {
 .context-item:hover { background: var(--surface); }
 .context-item.danger { color: var(--danger); }
 .context-item.armed { background: color-mix(in srgb, var(--danger) 16%, transparent); font-weight: 500; }
+
+
+/* ---- Making something out of a folder ---- */
+
+.make { display: flex; flex-direction: column; min-height: 0; }
+.make-head {
+  display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
+  padding-bottom: 0.5rem;
+}
+.make-presets { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; }
+
+.make-thread { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1.4rem; }
+.make-turn { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+/* What was asked, set as the instruction it is rather than as a chat bubble —
+   most of these arrive from a button and are a paragraph long. */
+.make-asked {
+  margin: 0;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.make-answer { align-self: stretch; font-size: 0.9rem; line-height: 1.6; }
+.make-box { margin-top: 0.9rem; }
+.make-box textarea {
+  width: 100%; border: none; background: transparent; color: var(--fg);
+  font: inherit; resize: none; outline: none; padding: 0.4rem 0;
+}
+.make-box .bar { display: flex; justify-content: flex-end; gap: 0.4rem; padding-bottom: 0.3rem; }
+
+/* One editable instruction in Settings. */
+.preset { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.9rem; }
+.preset-name { font-weight: 600; }
+.preset-prompt { line-height: 1.5; resize: vertical; font: inherit; font-size: 0.82rem; }

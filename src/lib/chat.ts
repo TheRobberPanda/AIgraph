@@ -2,7 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type Role = "user" | "assistant";
-export type LocalKind = "ollama" | "lmstudio" | "embedded" | "anthropic" | "claudecli";
+export type LocalKind =
+  | "ollama"
+  | "lmstudio"
+  | "embedded"
+  | "anthropic"
+  | "claudecli"
+  | "openrouter";
 
 export interface Turn {
   role: Role;

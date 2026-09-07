@@ -38,6 +38,16 @@ export interface Settings {
   mic_timeout_seconds: number;
   runtime: Runtime;
   layout: Layout;
+  /** The one-click instructions on the Make tab, yours to edit. */
+  presets: Preset[];
+}
+
+/** A named instruction, one button on the Make tab. */
+export interface Preset {
+  /** Stable across renames, so editing the label does not orphan the entry. */
+  id: string;
+  name: string;
+  prompt: string;
 }
 
 /** One place at a time, or everything around the conversation at once. */
@@ -90,6 +100,11 @@ export function getSettings(): Promise<Settings> {
 
 export function saveSettings(settings: Settings): Promise<Settings> {
   return invoke<Settings>("save_settings", { settings });
+}
+
+/** Put the Make tab's instructions back to what they shipped as. */
+export function resetPresets(): Promise<Settings> {
+  return invoke<Settings>("reset_presets");
 }
 
 export function activeModels(): Promise<ActiveModels> {
@@ -149,6 +164,7 @@ export function applyUiScale(percent: number): void {
 export interface KeyStatus {
   anthropic: boolean;
   claude_cli: boolean;
+  openrouter: boolean;
 }
 
 export function keyStatus(): Promise<KeyStatus> {
@@ -162,6 +178,15 @@ export function setAnthropicKey(key: string): Promise<string[]> {
 
 export function clearAnthropicKey(): Promise<void> {
   return invoke("clear_anthropic_key");
+}
+
+/** Checked against OpenRouter before it is saved, so a typo fails here. */
+export function setOpenRouterKey(key: string): Promise<string[]> {
+  return invoke<string[]>("set_openrouter_key", { key });
+}
+
+export function clearOpenRouterKey(): Promise<void> {
+  return invoke("clear_openrouter_key");
 }
 
 /** The model the app runs itself. */

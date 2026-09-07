@@ -88,6 +88,16 @@ pub struct StoredIdea {
     pub weak: Vec<String>,
 }
 
+/// One conversation as it happened. See [`Store::folder_turns`].
+#[derive(Debug, Clone)]
+pub struct Recorded {
+    pub session_id: i64,
+    pub title: String,
+    pub started_at: String,
+    /// `(role, text)` in the order they were said.
+    pub turns: Vec<(String, String)>,
+}
+
 /// One quote, with the idea it supports. See [`Store::book_rows`].
 #[derive(Debug, Clone)]
 pub struct BookRow {
@@ -955,6 +965,41 @@ impl Store {
 
         let (strong, weak) = self.nudges_for("nudges", "idea_id", idea_id)?;
         Ok(IdeaView { id: idea_id, claim, title, revision, strong, weak, evidence, revisions })
+    }
+
+    /// Every turn of every conversation in one folder, in order.
+    ///
+    /// The whole record rather than what was extracted from it. The ideas are
+    /// a reading of these conversations; anything that wants to make something
+    /// *new* out of them — a script, a chapter, an argument — needs the
+    /// conversations themselves, because the reading has already thrown away
+    /// the phrasing, the digressions, and the order things arrived in.
+    pub fn folder_turns(&self, folder: Option<i64>) -> Result<Vec<Recorded>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, COALESCE(s.title, ''), s.started_at, t.role, t.text
+             FROM sessions s JOIN turns t ON t.session_id = s.id
+             WHERE s.archived = 0 AND (?1 IS NULL OR s.folder_id = ?1)
+             ORDER BY s.started_at, s.id, t.ord",
+        )?;
+        let rows = stmt.query_map([folder], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?;
+
+        let mut out: Vec<Recorded> = Vec::new();
+        for row in rows {
+            let (id, title, started_at, role, text) = row?;
+            if out.last().map(|c: &Recorded| c.session_id != id).unwrap_or(true) {
+                out.push(Recorded { session_id: id, title, started_at, turns: Vec::new() });
+            }
+            out.last_mut().expect("just pushed").turns.push((role, text));
+        }
+        Ok(out)
     }
 
     /// One folder's ideas in reading order, with everything a page needs.
