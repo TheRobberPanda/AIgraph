@@ -1528,6 +1528,39 @@ pub async fn stop_embedded_now(state: &AppState) -> Result<(), String> {
     state.embedded.lock().await.stop()
 }
 
+/// Set a folder's ideas as a book and write it to `path`.
+///
+/// The whole document is built in memory and written once. A PDF is not
+/// meaningfully streamable, and a half-written one at a path the person chose
+/// — very possibly over something — is worse than no file at all.
+#[tauri::command]
+pub async fn export_book(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+    path: String,
+) -> Result<String, String> {
+    let (rows, name) = {
+        let store = state.store.lock().await;
+        let rows = store.book_rows(folder).map_err(|e| e.to_string())?;
+        let name = match folder {
+            None => "Everything".to_string(),
+            Some(id) => store
+                .folders()
+                .ok()
+                .and_then(|fs| fs.into_iter().find(|f| f.id == id).map(|f| f.name))
+                .unwrap_or_else(|| "Ideas".to_string()),
+        };
+        (rows, name)
+    };
+
+    let book = crate::book::assemble(&name, rows);
+    let ideas = book.ideas;
+    let pdf = crate::book::render(&book).map_err(|e| e.to_string())?;
+    std::fs::write(&path, pdf).map_err(|e| format!("could not write {path}: {e}"))?;
+    tracing::info!(path, ideas, "wrote a book");
+    Ok(path)
+}
+
 #[tauri::command]
 pub async fn folders(state: State<'_, AppState>) -> Result<Vec<crate::store::Folder>, String> {
     state.store.lock().await.folders().map_err(|e| e.to_string())

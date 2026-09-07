@@ -88,6 +88,18 @@ pub struct StoredIdea {
     pub weak: Vec<String>,
 }
 
+/// One quote, with the idea it supports. See [`Store::book_rows`].
+#[derive(Debug, Clone)]
+pub struct BookRow {
+    pub idea_id: i64,
+    pub title: String,
+    pub claim: String,
+    pub category: String,
+    pub quote: String,
+    pub reasoning: String,
+    pub said_on: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StoredEvidence {
     pub id: i64,
@@ -943,6 +955,47 @@ impl Store {
 
         let (strong, weak) = self.nudges_for("nudges", "idea_id", idea_id)?;
         Ok(IdeaView { id: idea_id, claim, title, revision, strong, weak, evidence, revisions })
+    }
+
+    /// One folder's ideas in reading order, with everything a page needs.
+    ///
+    /// Flat rather than nested: one row per quote, grouped by the caller. The
+    /// ordering is the book's — by subject, then by when the thought was first
+    /// had — so a chapter reads as the thinking developed rather than as the
+    /// database happened to store it.
+    ///
+    /// Quotes are restricted to the folder as well as the ideas. An idea
+    /// supported by conversations in two folders belongs to both, but a book
+    /// of this folder should only ever quote what was said in it.
+    pub fn book_rows(&self, folder: Option<i64>) -> Result<Vec<BookRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT i.id, i.title, i.claim, i.category, e.quote, e.reasoning, s.started_at,
+                    (SELECT MIN(s2.started_at) FROM evidence e2
+                       JOIN sessions s2 ON s2.id = e2.session_id
+                      WHERE e2.idea_id = i.id AND s2.archived = 0
+                        AND (?1 IS NULL OR s2.folder_id = ?1)) AS first_said
+             FROM ideas i
+             JOIN evidence e ON e.idea_id = i.id
+             JOIN sessions s ON s.id = e.session_id
+             WHERE s.archived = 0 AND (?1 IS NULL OR s.folder_id = ?1)
+             ORDER BY i.category, first_said, i.id, s.started_at",
+        )?;
+        let rows = stmt.query_map([folder], |r| {
+            let title: String = r.get(1)?;
+            let claim: String = r.get(2)?;
+            Ok(BookRow {
+                idea_id: r.get(0)?,
+                // Ideas extracted before titles existed have none; the claim
+                // is what they were always shown under.
+                title: if title.trim().is_empty() { claim.clone() } else { title },
+                claim,
+                category: r.get(3)?,
+                quote: r.get(4)?,
+                reasoning: r.get(5)?,
+                said_on: r.get(6)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
     }
 
     /// Every nudge in one table, grouped by owner.

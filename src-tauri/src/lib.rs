@@ -11,6 +11,7 @@
 //! store/     SQLite, plus markdown you own                 (no lock-in)
 //! ```
 
+pub mod book;
 pub mod chat;
 pub mod commands;
 pub mod embed;
@@ -132,6 +133,7 @@ pub fn run() {
             commands::model_files,
             commands::download_model_file,
             commands::folders,
+            commands::export_book,
             commands::create_folder,
             commands::rename_folder,
             commands::delete_folder,

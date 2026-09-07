@@ -148,3 +148,13 @@ export function stopDigest(): Promise<void> {
 export function deleteIdea(ideaId: number): Promise<void> {
   return invoke("delete_idea", { ideaId });
 }
+
+/**
+ * Set this folder's ideas as a book and write it to `path`.
+ *
+ * The folder is what decides the book — the same scope the map and this list
+ * already use — so there is nothing to choose but where it goes.
+ */
+export function exportBook(folder: number | null, path: string): Promise<string> {
+  return invoke<string>("export_book", { folder, path });
+}
