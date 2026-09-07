@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.0
+
+The first release with a Linux download. There was never one before: the
+prebuilt onnxruntime the speech model pulls in is compiled against glibc 2.38,
+the release ran on Ubuntu 22.04 with glibc 2.35, and the build failed at the
+linker every time — with an exit code that read like a failing test. Building
+on 24.04 fixes it. Linux needs glibc 2.38 or newer (Ubuntu 24.04, Debian 13,
+Fedora 39 and later); that floor was always set by onnxruntime rather than by
+the choice of builder.
+
+### A folder can become a book
+
+There is a Conversations tab now, showing everything said in the folder you
+are in and nothing from any other. From it, **Turn this into…** sets the whole
+folder as a book: a contents page listing every idea under its subject, the
+ideas themselves with the reasoning and the words they came from set as dated
+quotations, and a conclusion. As a typeset PDF, or as Markdown.
+
+The opening and the conclusion are written by the model from the ideas. They
+are the only prose in the app that is not something you said or a reading of
+something you said, and both say so on the page. Without a model loaded the
+book still exports, without those two sections.
+
+Noto Serif is bundled for it, so a Polish or Spanish book keeps its diacritics
+on any machine.
+
+### Also
+
+- The language setting reaches the app's own tabs and buttons, not just the
+  model — partly; screens not yet translated stay in English.
+- Talking over the model in a call interrupts it: reading stops, the reply is
+  discarded, and what you said joins the message that prompted it.
+- Closing the window stops the local model before the window goes, and says so
+  if it cannot, instead of leaving it holding memory.
+- Ideas are titled with a statement of the idea rather than a label for its
+  topic.
+- A quote that verifies except for one substituted word keeps the idea, using
+  the longest run that really was said, rather than discarding the thought.
+
 ## 0.1.0 — first public release
 
 The app was called Idea Graph while it was being built. It is AIgraph now.
