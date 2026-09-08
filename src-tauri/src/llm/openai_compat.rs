@@ -243,8 +243,17 @@ impl ChatProvider for OpenAiCompat {
         let mut full = String::new();
         let mut buf = Vec::<u8>::new();
         let mut stream = resp.bytes_stream();
+        let ticket = crate::llm::cancel::start();
 
         while let Some(chunk) = stream.next().await {
+            // Stopped. Returning drops the body, which closes the connection,
+            // which is what actually makes the server stop working — a flag
+            // that only stopped this end reading would leave it filling a slot
+            // nobody is listening to. What arrived before the stop is kept:
+            // the person ended it, they did not hit an error.
+            if ticket.cancelled() {
+                return Ok(full);
+            }
             buf.extend_from_slice(&chunk.map_err(|e| LlmError::Transport(e.to_string()))?);
 
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {

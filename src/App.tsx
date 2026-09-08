@@ -21,6 +21,7 @@ import {
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import { t as tr, useLang } from "./lib/i18n";
 import { useUndoable } from "./lib/undo";
+import { stopGeneration } from "./lib/compose";
 import Confirm from "./components/Confirm";
 import Sheet from "./components/Sheet";
 import Call from "./components/Call";
@@ -35,6 +36,7 @@ import ConversationsRail from "./components/ConversationsRail";
 import Make from "./components/Make";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
+import Boundary from "./components/Boundary";
 import SettingsPanel from "./components/Settings";
 import { applyAccent, applyTheme, applyUiScale, getSettings, saveSettings } from "./lib/settings";
 import Markdown from "./components/Markdown";
@@ -516,6 +518,10 @@ export default function App() {
     if (!streaming && !talking) return;
     interruptedRef.current = true;
     stopSpeaking();
+    // And stop the model, rather than letting it finish an answer nobody will
+    // see. This used to only stop the reading: the reply was discarded, but a
+    // local model went on filling a slot for however long it had left.
+    void stopGeneration().catch(() => {});
     if (!streaming) {
       const ex = activeExchangeRef.current;
       activeExchangeRef.current = null;
@@ -1069,12 +1075,16 @@ export default function App() {
         </div>
       )}
       {view === "settings" ? (
-        <SettingsPanel />
+        <Boundary what="Settings">
+          <SettingsPanel />
+        </Boundary>
       ) : layout === "simple" && view === "make" ? (
         // The other direction: not what was taken out of the folder, but what
         // the folder can be turned into. Simple mode gives it the whole page;
         // advanced keeps it as the workspace's left panel below.
-        <Make folder={folderId} />
+        <Boundary what="Make">
+          <Make folder={folderId} />
+        </Boundary>
       ) : (
       // Everything at once rather than one tab at a time: the map and the
       // conversations to the left, the ideas they produced to the right, and
@@ -1575,7 +1585,9 @@ export default function App() {
             </button>
           </div>
           <div className="sheet-body">
-            <Models />
+            <Boundary what="The model picker">
+              <Models />
+            </Boundary>
           </div>
         </Sheet>
       )}

@@ -8,6 +8,7 @@
 //! They never share a context. See [`chat`](crate::chat) for why that matters.
 
 pub mod anthropic;
+pub mod cancel;
 pub mod claude_cli;
 pub mod detect;
 pub mod embedded;

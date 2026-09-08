@@ -2548,3 +2548,12 @@ blockquote {
 .rail-handle svg { transform: rotate(90deg); }
 .rail-handle.open { right: 15.5rem; }
 .rail-handle.open svg { transform: rotate(-90deg); }
+
+/* A folder's own language, on its row in the picker. Narrow: it is a
+   qualifier on the folder, not a field of its own. */
+.folder-language {
+  flex: none;
+  width: 9.5rem;
+  padding: 0.2rem 0.35rem;
+  font-size: 0.72rem;
+}

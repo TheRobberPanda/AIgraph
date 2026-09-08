@@ -15,7 +15,12 @@ pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS folders (
     id         INTEGER PRIMARY KEY,
     name       TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- The language this folder is thought in. Empty means "whatever the
+    -- setting says", which is what every folder means until told otherwise.
+    -- A folder is where one line of thinking lives, and one person's lines
+    -- are not all in the same language.
+    language   TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -256,6 +261,14 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         conn.execute_batch(
             "ALTER TABLE sessions ADD COLUMN folder_id INTEGER NOT NULL DEFAULT 1;",
         )?;
+    }
+
+    let folder_cols: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('folders')")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !folder_cols.iter().any(|c| c == "language") {
+        conn.execute_batch("ALTER TABLE folders ADD COLUMN language TEXT NOT NULL DEFAULT '';")?;
     }
 
     // Root always exists, on a fresh database and on one made before folders.

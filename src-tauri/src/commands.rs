@@ -695,11 +695,11 @@ pub async fn extract_session_inner(
     // take minutes on a local model, and holding it would freeze the whole app.
     // Hand the model the categories already in use so it reuses them instead of
     // coining a synonym for a subject it has seen before.
-    let known = {
-        let store = state.store.lock().await;
-        let folder = store.session_folder(session_id).ok();
-        store.categories_in(folder).unwrap_or_default()
-    };
+    let folder = state.store.lock().await.session_folder(session_id).ok();
+    // Before the prompts are built, not after: `language_instruction()` is
+    // read while each one is assembled.
+    pin_language_for(state, folder).await;
+    let known = state.store.lock().await.categories_in(folder).unwrap_or_default();
 
     let result =
         crate::extract::run_with_progress(extractor.as_ref(), &turns, &known, &move |phase| {
@@ -1574,6 +1574,7 @@ pub async fn export_book(
         (rows, name)
     };
 
+    pin_language_for(&state, folder).await;
     let mut book = crate::book::assemble(&name, rows);
     if book.chapters.is_empty() {
         return Err("nothing to make a book from — this folder has no recorded ideas yet".into());
@@ -1646,6 +1647,7 @@ pub async fn compose_load(
         (conversations, name)
     };
 
+    pin_language_for(&state, folder).await;
     let packed = crate::compose::pack(&conversations);
     let system = crate::compose::system_prompt(&name, &packed);
     let out = packed.clone();
@@ -1699,6 +1701,7 @@ pub async fn compose_select(
         (conversations, name, loose)
     };
     conversations.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+    pin_language_for(&state, folder).await;
 
     let mut packed = crate::compose::pack(&conversations);
     let extra = crate::compose::pack_ideas(&loose);
@@ -1721,6 +1724,42 @@ pub async fn compose_select(
         None => *held = Some(Composing { folder, system, messages: Vec::new(), packed }),
     }
     Ok(out)
+}
+
+/// Point the prompts at whatever language this folder is thought in.
+///
+/// A folder is where one line of thinking lives, and one person's lines are
+/// not all in the same language — a Polish folder beside an English one is
+/// the ordinary case, and a single global setting cannot be right for both.
+/// The folder wins when it has been told; otherwise the setting does.
+async fn pin_language_for(state: &AppState, folder: Option<i64>) {
+    let named = state.store.lock().await.folder_language(folder).unwrap_or_default();
+    let chosen = match crate::settings::Language::parse(&named) {
+        Some(language) => language,
+        None => state.settings.lock().await.language,
+    };
+    crate::settings::pin_language(chosen);
+}
+
+/// Say which language a folder is thought in. `""` follows the setting.
+#[tauri::command]
+pub async fn set_folder_language(
+    state: State<'_, AppState>,
+    folder_id: i64,
+    language: String,
+) -> Result<(), String> {
+    state.store.lock().await.set_folder_language(folder_id, &language).map_err(|e| e.to_string())
+}
+
+/// Stop whatever the model is writing, wherever it is writing it.
+///
+/// Everything in flight, not one named stream: from the outside there is one
+/// model and it is either working or it is not, and a Stop that had to be
+/// told which request to end would be asking the wrong question.
+#[tauri::command]
+pub async fn stop_generation() -> Result<(), String> {
+    crate::llm::cancel::stop_all();
+    Ok(())
 }
 
 /// Throw away the exchange, keeping the loaded folder.

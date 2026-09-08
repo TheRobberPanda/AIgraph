@@ -287,6 +287,20 @@ impl Language {
         }
     }
 
+    /// Read one back from the database, where it is stored as the same
+    /// lowercase word `serde` writes.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_lowercase().as_str() {
+            "english" => Some(Language::English),
+            "polish" => Some(Language::Polish),
+            "spanish" => Some(Language::Spanish),
+            // "auto" and "" both mean nobody has chosen, which is not the same
+            // as choosing Auto for this folder in particular — the caller
+            // falls back to the global setting either way.
+            _ => None,
+        }
+    }
+
     /// The same instruction, written in the language it is asking for.
     pub fn imperative(self) -> Option<&'static str> {
         match self {

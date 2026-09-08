@@ -67,6 +67,17 @@ export function onComposeToken(cb: (text: string) => void): Promise<UnlistenFn> 
   return listen<{ text: string }>("compose:token", (e) => cb(e.payload.text));
 }
 
+/**
+ * Stop whatever the model is writing.
+ *
+ * Everything in flight, not one named stream: from the outside there is one
+ * model and it is either working or it is not. What arrived before the stop
+ * is kept — you ended it, you did not hit an error.
+ */
+export function stopGeneration(): Promise<void> {
+  return invoke("stop_generation");
+}
+
 /** Write an answer out. Whatever it is, it is text. */
 export function saveText(path: string, text: string): Promise<string> {
   return invoke<string>("save_text", { path, text });

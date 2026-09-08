@@ -8,6 +8,7 @@ import {
   composeSend,
   onComposeToken,
   saveText,
+  stopGeneration,
   type Packed,
   type Selectable,
 } from "../lib/compose";
@@ -15,7 +16,7 @@ import { getSettings, onSettingsChanged, saveSettings, type Preset } from "../li
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { useUndoable } from "../lib/undo";
 import Markdown from "./Markdown";
-import { IconSend, IconPlus, IconChevron } from "./Icons";
+import { IconSend, IconPlus, IconChevron, IconStop } from "./Icons";
 
 interface Exchange {
   asked: string;
@@ -442,14 +443,25 @@ export default function Make({ folder, compact = false }: { folder: number | nul
               Start again
             </button>
           )}
-          <button
-            className="btn btn-send"
-            disabled={!draft.trim() || busy || !packed}
-            onClick={() => void ask(draft)}
-          >
-            <IconSend />
-            {busy ? "Writing…" : "Ask"}
-          </button>
+          {busy ? (
+            <button
+              className="btn"
+              data-tip="Stop writing and keep what has arrived"
+              onClick={() => void stopGeneration()}
+            >
+              <IconStop />
+              Stop
+            </button>
+          ) : (
+            <button
+              className="btn btn-send"
+              disabled={!draft.trim() || !packed}
+              onClick={() => void ask(draft)}
+            >
+              <IconSend />
+              Ask
+            </button>
+          )}
         </div>
       </div>
     </div>

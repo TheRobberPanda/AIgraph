@@ -8,17 +8,7 @@ Done work isn't tracked here; that's what the git history is for.
 
 ---
 
-## 1. The map's zoom-in animation
-
-Expanding the map grows its grid column, which keeps the simulation and
-positions intact. What was asked for was a zoom *into* the map that then renders
-over the chat.
-
-This is a fork rather than a task. The current behaviour is arguably better —
-nothing is rebuilt, and the map never covers what you're typing. Worth deciding
-together before building the alternative.
-
-## 2. CUDA on Linux, for the last twenty per cent
+## 1. CUDA on Linux, for the last twenty per cent
 
 Measured on an RTX 3060, Bonsai 27B Q1_0, 2351-token prompt:
 
@@ -39,7 +29,7 @@ the Windows CUDA build on Windows, where it costs nothing but a filename, and
 say in the app that Vulkan is the general answer and CUDA is faster on Nvidia
 if you have your own build on PATH.
 
-## 3. Recall past a few hundred ideas
+## 2. Recall past a few hundred ideas
 
 The chat is handed up to 200 idea titles from the current folder. Past that it
 stops being a prompt and starts being a retrieval problem — an embedding
@@ -120,3 +110,7 @@ Known problems to watch for rather than solve up front:
 - **Editing a past turn.** Continuing a conversation only appends, which is
   what makes it safe: every byte offset already recorded points into the part
   that has not moved. Editing earlier would silently invalidate quotes.
+- **Zooming *into* the map so it renders over the chat.** Expanding the map
+  grows its grid column, which keeps the simulation and the positions intact.
+  Rebuilding it as an overlay would throw both away and cover what you are
+  typing, to arrive somewhere no better.

@@ -214,7 +214,9 @@ export default function Models() {
     }
   }
 
-  const chatModels = (s: Detected) => s.models.filter((m) => m.kind === "chat");
+  // `?? []` because a provider that answered without a usable list should
+  // show as empty, not throw on the way to being drawn.
+  const chatModels = (s: Detected) => (s.models ?? []).filter((m) => m.kind === "chat");
   /** What a server actually has in memory right now. */
   const loadedModels = (s: Detected) => chatModels(s).filter((m) => m.loaded === true);
   /**
