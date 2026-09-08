@@ -26,6 +26,14 @@ pub enum Theme {
     Auto,
     Dark,
     Light,
+    /// A warmer dark: the same ink ground with browner surfaces.
+    Ember,
+    /// Near-black, for late nights.
+    Ink,
+    /// A cool dark with blue-grey surfaces.
+    Slate,
+    /// Warm paper, deeper than Light.
+    Paper,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,12 +105,18 @@ pub struct Settings {
     /// Whether the map, ideas and conversations sit around the conversation
     /// or are visited one at a time.
     pub layout: Layout,
+    /// How the map draws itself.
+    pub map_style: MapStyle,
+    /// Advanced layout order: conversations on the left and Make on the
+    /// right, instead of the default Make left / conversations right.
+    pub advanced_swap: bool,
+    /// The accent colour, as a hex string. Empty means the theme's own.
+    pub accent: String,
     /// The one-click instructions on the Make tab.
     ///
     /// Stored rather than compiled in, because the whole point of them is that
     /// the wording is yours to argue with: what makes a script sound like you
     /// and not like a content farm is exactly the part a default cannot know.
-    /// [`Settings::default`] seeds them; `reset_presets` puts them back.
     pub presets: Vec<Preset>,
 }
 
@@ -123,64 +137,54 @@ impl Preset {
 
 /// What the buttons say out of the box.
 ///
-/// Each one is a full instruction rather than a keyword, because that is what
-/// makes it editable: someone who wants a blunter script can see the sentence
-/// that made it polite and change that sentence.
+/// One, deliberately. Six shipped presets are six guesses at what someone
+/// wants to make, and a row of them reads as the menu rather than as a
+/// starting point — the button that matters is the one that adds your own.
+/// The instruction is written out in full rather than as a keyword, because
+/// that is what makes it editable: whoever wants a blunter script can see the
+/// sentence that made it polite and change that sentence.
 pub fn default_presets() -> Vec<Preset> {
-    vec![
-        Preset::new(
-            "book",
-            "A book",
-            "Write this as a book. Open with what the thinking is about, work through it \
-             in chapters that follow the argument rather than the order it was said in, \
-             and close with what it amounts to and what is still open. Keep the voice of \
-             the transcripts — the phrasing, the bluntness, the way points get made. \
-             Quote directly where the original wording is better than a paraphrase.",
-        ),
-        Preset::new(
-            "essay",
-            "An essay",
-            "Write this as a single essay of about fifteen hundred words. One argument, \
-             stated early, carried through, and landed. Cut everything that does not \
-             serve it — most of the transcript will not. Keep the original voice and \
-             use direct quotation where the wording is already right.",
-        ),
-        Preset::new(
-            "youtube",
-            "A YouTube script",
-            "Write this as a script for a ten-minute video, to be spoken aloud by the \
-             person whose thinking it is. Open on the most concrete or surprising thing \
-             in the material, not on a summary of what the video will cover. Write in \
-             spoken register: short sentences, contractions, no headings read aloud. \
-             Mark visual cues in square brackets on their own line. No sponsor read, no \
-             'smash that subscribe'.",
-        ),
-        Preset::new(
-            "tiktok",
-            "TikTok scripts",
-            "Write five separate scripts of thirty to forty-five seconds each, one per \
-             idea that can stand alone. Each opens with the claim itself in the first \
-             sentence — no wind-up, no 'here's why'. Spoken register, one idea per \
-             script, ending on the sharpest phrasing rather than a call to action. \
-             Number them and give each a one-line on-screen title.",
-        ),
-        Preset::new(
-            "newsletter",
-            "A newsletter",
-            "Write this as one newsletter issue of roughly eight hundred words. Lead with \
-             the single most useful thing here to somebody who was not in the \
-             conversation. Plain, direct, no preamble about what the issue will cover. \
-             End on a question worth thinking about rather than a sign-off.",
-        ),
-        Preset::new(
-            "notes",
-            "Clean notes",
-            "Reorganise this into clean notes: the positions held, grouped by subject, \
-             each stated in one line and followed by what it rests on. No introduction \
-             and no conclusion — this is a reference, not an argument. Keep the original \
-             wording wherever it is already clear.",
-        ),
-    ]
+    vec![Preset::new(
+        "book",
+        "A book",
+        "Write this as a book. Open with what the thinking is about, work through it \
+         in chapters that follow the argument rather than the order it was said in, \
+         and close with what it amounts to and what is still open. Keep the voice of \
+         the transcripts — the phrasing, the bluntness, the way points get made. \
+         Quote directly where the original wording is better than a paraphrase.",
+    )]
+}
+
+/// How the map draws itself.
+///
+/// Only ever node size and line weight — never what is on the map. A style
+/// that hid nodes would be a filter wearing an appearance setting's clothes,
+/// and the map's job is to show you everything you have thought.
+///
+/// `Constellation` is the default because the roomy full-page map drew nodes
+/// at the size tuned for a narrow panel scaled up, which on a wide canvas is a
+/// field of circles with the links lost between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MapStyle {
+    /// Small nodes, fine lines. Reads as a structure rather than a diagram.
+    #[default]
+    Constellation,
+    /// Larger, fuller nodes. Easier to hit, heavier to look at.
+    Bubbles,
+    /// Dots and hairlines. For a folder with a great many ideas in it.
+    Minimal,
+}
+
+impl MapStyle {
+    /// What to multiply a node's drawn radius by.
+    pub fn node_scale(self) -> f32 {
+        match self {
+            MapStyle::Constellation => 0.72,
+            MapStyle::Bubbles => 1.0,
+            MapStyle::Minimal => 0.5,
+        }
+    }
 }
 
 /// How much of the app is on screen at once.
@@ -409,6 +413,9 @@ impl Default for Settings {
             mic_timeout_seconds: 0,
             runtime: Runtime::default(),
             layout: Layout::default(),
+            map_style: MapStyle::default(),
+            advanced_swap: false,
+            accent: String::new(),
             presets: default_presets(),
         }
     }

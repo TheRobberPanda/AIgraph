@@ -5,6 +5,8 @@ import {
   forceLink,
   forceManyBody,
   forceSimulation,
+  forceX,
+  forceY,
   type Simulation,
   type SimulationLinkDatum,
   type SimulationNodeDatum,
@@ -14,6 +16,7 @@ import { deleteIdea, onIdeasChanged, reextractSession } from "../lib/ideas";
 import { deleteSession, setSessionArchived } from "../lib/chat";
 import ContextMenu from "./ContextMenu";
 import { categoryColors, UNCATEGORISED } from "../lib/categories";
+import { getSettings, onSettingsChanged, type MapStyle } from "../lib/settings";
 import { ConversationFile, IdeaFile } from "./Deep";
 import FilePanel from "./FilePanel";
 
@@ -173,31 +176,43 @@ function wrapLines(
  * everything off-screen and leaves nodes too close together to hit. Rather
  * than scaling one set of numbers, the two sizes get their own.
  */
-/** A node's drawn radius: zoom, clamped, times the size the map is at. */
-function drawnRadius(base: number, scale: number, width: number): number {
-  return base * Math.max(0.6, Math.min(scale, 2)) * ruleset(width).nodeScale;
+/** A node's drawn radius: zoom, clamped, times the size the map is at.
+ *  The floor is low — pulled back far enough, a node should read as a dot in
+ *  a dense bed, not as a small version of the thing it is at full size. */
+function drawnRadius(base: number, scale: number, width: number, style: MapStyle): number {
+  return base * Math.max(0.35, Math.min(scale, 2)) * ruleset(width, style).nodeScale;
 }
 
-function ruleset(width: number) {
+/** What each named look multiplies a node by. See `settings::MapStyle`. */
+const STYLE_SCALE: Record<MapStyle, number> = {
+  constellation: 0.72,
+  bubbles: 1,
+  minimal: 0.5,
+};
+
+function ruleset(width: number, style: MapStyle = "constellation") {
   const tight = width < 560;
   return {
     tight,
     /** Orbit radius around a conversation. */
-    orbit: tight ? 46 : 90,
-    orbitGrowth: tight ? 5 : 14,
+    orbit: tight ? 56 : 150,
+    orbitGrowth: tight ? 6 : 20,
     /** How far a merely related pair sits apart. */
-    related: tight ? 90 : 190,
+    related: tight ? 100 : 280,
     /** Space reserved around a node, label included. */
-    padding: tight ? 6 : 20,
+    padding: tight ? 6 : 26,
     /** A label's share of that space. Almost none when labels are hidden. */
     labelShare: tight ? 0.15 : 1,
     /** Fitts's law, but a crowded panel needs a smaller target or every
      *  click lands on a neighbour. */
     hitRadius: tight ? 11 : 16,
-    /** Nodes are drawn smaller in a panel; at full size they crowd it out. */
-    nodeScale: tight ? 0.62 : 1,
-    charge: tight ? -14 : -40,
-    chargeByRadius: tight ? 3 : 9,
+    /** Nodes are drawn smaller in a panel; at full size they crowd it out.
+     *  The full-page map used to take the roomy figure straight, which on a
+     *  wide canvas is a field of circles with the links lost between them —
+     *  so the chosen style scales it rather than the panel alone deciding. */
+    nodeScale: (tight ? 0.62 : 1) * STYLE_SCALE[style],
+    charge: tight ? -18 : -85,
+    chargeByRadius: tight ? 4 : 12,
   };
 }
 
@@ -221,6 +236,10 @@ export default function Graph({
   const linksRef = useRef<Link[]>([]);
   const simRef = useRef<Simulation<Node, Link> | null>(null);
   const viewRef = useRef({ x: 0, y: 0, scale: 1 });
+  /** The zoom the whole map was framed at. Spacing is measured against it:
+   *  at the fit zoom the map is itself, zooming in spreads it further apart
+   *  than the zoom alone would, and zooming out pulls it in tighter. */
+  const fitScaleRef = useRef(1);
   const hoverRef = useRef<Node | null>(null);
   /** A subject picked out of the legend. Clicking pins it — that is what
    *  reveals titles; hovering only previews the highlight, because a preview
@@ -266,6 +285,25 @@ export default function Graph({
   >(null);
   const [empty, setEmpty] = useState(false);
   const [legend, setLegend] = useState<[string, string][]>([]);
+  /** Held in a ref rather than state: the draw loop and the hit test both read
+   *  it every frame, and a re-render per frame is not the way to tell them. */
+  const styleRef = useRef<MapStyle>("constellation");
+  const [, restyle] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const apply = (m: MapStyle) => {
+      if (!alive) return;
+      styleRef.current = m;
+      // One render so the simulation's spacing picks the new sizes up too.
+      restyle((n) => n + 1);
+    };
+    void getSettings().then((st) => apply(st.map_style));
+    const un = onSettingsChanged((st) => apply(st.map_style));
+    return () => {
+      alive = false;
+      void un.then((f) => f());
+    };
+  }, []);
 
   // Opening a node's file happens over the map, not instead of it — clicking
   // the same node again closes it, clicking a different one swaps the panel's
@@ -306,11 +344,29 @@ export default function Graph({
     };
   }, [onOpenFile]);
 
+  /**
+   * Spacing breathes with the zoom.
+   *
+   * Node size is clamped on screen, so zooming in already leaves air and
+   * zooming out crowds — but not enough, and not in the right proportion.
+   * Offsets from the layout's centre get a factor on top of the zoom: past
+   * the fit zoom the map spreads further apart than the zoom alone would
+   * (labels get room before they start colliding), pulled back it draws in
+   * tighter (a pulled-back map should read as one dense thing, not as small
+   * nodes swimming apart). Bounded, and 1 at the fit zoom, so the framing
+   * computation stays exact there.
+   */
+  function spreadOf(scale: number): number {
+    const fit = fitScaleRef.current || 1;
+    return Math.min(2.1, Math.max(0.75, Math.pow(scale / fit, 0.5)));
+  }
+
   const toScreen = useCallback((n: { x?: number; y?: number }, w: number, h: number) => {
     const v = viewRef.current;
+    const spread = spreadOf(v.scale);
     return {
-      x: (n.x ?? 0) * v.scale + v.x + w / 2,
-      y: (n.y ?? 0) * v.scale + v.y + h / 2,
+      x: (n.x ?? 0) * v.scale * spread + v.x + w / 2,
+      y: (n.y ?? 0) * v.scale * spread + v.y + h / 2,
     };
   }, []);
 
@@ -340,13 +396,14 @@ export default function Graph({
       const scale = travel.fromScale + (travel.toScale - travel.fromScale) * e;
       const v = viewRef.current;
       v.scale = scale;
+      const spread = spreadOf(scale);
       // Aimed at where the node was when it was clicked, not at where it is
       // this frame. Re-aiming every frame chased a target the simulation was
       // still moving, and easing toward a moving point oscillates — which is
       // what the shaking was. The node is pinned for the duration instead, so
       // the destination and the thing at it agree.
-      v.x = travel.fromX + (-travel.toX * scale - travel.fromX) * e;
-      v.y = travel.fromY + (-travel.toY * scale - travel.fromY) * e;
+      v.x = travel.fromX + (-travel.toX * scale * spread - travel.fromX) * e;
+      v.y = travel.fromY + (-travel.toY * scale * spread - travel.fromY) * e;
       if (t >= 1) {
         travel.node.fx = null;
         travel.node.fy = null;
@@ -372,28 +429,61 @@ export default function Graph({
       const sb = toScreen(b, w, h);
       const lit = !focus || inFocus(a) || inFocus(b);
       ctx.globalAlpha = lit ? 1 : 0.18;
-      ctx.strokeStyle =
-        link.kind === "contradicts"
-          ? C.contradicts
-          : link.kind === "related"
-            ? C.related
-            : link.kind === "category"
-              ? C.category
-              : C.edge;
-      ctx.lineWidth = link.kind === "from" ? 1 : link.kind === "category" ? 1 : 1.6;
-      if (link.kind === "related" || link.kind === "contradicts") ctx.setLineDash([4, 4]);
-      if (link.kind === "category") ctx.setLineDash([1, 3]);
-      ctx.beginPath();
-      ctx.moveTo(sa.x, sa.y);
-      ctx.lineTo(sb.x, sb.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
+
+      if (link.kind === "from") {
+        // A branch, not a line: tapered and bowed slightly off the straight
+        // join, thick where it leaves the conversation and thin where it
+        // arrives at the idea, shaded from the root's colour to the idea's.
+        // The bend is signed per pair so a branch keeps its side as the
+        // simulation moves rather than snapping across.
+        const dx = sb.x - sa.x;
+        const dy = sb.y - sa.y;
+        const len = Math.hypot(dx, dy);
+        if (len > 1) {
+          const nx = -dy / len;
+          const ny = dx / len;
+          const side = a.data.id < b.data.id ? 1 : -1;
+          const bend = Math.min(26, len * 0.16) * side;
+          const cx = (sa.x + sb.x) / 2 + nx * bend;
+          const cy = (sa.y + sb.y) / 2 + ny * bend;
+          const sizeW = Math.max(0.55, Math.min(2, viewRef.current.scale));
+          const rootW = 2.4 * sizeW * (ruleset(w).tight ? 0.7 : 1);
+          const tipW = 0.55 * sizeW;
+          const midW = (rootW + tipW) / 2;
+          const grad = ctx.createLinearGradient(sa.x, sa.y, sb.x, sb.y);
+          grad.addColorStop(0, a.color);
+          grad.addColorStop(1, b.color);
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.moveTo(sa.x + nx * rootW, sa.y + ny * rootW);
+          ctx.quadraticCurveTo(cx + nx * midW, cy + ny * midW, sb.x + nx * tipW, sb.y + ny * tipW);
+          ctx.lineTo(sb.x - nx * tipW, sb.y - ny * tipW);
+          ctx.quadraticCurveTo(cx - nx * midW, cy - ny * midW, sa.x - nx * rootW, sa.y - ny * rootW);
+          ctx.closePath();
+          ctx.fill();
+        }
+      } else {
+        ctx.strokeStyle =
+          link.kind === "contradicts"
+            ? C.contradicts
+            : link.kind === "related"
+              ? C.related
+              : C.category;
+        ctx.lineWidth = link.kind === "category" ? 1 : 1.6;
+        if (link.kind === "related" || link.kind === "contradicts") ctx.setLineDash([4, 4]);
+        if (link.kind === "category") ctx.setLineDash([1, 3]);
+        ctx.beginPath();
+        ctx.moveTo(sa.x, sa.y);
+        ctx.lineTo(sb.x, sb.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
     ctx.globalAlpha = 1;
 
     for (const n of nodesRef.current) {
       const s = toScreen(n, w, h);
-      const r = drawnRadius(n.r, viewRef.current.scale, w);
+      const r = drawnRadius(n.r, viewRef.current.scale, w, styleRef.current);
       ctx.globalAlpha = inFocus(n) ? 1 : 0.22;
 
       // The same ring the pointer draws, so running down the list of what was
@@ -479,7 +569,7 @@ export default function Graph({
       if (compact && !isConversation && hover !== n) continue;
 
       const s = toScreen(n, w, h);
-      const r = drawnRadius(n.r, viewRef.current.scale, w);
+      const r = drawnRadius(n.r, viewRef.current.scale, w, styleRef.current);
       // The map draws to a canvas, which the interface-scale setting cannot
       // reach through CSS — read the root font-size directly so map text grows
       // and shrinks with everything else instead of staying fixed.
@@ -587,17 +677,26 @@ export default function Graph({
     const h = canvas.clientHeight;
     const xs = nodes.map((n) => n.x ?? 0);
     const ys = nodes.map((n) => n.y ?? 0);
-    // Room for the biggest node and the title under it, and nothing more. The
-    // old fixed 80 was a large margin in a side panel and a small one on a wide
-    // screen, so the map filled a big window worse than a small one.
-    const pad = Math.max(...nodes.map((n) => n.r)) + 34;
-    const spanX = Math.max(1, Math.max(...xs) - Math.min(...xs) + pad * 2);
-    const spanY = Math.max(1, Math.max(...ys) - Math.min(...ys) + pad * 2);
+    // Room for the biggest node and the title under it, in screen pixels —
+    // which is where both are actually drawn. The pad is a world-space
+    // number, so it depends on the scale, and the scale depends on the pad:
+    // three passes land it. (A single pass in world units clipped the map's
+    // top whenever the fit zoom came out above one — the drawn node was
+    // bigger than the world-space pad had budgeted.)
+    const maxR = Math.max(...nodes.map((n) => n.r));
+    let pad = maxR + 12;
+    let scale = 1;
+    for (let i = 0; i < 3; i++) {
+      const spanX = Math.max(1, Math.max(...xs) - Math.min(...xs) + pad * 2);
+      const spanY = Math.max(1, Math.max(...ys) - Math.min(...ys) + pad * 2);
+      scale = Math.min(w * 0.94 / spanX, h * 0.94 / spanY, 3.2);
+      pad = (maxR * Math.min(2, Math.max(0.35, scale))) / scale + 34 / scale;
+    }
     const midX = (Math.max(...xs) + Math.min(...xs)) / 2;
     const midY = (Math.max(...ys) + Math.min(...ys)) / 2;
     // A margin that is a share of the canvas rather than a fixed number of
     // pixels, so the framing looks the same whatever size the window is.
-    const scale = Math.min(w * 0.94 / spanX, h * 0.94 / spanY, 3.2);
+    fitScaleRef.current = scale;
     viewRef.current = { x: -midX * scale, y: -midY * scale, scale };
   }, []);
 
@@ -694,6 +793,14 @@ export default function Graph({
       // stays valid as the simulation keeps moving. Too weak and it slowly
       // wanders out of view while you watch it.
       .force("center", forceCenter(0, 0).strength(0.25))
+      // Ideas only link back to the conversations they came from, so anything
+      // disconnected from the rest — a conversation whose ideas nobody
+      // returned to — feels no pull but the charge's push, and given enough
+      // ticks flies off on its own. A gentle spring to the origin per axis
+      // holds every component in one map while leaving the local shape to the
+      // links; forceCenter alone translates the centroid and cannot do this.
+      .force("x", forceX(0).strength(0.06))
+      .force("y", forceY(0).strength(0.06))
       .alphaDecay(0.02)
       // Never freezes completely: a nudge keeps it alive enough to respond to a
       // drag without needing to be woken up.
@@ -703,9 +810,15 @@ export default function Graph({
     simRef.current = sim;
     sim.alpha(1).restart();
 
-    // Let it find a shape before framing, or the first fit captures the initial
-    // scatter and everything drifts out of view afterwards.
-    for (let i = 0; i < 120; i++) sim.tick();
+    // Let it find its shape before framing, or the first fit captures the
+    // initial scatter and everything drifts out of view afterwards. A fixed
+    // tick count was not enough: with alphaDecay at 0.02, 120 ticks leave
+    // alpha near 0.09 and the map kept drifting for seconds after the fit —
+    // the frame captured a mid-flight state, and the settled map sat
+    // off-centre in it. Ticking to the simulation's own minimum makes the
+    // frame final.
+    let guard = 0;
+    while (sim.alpha() > sim.alphaMin() && guard++ < 600) sim.tick();
     fitToView();
     // Rebuilds when the folder changes: a folder is a separate tree, so the
     // map has to be a different map, not the same one filtered on screen.
@@ -779,6 +892,13 @@ export default function Graph({
             | undefined;
           if (link && typeof link.links === "function") link.links(linksRef.current);
           sim.alpha(0.8).restart();
+          // Tick the restart out to its own minimum before fitting — the same
+          // discipline the first build runs. Leaving the simulation to drift
+          // after the fit let the map wander out of the frame that had just
+          // been computed for it, and branches ended up pointing at nodes
+          // that were no longer where the frame said.
+          let guard = 0;
+          while (sim.alpha() > sim.alphaMin() && guard++ < 600) sim.tick();
         }
         // Opening a file resizes the canvas, and refitting here threw away the
         // framing that opening it had just set up. Re-aim at what is being
@@ -802,7 +922,7 @@ export default function Graph({
     return {
       x: s.x,
       y: s.y,
-      r: drawnRadius(n.r, viewRef.current.scale, canvas.clientWidth),
+      r: drawnRadius(n.r, viewRef.current.scale, canvas.clientWidth, styleRef.current),
       color: n.color,
       below: s.y > canvas.clientHeight / 2,
     };
@@ -875,12 +995,18 @@ export default function Graph({
     const px = clientX - rect.left;
     const py = clientY - rect.top;
 
+    // `clientWidth`, not `rect.width`, because that is what `draw` projects
+    // through. They agree today and would quietly stop agreeing the moment
+    // the canvas gained a border.
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+
     let best: Node | null = null;
     let bestDist = Infinity;
     for (const n of nodesRef.current) {
-      const s = toScreen(n, rect.width, rect.height);
-      const drawn = drawnRadius(n.r, viewRef.current.scale, canvas.clientWidth);
-      const r = Math.max(drawn + 6, ruleset(canvas.clientWidth).hitRadius);
+      const s = toScreen(n, w, h);
+      const drawn = drawnRadius(n.r, viewRef.current.scale, canvas.clientWidth, styleRef.current);
+      const r = Math.max(drawn + 6, ruleset(canvas.clientWidth, styleRef.current).hitRadius);
       const d = Math.hypot(px - s.x, py - s.y);
       if (d <= r && d < bestDist) {
         best = n;
@@ -903,8 +1029,8 @@ export default function Graph({
     let bestDist = 8;
     for (const link of linksRef.current) {
       if (link.kind !== "related" && link.kind !== "contradicts") continue;
-      const a = toScreen(link.source as Node, rect.width, rect.height);
-      const b = toScreen(link.target as Node, rect.width, rect.height);
+      const a = toScreen(link.source as Node, canvas.clientWidth, canvas.clientHeight);
+      const b = toScreen(link.target as Node, canvas.clientWidth, canvas.clientHeight);
       // Distance from the click to the segment a–b.
       const dx = b.x - a.x;
       const dy = b.y - a.y;
@@ -922,13 +1048,21 @@ export default function Graph({
   }
 
   /** Canvas coordinates to simulation coordinates. */
+  /// The inverse of `toScreen`, and it has to be exactly that.
+  ///
+  /// It divided by `scale` alone while `toScreen` multiplies by
+  /// `scale * spread`, so the two were only inverses at the one zoom where
+  /// spread happens to be 1. Everywhere else, grabbing a node teleported it
+  /// somewhere near the cursor and then moved it at the wrong rate — which
+  /// reads as the map not knowing what you are pointing at.
   function toWorld(clientX: number, clientY: number) {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
     const v = viewRef.current;
+    const k = v.scale * spreadOf(v.scale);
     return {
-      x: (clientX - rect.left - rect.width / 2 - v.x) / v.scale,
-      y: (clientY - rect.top - rect.height / 2 - v.y) / v.scale,
+      x: (clientX - rect.left - rect.width / 2 - v.x) / k,
+      y: (clientY - rect.top - rect.height / 2 - v.y) / k,
     };
   }
 
@@ -952,6 +1086,7 @@ export default function Graph({
         keepAliveRef.current = null;
         setHovered(null);
         setHoverAt(null);
+        setEdgeHover(null);
       }}
     >
       <canvas
@@ -1122,7 +1257,10 @@ export default function Graph({
             focusNodeRef.current = null;
             revealRef.current = new Set();
           }
-          const k = scale / v.scale;
+          // The spread rides along: what stays under the cursor is the point
+          // as it is actually drawn, spread and all.
+          const k =
+            (scale * spreadOf(scale)) / (v.scale * spreadOf(v.scale));
           v.x = px - (px - v.x) * k;
           v.y = py - (py - v.y) * k;
           v.scale = scale;

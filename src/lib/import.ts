@@ -25,3 +25,21 @@ export function importConversation(
 ): Promise<number> {
   return invoke<number>("import_conversation", { text, swapRoles, source });
 }
+
+/** One conversation Claude has already had on this machine. */
+export interface ClaudeImport {
+  path: string;
+  project: string;
+  modified: string;
+  turns: number;
+  first: string;
+  title: string | null;
+}
+
+export function listClaudeImports(): Promise<ClaudeImport[]> {
+  return invoke<ClaudeImport[]>("list_claude_imports");
+}
+
+export function importClaudeConversation(path: string, source: string): Promise<number> {
+  return invoke<number>("import_claude_conversation", { path, source });
+}

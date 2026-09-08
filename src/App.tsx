@@ -16,26 +16,27 @@ import {
   IconCall,
   IconClock,
   IconSpeaker,
+  IconChevron,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import { t as tr, useLang } from "./lib/i18n";
+import { useUndoable } from "./lib/undo";
 import Confirm from "./components/Confirm";
 import Sheet from "./components/Sheet";
 import Call from "./components/Call";
 import Queue from "./components/Queue";
-import Drawer from "./components/Drawer";
 import Vitals from "./components/Vitals";
 import FolderMark from "./components/FolderMark";
 import ContextMenu from "./components/ContextMenu";
 import Tooltip from "./components/Tooltip";
 import FolderPicker from "./components/FolderPicker";
 import Graph from "./components/Graph";
-import Conversations from "./components/Conversations";
+import ConversationsRail from "./components/ConversationsRail";
 import Make from "./components/Make";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
 import SettingsPanel from "./components/Settings";
-import { applyTheme, applyUiScale, getSettings, saveSettings } from "./lib/settings";
+import { applyAccent, applyTheme, applyUiScale, getSettings, saveSettings } from "./lib/settings";
 import Markdown from "./components/Markdown";
 import { thinkingMessage } from "./lib/waiting";
 import {
@@ -86,8 +87,8 @@ import {
  * the same list twice — once with the ideas hidden and once with the
  * conversations reduced to headings.
  */
-type Tab = "chat" | "map" | "ideas" | "said" | "make" | "settings";
-const TABS: Tab[] = ["chat", "map", "ideas", "said", "make", "settings"];
+type Tab = "chat" | "map" | "ideas" | "make" | "settings";
+const TABS: Tab[] = ["chat", "map", "ideas", "make", "settings"];
 
 /** What each place is called, in the app's own language. */
 function tabName(tab: Tab): string {
@@ -101,12 +102,11 @@ const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>>
   chat: IconThink,
   map: IconMap,
   ideas: IconIdeas,
-  said: IconChats,
   make: IconBook,
   settings: IconSettings,
 };
 
-const MAIN: Tab[] = ["chat", "map", "ideas", "said", "make"];
+const MAIN: Tab[] = ["chat", "map", "ideas", "make"];
 /**
  * Settings only.
  *
@@ -136,7 +136,8 @@ type Deep = { kind: "idea"; id: number } | { kind: "conversation"; id: number } 
 function tabFromHash(): Tab {
   const raw = window.location.hash.replace(/^#\/?/, "").split("/")[0];
   if (raw === "idea") return "ideas";
-  if (raw === "conversation") return "ideas";
+  // Conversations folded into Think — old links land there.
+  if (raw === "conversation" || raw === "said") return "chat";
   return (TABS as string[]).includes(raw) ? (raw as Tab) : "chat";
 }
 
@@ -182,6 +183,7 @@ export default function App() {
   useLang();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
+  const undoDraft = useUndoable(draft, setDraft);
   const [streaming, setStreaming] = useState(false);
   const [thinking, setThinking] = useState(false);
   // Reasoning models can think for a long time before emitting a single word of
@@ -276,9 +278,15 @@ export default function App() {
   const [micTimeout, setMicTimeout] = useState(0);
   const [idleOpen, setIdleOpen] = useState(false);
   /** Which workspace panel is filling the pane, if any. */
-  const [expanded, setExpanded] = useState<"map" | "ideas" | "conversations" | null>(null);
+  const [expanded, setExpanded] = useState<"make" | "conversations" | null>(null);
+  /** Map and Ideas in advanced mode: popups over the workspace, not panels. */
+  const [popup, setPopup] = useState<"map" | "ideas" | null>(null);
+  /** Whether the conversations rail sits beside the stream (simple layout). */
+  const [railOpen, setRailOpen] = useState(true);
   /** Simple visits one place at a time; advanced puts them all on screen. */
   const [layout, setLayout] = useState<"simple" | "advanced">("simple");
+  /** Advanced layout flipped: conversations left, Make right. */
+  const [advancedSwap, setAdvancedSwap] = useState(false);
   // The no-model screen can drop into the Models tab rather than being a dead
   // end — someone with an API key or the claude CLI had no way through it.
   /** Seconds of quiet before a call sends. Mirrored from settings so the
@@ -287,11 +295,13 @@ export default function App() {
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const idleRef = useRef<HTMLDivElement>(null);
 
   // Apply the saved theme before anything is looked at.
   useEffect(() => {
     void getSettings().then((s) => {
       applyTheme(s.theme);
+      applyAccent(s.accent);
       applyUiScale(s.ui_scale);
       setVoiceSetting(s.voice !== "off");
       if (s.voice === "neural") setVoiceKind("neural");
@@ -303,14 +313,19 @@ export default function App() {
       setAutoFile(s.auto_file);
       setMicTimeout(s.mic_timeout_seconds);
       setLayout(s.layout);
+      setAdvancedSwap(s.advanced_swap);
     });
     const un = listen<{ voice?: string; call_mode?: boolean; layout?: "simple" | "advanced" }>(
       "settings:changed",
       (e) => {
         // Only the setting. Whether a call is in progress is this window's
         // business, not something a saved settings file should turn on.
-        if (e.payload.voice !== undefined) setVoiceSetting(e.payload.voice !== "off");
-        if (e.payload.layout) setLayout(e.payload.layout);
+      if (e.payload.voice !== undefined) {
+        setVoiceSetting(e.payload.voice !== "off");
+        if (e.payload.voice === "neural") setVoiceKind("neural");
+        else setVoiceKind("system");
+      }
+      if (e.payload.layout) setLayout(e.payload.layout);
       },
     );
     return () => {
@@ -326,6 +341,18 @@ export default function App() {
     document.addEventListener("contextmenu", onContextMenu);
     return () => document.removeEventListener("contextmenu", onContextMenu);
   }, []);
+
+  // Close the idle-timeout dropdown when clicking elsewhere, the same as the
+  // app's other dropdowns do — without this it stayed open after clicking
+  // away, a stray menu floating over the conversation.
+  useEffect(() => {
+    if (!idleOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (idleRef.current && !idleRef.current.contains(e.target as Node)) setIdleOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [idleOpen]);
 
   useEffect(() => {
     void currentFolder().then(setFolderId).catch(() => {});
@@ -400,7 +427,7 @@ export default function App() {
     if (hearing || !callMode || streaming) return;
     if (!heardRef.current.trim() || held) return;
     armSend();
-  }, [hearing, callMode, streaming]);
+  }, [hearing, callMode, streaming, callSilence]);
 
   useEffect(() => {
     if (sendingIn === null) return;
@@ -458,6 +485,7 @@ export default function App() {
       setTurns(turns.map((t) => ({ role: t.role as Turn["role"], content: t.text })));
       setJustArchived(null);
       setDeep(null);
+      setPopup(null);
       setExpanded(null);
       setView("chat");
     } catch (e) {
@@ -538,14 +566,16 @@ export default function App() {
   async function toggleCall(on: boolean) {
     setCallMode(on);
     void patchSetting({ call_mode: on });
+    let failed = false;
     try {
       if (on) await startDictation();
       else await stopDictation();
     } catch (e) {
       setError(String(e));
+      failed = true;
       if (on) setCallMode(false);
     }
-    if (!on) {
+    if (!on || failed) {
       window.clearTimeout(quietRef.current);
       heardRef.current = "";
       setHeardText("");
@@ -685,20 +715,24 @@ export default function App() {
         // reply that's about to be discarded.
       } else {
         // The marker is the app's own plumbing, not something that was said —
-        // strip it before it is shown or archived, then act on it.
+        // strip it before it is shown or archived, then act on it. The returned
+        // text is authoritative either way: it is written into the last turn
+        // unconditionally, so a reply whose token events never arrived (a
+        // backend that does not stream, a listener that lost the race) still
+        // shows what was actually said rather than an empty turn.
         const { open, text: clean } = parseReply(reply);
-        if (clean !== reply) {
-          setTurns((t) => {
-            const next = [...t];
-            next[next.length - 1] = { role: "assistant", content: clean };
-            return next;
-          });
-        }
+        setTurns((t) => {
+          const next = [...t];
+          next[next.length - 1] = { role: "assistant", content: clean };
+          return next;
+        });
         if (open) {
-          // In simple mode there is nothing to expand — it is a different page.
-          // "conversations" and "ideas" are one place now.
-          if (layout === "simple") setView(open === "conversations" ? "ideas" : open);
-          else setExpanded(open);
+          // In simple mode there is nothing to expand — it is a different
+          // page. In advanced, the map and the ideas are popups; a request
+          // for the conversations opens the panel that now holds them.
+          if (layout === "simple") setView(open === "conversations" ? "chat" : open);
+          else if (open === "conversations") setExpanded("conversations");
+          else setPopup(open);
         }
         // Whatever did not end in a full stop — the last clause of the answer.
         if (voiceOn) {
@@ -733,7 +767,7 @@ export default function App() {
     }
   }
 
-  function toggleExpand(which: "map" | "ideas" | "conversations") {
+  function toggleExpand(which: "make" | "conversations") {
     setExpanded((e) => (e === which ? null : which));
   }
 
@@ -768,6 +802,7 @@ export default function App() {
   async function setLayoutMode(next: "simple" | "advanced") {
     setLayout(next);
     setExpanded(null);
+    setPopup(null);
     try {
       const current = await getSettings();
       await saveSettings({ ...current, layout: next });
@@ -794,11 +829,19 @@ export default function App() {
     const { index, kind } = turnAction;
     setTurnAction(null);
     if (kind === "delete") {
-      await deleteTurn(index).catch((e) => setError(String(e)));
-      setTurns((t) => t.filter((_, i) => i !== index));
+      try {
+        await deleteTurn(index);
+        setTurns((t) => t.filter((_, i) => i !== index));
+      } catch (e) {
+        setError(String(e));
+      }
     } else {
-      await rewindConversation(index).catch((e) => setError(String(e)));
-      setTurns((t) => t.slice(0, index));
+      try {
+        await rewindConversation(index);
+        setTurns((t) => t.slice(0, index));
+      } catch (e) {
+        setError(String(e));
+      }
     }
   }
 
@@ -826,6 +869,9 @@ export default function App() {
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Undo first: it is the only shortcut here that must beat everything else,
+    // and it is the one people press without looking.
+    if (undoDraft(e)) return;
     // Enter sends; Shift+Enter is a newline. This is a thinking tool — the cost
     // of a stray send is low, the friction of reaching for a button is not.
     if (e.key === "Enter" && !e.shiftKey) {
@@ -852,51 +898,52 @@ export default function App() {
   const digestPct = (() => {
     const r = digesting?.running;
     if (!r || r.total <= 0) return null;
-    return Math.round(((r.index - 1) / r.total) * 100);
+    return Math.round((Math.max(0, r.index - 1) / r.total) * 100);
   })();
 
   return (
     <main className="app">
       <nav className="topbar" data-tauri-drag-region>
-        {awayFromMain ? (
-          <button className="brand back" onClick={backToMain} data-tip="Back to the conversation">
-            AIgraph
-          </button>
-        ) : (
-          <div className="brand" data-tauri-drag-region>
-            AIgraph
-          </div>
-        )}
+        <div className="topbar-left" data-tauri-drag-region>
+          {awayFromMain ? (
+            <button className="brand back" onClick={backToMain} data-tip="Back to the conversation">
+              AIgraph
+            </button>
+          ) : (
+            <div className="brand" data-tauri-drag-region>
+              AIgraph
+            </div>
+          )}
 
-        {/* Tabs only in simple mode. In advanced there is nothing for them to
-            switch between — it is all on screen at once. */}
-        {layout === "simple" && (
-          <div className="topbar-tabs">
-            {MAIN.map((t) => {
-              const Icon = TAB_ICONS[t];
-              return (
-                <button
-                  key={t}
-                  className={view === t && !deep ? "nav on" : "nav"}
-                  onClick={() => {
-                    setDeep(null);
-                    setView(t);
-                  }}
-                >
-                  <Icon className="nav-icon" />
-                  {tabName(t)}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        <div className="topbar-spacer" />
+          {/* Tabs only in simple mode. In advanced there is nothing for them to
+              switch between — it is all on screen at once. */}
+          {layout === "simple" && (
+            <div className="topbar-tabs">
+              {MAIN.map((t) => {
+                const Icon = TAB_ICONS[t];
+                return (
+                  <button
+                    key={t}
+                    className={view === t && !deep ? "nav on" : "nav"}
+                    onClick={() => {
+                      setDeep(null);
+                      setView(t);
+                    }}
+                    data-tip={tabName(t)}
+                  >
+                    <Icon className="nav-icon" />
+                    <span className="nav-label">{tabName(t)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
-        {/* Centered independent of everything else in this bar, and in the bar
-            itself rather than floating over the composer — where it used to
-            sit, and where it covered whatever else was down there once the
-            window got narrow or a call was open. Still where you reach for
-            it while thinking: after a bad answer, usually, and a settings
+        {/* In the bar's own centre column: centred whatever the sides hold,
+            and — unlike the absolute positioning it replaces — never sliding
+            under the tabs when the bar gets crowded. Still where you reach
+            for it while thinking: after a bad answer, usually, and a settings
             tab for it means leaving the thing that prompted the question. */}
         <button
           className={`model-chip topbar-model${showModels ? " on" : provider ? "" : " missing"}`}
@@ -907,72 +954,95 @@ export default function App() {
           <span>{provider ? modelName(provider.model) : "No model — pick one"}</span>
         </button>
 
-        {pending > 0 && (
-          <span className="row digest-group">
-            {/* Running, it becomes the way to stop — the same button, because
-                "digesting" and "stop digesting" are the same thing seen from
-                either side of the decision, and a second button beside it
-                would be dead most of the time. */}
-            <button
-              className={digesting?.running ? "digest-btn running" : "digest-btn"}
-              disabled={digestBusy}
-              onClick={() => {
-                if (digesting?.running) {
-                  void stopDigest();
-                  return;
-                }
-                setDigestBusy(true);
-                void extractNow().finally(() => setDigestBusy(false));
-              }}
-            >
-              {digesting?.running ? (
-                <>
-                  <span className="digest-label">
-                    {digesting.running.total > 1 &&
-                      `${digesting.running.index} of ${digesting.running.total} · `}
-                    {PHASE_WORD[digesting.running.phase] ?? digesting.running.phase}
-                  </span>
-                  <span className="digest-hover">Stop</span>
-                  {digestPct !== null && (
-                    <span className="digest-fill" style={{ width: `${digestPct}%` }} />
-                  )}
-                </>
-              ) : (
-                `Digest (${pending})`
-              )}
-            </button>
-            {/* The count says how many; this says which, and lets one be
-                thrown away before it costs a reading. */}
-            <button
-              className="digest-btn queue-btn"
-              data-tip="What is waiting to be read"
-              onClick={() => setShowQueue(true)}
-            >
-              ⋯
-            </button>
-          </span>
-        )}
-
-        <div className="topbar-tabs topbar-setup">
-          {SETUP.map((t) => {
-            const Icon = TAB_ICONS[t];
-            return (
+        <div className="topbar-right" data-tauri-drag-region>
+          {/* In advanced mode the map and the ideas are popups, not panels —
+              these are their doors. Simple mode reaches both from the tab
+              bar, so the buttons only exist here. */}
+          {layout === "advanced" && (
+            <>
               <button
-                key={t}
-                className={view === t && !deep ? "nav on" : "nav"}
-                onClick={() => {
-                  setDeep(null);
-                  setView(t);
-                }}
-                data-tip={tabName(t)}
+                className="icon-btn"
+                data-tip="The map"
+                onClick={() => setPopup("map")}
               >
-                <Icon className="nav-icon" />
+                <IconMap />
               </button>
-            );
-          })}
-        </div>
+              <button
+                className="icon-btn"
+                data-tip="Ideas"
+                onClick={() => setPopup("ideas")}
+              >
+                <IconIdeas />
+              </button>
+            </>
+          )}
+          {pending > 0 && (
+            <span className="row digest-group">
+              {/* Running, it becomes the way to stop — the same button, because
+                  "digesting" and "stop digesting" are the same thing seen from
+                  either side of the decision, and a second button beside it
+                  would be dead most of the time. */}
+              <button
+                className={digesting?.running ? "digest-btn running" : "digest-btn"}
+                disabled={digestBusy}
+                onClick={() => {
+                  if (digesting?.running) {
+                    void stopDigest();
+                    return;
+                  }
+                  setDigestBusy(true);
+                  void extractNow().finally(() => setDigestBusy(false));
+                }}
+              >
+                {digesting?.running ? (
+                  <>
+                    <span className="digest-label">
+                      {digesting.running.total > 1 &&
+                        `${digesting.running.index} of ${digesting.running.total} · `}
+                      {PHASE_WORD[digesting.running.phase] ?? digesting.running.phase}
+                    </span>
+                    <span className="digest-hover">Stop</span>
+                    {digestPct !== null && (
+                      <span className="digest-fill" style={{ width: `${digestPct}%` }} />
+                    )}
+                  </>
+                ) : (
+                  `Digest (${pending})`
+                )}
+              </button>
+              {/* The count says how many; this says which, and lets one be
+                  thrown away before it costs a reading. */}
+              <button
+                className="digest-btn queue-btn"
+                data-tip="What is waiting to be read"
+                onClick={() => setShowQueue(true)}
+              >
+                ⋯
+              </button>
+            </span>
+          )}
 
-        <WindowControls />
+          <div className="topbar-tabs topbar-setup">
+            {SETUP.map((t) => {
+              const Icon = TAB_ICONS[t];
+              return (
+                <button
+                  key={t}
+                  className={view === t && !deep ? "nav on" : "nav"}
+                  onClick={() => {
+                    setDeep(null);
+                    setView(t);
+                  }}
+                  data-tip={tabName(t)}
+                >
+                  <Icon className="nav-icon" />
+                </button>
+              );
+            })}
+          </div>
+
+          <WindowControls />
+        </div>
       </nav>
 
       <div className="pane">
@@ -985,7 +1055,7 @@ export default function App() {
           had no row of its own, so it was auto-placed into the last one and
           spent its life at the bottom of the window, under the status bar,
           saying "is what you are looking at" about something a screen away. */}
-      {(view === "map" || view === "ideas" || view === "said" || view === "make") &&
+      {(view === "map" || view === "ideas" || view === "make") &&
         layout === "simple" && (
         <div className="row scope-bar">
           <button
@@ -996,21 +1066,15 @@ export default function App() {
             <FolderMark name={folderName} id={folderId} />
             {folderName}
           </button>
-          <span className="row-meta">is what you are looking at</span>
         </div>
       )}
       {view === "settings" ? (
         <SettingsPanel />
-      ) : view === "make" ? (
+      ) : layout === "simple" && view === "make" ? (
         // The other direction: not what was taken out of the folder, but what
-        // the folder can be turned into.
+        // the folder can be turned into. Simple mode gives it the whole page;
+        // advanced keeps it as the workspace's left panel below.
         <Make folder={folderId} />
-      ) : view === "said" ? (
-        // Its own place rather than a panel in the workspace: this is the
-        // folder seen whole — everything said in it, and what that can be
-        // turned into — which is a thing you go and look at, not something
-        // you keep open beside the talking.
-        <Conversations folder={folderId} />
       ) : (
       // Everything at once rather than one tab at a time: the map and the
       // conversations to the left, the ideas they produced to the right, and
@@ -1021,44 +1085,41 @@ export default function App() {
             ? `workspace expanded expanded-${
                 view === "map" ? "map" : view === "ideas" ? "ideas" : "chat"
               }`
-            : `workspace${expanded ? ` expanded expanded-${expanded}` : ""}`
+            : `workspace${advancedSwap ? " swapped" : ""}${expanded ? ` expanded expanded-${expanded}` : ""}`
         }
       >
 
-        <section className="ws-panel ws-map">
-          <button className="ws-head" onClick={() => toggleExpand("map")} hidden={layout === "simple"}>
-            <IconMap className="nav-icon" />
-            Map
-            <span className="ws-grow" aria-hidden="true">
-              {expanded === "map" ? "Close" : "Open"}
-            </span>
-          </button>
-          <div className="ws-body">
-            <Graph
-              folder={folderId}
-              // Advanced mode confines the map to a pane beside the
-              // conversation — opening a node's file there has no room to be
-              // anything but cramped, so it opens over the whole app instead.
-              // Full-page map (simple mode) keeps its own roomy side panel.
-              onOpenFile={layout === "advanced" ? (kind, id) => setDeep({ kind, id }) : undefined}
-            />
-          </div>
-        </section>
+        {/* Advanced mode's left panel: what the folder is being turned into,
+            growing beside the thinking. Simple mode reaches Make as its own
+            tab, so this panel does not exist there. */}
+        {layout === "advanced" && (
+          <section className="ws-panel ws-left">
+            <button className="ws-head" onClick={() => toggleExpand("make")}>
+              <IconBook className="nav-icon" />
+              Make
+              <span className="ws-grow" aria-hidden="true">
+                {expanded === "make" ? "Close" : "Open"}
+              </span>
+            </button>
+            <div className="ws-body">
+              <Make folder={folderId} compact />
+            </div>
+          </section>
+        )}
+
+        {/* Simple mode's map: a full page, reached from the tab bar. Advanced
+            reaches it as a popup instead, so there is no panel for it here. */}
+        {layout === "simple" && (
+          <section className="ws-panel ws-map">
+            <div className="ws-body">
+              <Graph folder={folderId} />
+            </div>
+          </section>
+        )}
 
         <div className="ws-center">
       <div className={turns.length === 0 && !justArchived ? "think opening" : "think"}>
-      {showModels && (
-        <Drawer
-          title="Which model is answering"
-          onClose={() => {
-            setShowModels(false);
-            // Whatever was chosen in there is the answer now.
-            void recheck();
-          }}
-        >
-          <Models />
-        </Drawer>
-      )}
+      <div className="think-main">
       <div className="stream">
         {turns.length === 0 && !justArchived && (
           <p className="empty">
@@ -1093,15 +1154,17 @@ export default function App() {
                 </p>
                 {digesting.last.ideas > 0 && (
                   <div className="row">
+                    {/* Advanced has no map or ideas panels to expand — the
+                        popups take their place. */}
                     <button
                       className="btn on"
-                      onClick={() => (layout === "simple" ? setView("map") : setExpanded("map"))}
+                      onClick={() => (layout === "simple" ? setView("map") : setPopup("map"))}
                     >
                       See it on the map
                     </button>
                     <button
                       className="btn"
-                      onClick={() => (layout === "simple" ? setView("ideas") : setExpanded("ideas"))}
+                      onClick={() => (layout === "simple" ? setView("ideas") : setPopup("ideas"))}
                     >
                       Read the ideas
                     </button>
@@ -1272,7 +1335,7 @@ export default function App() {
 
           {/* Opens upward: it lives at the bottom of the window, and a menu
               that drops off the screen is no menu at all. */}
-          <div className="idle-pick">
+          <div className="idle-pick" ref={idleRef}>
             <button
               className="icon-btn"
               data-tip={
@@ -1327,6 +1390,18 @@ export default function App() {
           </button>
           {turns.length > 0 && (
             <button
+              className="btn"
+              data-tip="Start a new conversation — this one stays in the rail"
+              onClick={() => {
+                setTurns([]);
+                setJustArchived(null);
+              }}
+            >
+              New
+            </button>
+          )}
+          {turns.length > 0 && (
+            <button
               className={ending ? "btn busy" : "btn"}
               onClick={done}
               disabled={streaming || ending}
@@ -1340,20 +1415,50 @@ export default function App() {
         </div>
       </div>
       </div>
+      {/* Talking to a folder means its conversations are right here — read one
+          whole, or pick one up and continue it where it left off.
+
+          The handle lives on the edge the rail comes from, rather than as one
+          more icon in the composer bar: it is about the side of the screen,
+          not about the message being written, and it points the way the panel
+          will move. Advanced mode keeps this list in its own right-hand panel
+          instead, so the handle only exists in the one-place-at-a-time
+          layout. */}
+      {layout === "simple" && (
+        <button
+          className={railOpen ? "rail-handle open" : "rail-handle"}
+          data-tip={railOpen ? "Hide this folder's conversations" : "Conversations in this folder"}
+          onClick={() => setRailOpen((v) => !v)}
+        >
+          <IconChevron />
+        </button>
+      )}
+      {layout === "simple" && railOpen && (
+        <ConversationsRail folder={folderId} onContinue={(id) => void resume(id)} />
+      )}
+      </div>
 
         </div>
 
         <aside className="ws-panel ws-right">
-          <button className="ws-head" onClick={() => toggleExpand("ideas")} hidden={layout === "simple"}>
-            <IconIdeas className="nav-icon" />
-            Ideas
-            <span className="ws-grow" aria-hidden="true">
-              {expanded === "ideas" ? "Close" : "Open"}
-            </span>
-          </button>
-          <div className="ws-body">
-            <Ideas folder={folderId} onContinue={(id) => void resume(id)} />
-          </div>
+          {layout === "advanced" ? (
+            <>
+              <button className="ws-head" onClick={() => toggleExpand("conversations")}>
+                <IconChats className="nav-icon" />
+                Conversations
+                <span className="ws-grow" aria-hidden="true">
+                  {expanded === "conversations" ? "Close" : "Open"}
+                </span>
+              </button>
+              <div className="ws-body">
+                <ConversationsRail folder={folderId} onContinue={(id) => void resume(id)} />
+              </div>
+            </>
+          ) : (
+            <div className="ws-body">
+              <Ideas folder={folderId} onContinue={(id) => void resume(id)} />
+            </div>
+          )}
         </aside>
       </div>
       )}
@@ -1408,6 +1513,28 @@ export default function App() {
         />
       )}
 
+      {/* Map and Ideas as popups over a darkened app — the advanced layout's
+          version of the two tabs, for looking something up without leaving
+          the conversation. A file opened from inside stacks above at greater
+          depth, so going back is closing, not navigating. */}
+      {popup && (
+        <Sheet onClose={() => setPopup(null)}>
+          <div className="sheet-head">
+            <h2 className="sheet-title">{popup === "map" ? "The map" : "Ideas"}</h2>
+            <button className="icon-btn" data-tip="Close" onClick={() => setPopup(null)}>
+              <IconClose />
+            </button>
+          </div>
+          <div className="sheet-body">
+            {popup === "map" ? (
+              <Graph folder={folderId} onOpenFile={(kind, id) => setDeep({ kind, id })} />
+            ) : (
+              <Ideas folder={folderId} onContinue={(id) => void resume(id)} />
+            )}
+          </div>
+        </Sheet>
+      )}
+
       {deep && (
         <Sheet onClose={() => setDeep(null)}>
           {deep.kind === "idea" ? (
@@ -1419,6 +1546,37 @@ export default function App() {
           ) : (
             <ConversationFile sessionId={deep.id} onClose={() => setDeep(null)} />
           )}
+        </Sheet>
+      )}
+
+      {/* The model chooser, over the whole app rather than inside one pane —
+          it used to slide in beside the conversation and could end up behind
+          or cramped in the advanced layout. Whatever was chosen in here is
+          the answer now, so closing it rechecks. */}
+      {showModels && (
+        <Sheet
+          size="mid"
+          onClose={() => {
+            setShowModels(false);
+            void recheck();
+          }}
+        >
+          <div className="sheet-head">
+            <h2 className="sheet-title">Which model is answering</h2>
+            <button
+              className="icon-btn"
+              data-tip="Close"
+              onClick={() => {
+                setShowModels(false);
+                void recheck();
+              }}
+            >
+              <IconClose />
+            </button>
+          </div>
+          <div className="sheet-body">
+            <Models />
+          </div>
         </Sheet>
       )}
 

@@ -136,6 +136,8 @@ pub fn run() {
             commands::folders,
             commands::export_book,
             commands::compose_load,
+            commands::compose_selectable,
+            commands::compose_select,
             commands::compose_clear,
             commands::compose_send,
             commands::save_text,
@@ -165,6 +167,8 @@ pub fn run() {
             commands::clear_openrouter_key,
             commands::idea_deep_dive,
             commands::preview_import,
+            commands::list_claude_imports,
+            commands::import_claude_conversation,
             commands::import_conversation,
         ])
         .setup(|app| {

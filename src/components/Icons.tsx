@@ -84,39 +84,11 @@ export function IconSettings(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-/** One pane — the simple layout. */
-export function IconOnePane(props: SVGProps<SVGSVGElement>) {
-  return (
-    <Base width="15" height="15" {...props}>
-      <rect x="4" y="5" width="16" height="14" rx="1.5" />
-    </Base>
-  );
-}
-
-/** Panes either side of a middle — the layout with everything at once. */
-export function IconPanes(props: SVGProps<SVGSVGElement>) {
-  return (
-    <Base width="15" height="15" {...props}>
-      <rect x="3" y="5" width="18" height="14" rx="1.5" />
-      <path d="M9 5v14M15 5v14" />
-    </Base>
-  );
-}
-
 /** A paper plane — send. */
 export function IconSend(props: SVGProps<SVGSVGElement>) {
   return (
     <Base width="15" height="15" {...props}>
       <path d="M21 3L11 13M21 3l-7 18-4-8-8-4z" />
-    </Base>
-  );
-}
-
-/** A back caret — used above deep-dive files. */
-export function IconBack(props: SVGProps<SVGSVGElement>) {
-  return (
-    <Base width="15" height="15" {...props}>
-      <path d="M15 5l-7 7 7 7" />
     </Base>
   );
 }
@@ -183,15 +155,6 @@ export function IconArchive(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-/** A folder — where a stretch of thinking gets filed. */
-export function IconFolder(props: SVGProps<SVGSVGElement>) {
-  return (
-    <Base width="14" height="14" {...props}>
-      <path d="M3 6h6l2 2h10v11H3z" />
-    </Base>
-  );
-}
-
 /** A handset — call mode, where replies are short and spoken. */
 export function IconCall(props: SVGProps<SVGSVGElement>) {
   return (
@@ -227,6 +190,19 @@ export function IconChevron(props: SVGProps<SVGSVGElement>) {
   return (
     <Base width="12" height="12" {...props}>
       <path d="M5 8.5 10 13.5 15 8.5" />
+    </Base>
+  );
+}
+
+/** An arrow — pick this conversation back up and carry on in it.
+ *
+ * It used to be the rewind icon, which says the opposite of what the action
+ * does: continuing only ever appends, and nothing goes backwards. */
+export function IconArrowRight(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="14" height="14" {...props}>
+      <path d="M4 12h15" />
+      <path d="M13 6l6 6-6 6" />
     </Base>
   );
 }

@@ -49,7 +49,6 @@ export default function Engine({ onChanged }: { onChanged?: () => void }) {
   return (
     <>
       {error && <p className="error">{error}</p>}
-    {error && <p className="error">{error}</p>}
 
     {/* Shown whether or not one is installed already. It used to be an
         alternative to the "ready" line, so pressing Reinstall — which is only

@@ -18,6 +18,34 @@ export interface Packed {
   /** Replies shortened to their first part. */
   shortened: number;
   characters: number;
+  /** Titles of the conversations actually included, newest first. */
+  titles: string[];
+}
+
+/** A conversation and the ideas that came out of it, to tick or not. */
+export interface Selectable {
+  session_id: number;
+  title: string;
+  started_at: string;
+  ideas: { idea_id: number; title: string }[];
+}
+
+export function composeSelectable(folder: number | null): Promise<Selectable[]> {
+  return invoke<Selectable[]>("compose_selectable", { folder });
+}
+
+/**
+ * Narrow the context to what is ticked.
+ *
+ * Both lists empty means the whole folder, which is how the tab opens — the
+ * selector is for cutting down, not for having to opt in before anything works.
+ */
+export function composeSelect(
+  folder: number | null,
+  sessions: number[],
+  ideas: number[],
+): Promise<Packed> {
+  return invoke<Packed>("compose_select", { folder, sessions, ideas });
 }
 
 /** Load a folder's conversations as context. Cheap; no model involved. */

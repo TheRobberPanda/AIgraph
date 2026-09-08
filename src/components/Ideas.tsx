@@ -101,9 +101,9 @@ export default function Ideas({
   const [, tick] = useState(0);
 
   const refresh = useCallback(() => {
-    void listIdeas(folder).then(setIdeas);
-    void listSessions(folder).then(setSessions);
-    void listFolders().then(setFolders);
+    void listIdeas(folder).then(setIdeas).catch(() => {});
+    void listSessions(folder).then(setSessions).catch(() => {});
+    void listFolders().then(setFolders).catch(() => {});
   }, [folder]);
 
   /**
@@ -316,14 +316,7 @@ export default function Ideas({
         </button>
       </div>
 
-      {adding && (
-        <ImportChat
-          onDone={() => {
-            setAdding(false);
-            refresh();
-          }}
-        />
-      )}
+      {adding && <ImportChat onDone={() => { setAdding(false); refresh(); }} />}
 
       {tags.length > 1 && (
         <div className="tag-filter">
@@ -384,7 +377,7 @@ export default function Ideas({
                       const title = renaming.value.trim();
                       setRenaming(null);
                       if (!title) return;
-                      renameSession(session.id, title).then(refresh);
+                      renameSession(session.id, title).then(refresh).catch(() => {});
                     }}
                   >
                     <input
@@ -555,7 +548,7 @@ export default function Ideas({
             {
               label: menu.session.archived ? "Unarchive" : "Archive",
               onSelect: () =>
-                setSessionArchived(menu.session.id, !menu.session.archived).then(refresh),
+                setSessionArchived(menu.session.id, !menu.session.archived).then(refresh).catch(() => {}),
             },
             {
               // One entry rather than one per folder. With fifty folders the
@@ -583,7 +576,7 @@ export default function Ideas({
           onConfirm={() => {
             const id = deleting;
             setDeleting(null);
-            deleteSession(id).then(refresh);
+            deleteSession(id).then(refresh).catch(() => {});
           }}
           onCancel={() => setDeleting(null)}
         />

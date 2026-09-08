@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { onEscapeLayer } from "../lib/escape";
 
 /**
  * An in-app confirmation, replacing the browser's own dialog — which renders
@@ -15,14 +16,15 @@ export default function Confirm({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  useEffect(() => onEscapeLayer(onCancel), [onCancel]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
       if (e.key === "Enter") onConfirm();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onCancel, onConfirm]);
+  }, [onConfirm]);
 
   return (
     <div className="modal-overlay" onClick={onCancel}>

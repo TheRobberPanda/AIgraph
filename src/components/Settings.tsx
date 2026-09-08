@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { open as pickFolder } from "@tauri-apps/plugin-dialog";
-import Fold from "./Fold";
 import { useNoWheel } from "../lib/noWheel";
 import Engine from "./Engine";
 import {
+  ACCENTS,
+  applyAccent,
   applyTheme,
   applyUiScale,
   getSettings,
@@ -21,6 +22,7 @@ import {
   type EmbeddedStatus,
   type Settings as S,
   type Theme,
+  MAP_STYLES,
 } from "../lib/settings";
 import Confirm from "./Confirm";
 
@@ -34,9 +36,22 @@ import {
 const THEMES: { value: Theme; label: string }[] = [
   { value: "auto", label: "Match the system" },
   { value: "dark", label: "Dark" },
+  { value: "ember", label: "Ember" },
+  { value: "ink", label: "Ink" },
+  { value: "slate", label: "Slate" },
   { value: "light", label: "Light" },
+  { value: "paper", label: "Paper" },
 ];
 
+type Category = "appearance" | "conversation" | "voice" | "engine" | "prompts" | "about";
+
+/**
+ * Settings, sorted by the question you arrive with.
+ *
+ * One list of categories on the left, one pane at a time on the right. It was
+ * a single long scroll of folding sections, which made finding one setting a
+ * scan and made every setting carry the cost of explaining itself in place.
+ */
 export default function Settings() {
   const scaleRef = useNoWheel<HTMLInputElement>();
   const silenceRef = useNoWheel<HTMLInputElement>();
@@ -46,6 +61,7 @@ export default function Settings() {
   const [redigesting, setRedigesting] = useState(false);
   const [redigestNote, setRedigestNote] = useState<string | null>(null);
   const [dirError, setDirError] = useState("");
+  const [category, setCategory] = useState<Category>("appearance");
 
   /** Ask the OS for a folder, and only keep it if it can actually be used. */
   async function chooseDir() {
@@ -79,13 +95,6 @@ export default function Settings() {
    *  so. A download with no sign of life reads as a dead button, and the
    *  second press is someone giving up on the first. */
   const [busy, setBusy] = useState<"server" | "voice" | null>(null);
-  /** One section open at a time. Two open sections is most of the way back to
-   *  the wall this replaced. */
-  const [open, setOpen] = useState<string | null>(null);
-  const fold = (id: string) => ({
-    open: open === id,
-    onToggle: () => setOpen((cur) => (cur === id ? null : id)),
-  });
 
   useEffect(() => {
     void getSettings().then(setS);
@@ -105,13 +114,13 @@ export default function Settings() {
     };
   }, []);
 
-
   async function update(patch: Partial<S>) {
     if (!s) return;
     const next = { ...s, ...patch };
     setS(next);
     if (patch.theme) applyTheme(patch.theme);
     if (patch.ui_scale) applyUiScale(patch.ui_scale);
+    if (patch.accent !== undefined) applyAccent(patch.accent);
     try {
       await saveSettings(next);
     } catch (e) {
@@ -121,401 +130,444 @@ export default function Settings() {
 
   if (!s) return <div className="pane-inner" />;
 
+  const themeLabel = THEMES.find((t) => t.value === s.theme)!.label;
+  const voiceLabel = s.call_mode
+    ? "call mode"
+    : s.voice === "off"
+      ? "silent"
+      : s.voice === "neural"
+        ? "downloaded voice"
+        : "system voice";
+
+  const CATEGORIES: { id: Category; title: string; summary: string | null }[] = [
+    { id: "appearance", title: "Appearance", summary: themeLabel },
+    {
+      id: "conversation",
+      title: "Conversation",
+      summary: s.chat_stance === "challenge" ? "pushes back" : "organizes",
+    },
+    { id: "voice", title: "Voice & dictation", summary: voiceLabel },
+    {
+      id: "engine",
+      title: "Models & engine",
+      summary: server?.server_ready ? server.server_build ?? "ready" : "none installed",
+    },
+    { id: "prompts", title: "Prompts", summary: `${s.presets.length} instructions` },
+    { id: "about", title: "How this app uses AI", summary: null },
+  ];
+
   return (
-    <div className="pane-inner">
-      {error && <p className="error">{error}</p>}
-
-      <Fold title="Appearance" summary={THEMES.find((t) => t.value === s.theme)!.label} {...fold("appearance")}>
-                <div className="row">
-          {THEMES.map((t) => (
-            <button
-              key={t.value}
-              className={s.theme === t.value ? "btn on" : "btn"}
-              onClick={() => void update({ theme: t.value })}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </Fold>
-
-      <Fold
-        title="Language"
-        summary={LANGUAGES.find((l) => l.value === s.language)!.label}
-        {...fold("language")}
-      >
-        <p className="blurb">
-          Two things at once: what the model answers in and what your notes and
-          ideas are written in, and what the app's own buttons and labels say.
-          Left to follow what you write, a short first message is not much to
-          go on and you can get an English answer to a Polish question. Naming
-          the language settles both. Quotes are never translated: they are
-          found by searching your own words for them.
-        </p>
-        <p className="blurb">
-          The app's own text is translated as it comes up rather than all at
-          once, so a screen not yet covered stays in English inside an
-          otherwise Polish or Spanish app — legible either way, never blank.
-        </p>
-        <div className="row">
-          {LANGUAGES.map((l) => (
-            <button
-              key={l.value}
-              className={s.language === l.value ? "btn on" : "btn"}
-              onClick={() => {
-                const was = s.language;
-                void update({ language: l.value }).then(() => {
-                  // Nothing already read gets rewritten on its own — the
-                  // switch changes what happens from here forward, and
-                  // whether to go back and redo the rest is a real question,
-                  // not a side effect of picking a language.
-                  if (l.value !== was) setOfferRedigest(l.label);
-                });
-              }}
-            >
-              {l.label}
-            </button>
-          ))}
-        </div>
-      </Fold>
-
-      <Fold title="Interface size" summary={`${s.ui_scale}%`} {...fold("scale")}>
-                <div className="row scale-row">
-          <input
-            ref={scaleRef}
-            type="range"
-            className="scale-slider"
-            min={85}
-            max={160}
-            step={5}
-            value={s.ui_scale}
-            onChange={(e) => {
-              // Applied live as it's dragged, saved once it settles — a slider
-              // that only updates on release feels disconnected from the hand.
-              const v = Number(e.target.value);
-              setS({ ...s, ui_scale: v });
-              applyUiScale(v);
-            }}
-            onMouseUp={() => void update({ ui_scale: s.ui_scale })}
-            onKeyUp={() => void update({ ui_scale: s.ui_scale })}
-          />
-          <span className="scale-value">{s.ui_scale}%</span>
-          {s.ui_scale !== 100 && (
-            <button className="btn" onClick={() => void update({ ui_scale: 100 })}>
-              Reset
-            </button>
-          )}
-        </div>
-      </Fold>
-
-      <Fold title="Talking rather than reading" summary={s.call_mode ? "call mode" : s.voice === "off" ? "silent" : s.voice === "neural" ? "downloaded voice" : "system voice"} {...fold("voice")}>
-                <p className="blurb">
-          Call mode keeps answers to a few sentences and reads them out, so a
-          conversation can happen without looking at the screen. Asking to see
-          the map or the ideas opens them.
-        </p>
-        <div className="row">
+    <div className="pane-inner settings-wrap">
+      <nav className="settings-nav">
+        {CATEGORIES.map((c) => (
           <button
-            className={s.call_mode ? "btn on" : "btn"}
-            onClick={() => void update({ call_mode: !s.call_mode })}
+            key={c.id}
+            className={category === c.id ? "settings-cat on" : "settings-cat"}
+            onClick={() => setCategory(c.id)}
           >
-            {s.call_mode ? "Call mode on" : "Call mode off"}
+            <span className="settings-cat-title">{c.title}</span>
+            {c.summary && <span className="settings-cat-summary">{c.summary}</span>}
           </button>
-          <button
-            className={s.voice === "system" ? "btn on" : "btn"}
-            onClick={() => void update({ voice: s.voice === "system" ? "off" : "system" })}
-          >
-            This machine's voice
-          </button>
-          <button
-            className={s.voice === "neural" ? "btn on" : "btn"}
-            disabled={!voice?.installed}
-            onClick={() => void update({ voice: s.voice === "neural" ? "off" : "neural" })}
-          >
-            Downloaded voice
-          </button>
-        </div>
-        <p className="blurb">
-          Reading replies out is off unless you ask for it here. A call turns it
-          on for the length of the call regardless — there is nothing to read in
-          a call — and hanging up leaves this setting where you left it.
-        </p>
-        <p className="blurb">
-          The machine's own voice needs nothing downloaded and honours the rate
-          and voice you have already configured — which, if you rely on speech,
-          is usually the one you want. The downloaded voice sounds better and
-          runs on the CPU.
-        </p>
-        <div className="knobs">
-          <div className="knob">
-            <label className="knob-name">Pause before sending</label>
-            <input
-              ref={silenceRef}
-              type="range"
-              className="scale-slider"
-              min={1}
-              max={15}
-              step={1}
-              value={s.call_silence_seconds}
-              onChange={(e) => setS({ ...s, call_silence_seconds: Number(e.target.value) })}
-              onMouseUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
-              onKeyUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
-            />
-            <span className="knob-value">{s.call_silence_seconds}s</span>
-            <span className="knob-hint">
-              How long a call waits after you stop talking before it sends what
-              you said. Thinking out loud has pauses in it.
-            </span>
-          </div>
-        </div>
+        ))}
+      </nav>
 
-        {!voice?.installed &&
-          (fetching?.what === "voice" ? (
-            <p className="blurb">
-              Downloading the voice…{" "}
-              {Math.round((fetching.received / (fetching.total || 1)) * 100)}%
-            </p>
-          ) : (
-            <button
-              className={busy === "voice" ? "btn busy" : "btn"}
-              disabled={busy !== null}
-              onClick={() => {
-                setBusy("voice");
-                setError(null);
-                installVoice()
-                  .then(() => voiceStatus().then(setVoice))
-                  .catch((e) => setError(String(e)))
-                  .finally(() => setBusy(null));
-              }}
-            >
-              {busy === "voice" && <span className="spinner" aria-hidden="true" />}
-              {busy === "voice"
-                ? "Downloading…"
-                : `Download the voice · ${voice?.download_mb ?? 78}MB`}
-            </button>
-          ))}
-      </Fold>
+      <div className="settings-pane">
+        {error && <p className="error">{error}</p>}
 
-      <Fold
-        title="Thinking out loud"
-        summary={s.reasoning ? "on" : "off"}
-        {...fold("reasoning")}
-      >
-        <p className="blurb">
-          Some models deliberate at length before answering. None of it is shown
-          or recorded here — it is time between asking and hearing, and on a
-          local model it is usually most of the wait. Off unless what you are
-          asking is genuinely hard.
-        </p>
-        <div className="row">
-          <button
-            className={s.reasoning ? "btn on" : "btn"}
-            onClick={() => void update({ reasoning: !s.reasoning })}
-          >
-            {s.reasoning ? "Thinking before answering" : "Answering directly"}
-          </button>
-        </div>
-      </Fold>
-
-      <Fold
-        title="How it responds"
-        summary={s.chat_stance === "challenge" ? "Pushes back" : "Organizes"}
-        {...fold("stance")}
-      >
-        <p className="blurb">
-          Two different things to come here for. Pushing back is the sharper
-          tool for a thought you want tested — it finds the weakest part and
-          presses on it. Organizing is for a thought you want laid out, not
-          argued with: it works on structure and leaves the substance alone.
-          Neither is more correct; they answer different reasons for being
-          here.
-        </p>
-        <div className="row">
-          <button
-            className={s.chat_stance === "challenge" ? "btn on" : "btn"}
-            onClick={() => void update({ chat_stance: "challenge" })}
-          >
-            Push back
-          </button>
-          <button
-            className={s.chat_stance === "organize" ? "btn on" : "btn"}
-            onClick={() => void update({ chat_stance: "organize" })}
-          >
-            Just organize
-          </button>
-        </div>
-      </Fold>
-
-      <Fold title="Recall" summary={s.recall ? "on" : "off"} {...fold("recall")}>
-                <p className="blurb">
-          Hands the conversation the titles of ideas already recorded in this
-          folder, so it can say how what you are saying now bears on what you
-          said before. Titles only — never the claims, the quotes, or the
-          transcripts. This is the one thing the app adds to the chat that comes
-          from your own words, which is why it can be switched off.
-        </p>
-        <div className="row">
-          <button
-            className={s.recall ? "btn on" : "btn"}
-            onClick={() => void update({ recall: !s.recall })}
-          >
-            {s.recall ? "Connecting to earlier ideas" : "Answering each turn on its own"}
-          </button>
-        </div>
-      </Fold>
-
-      <Fold
-        title="Ending a session"
-        summary={
-          !s.auto_file
-            ? "when you say so"
-            : s.idle_minutes < 60
-              ? `${s.idle_minutes} min of quiet`
-              : `${s.idle_minutes / 60} hr of quiet`
-        }
-        {...fold("idle")}
-      >
-        <p className="blurb">
-          A conversation is filed when you press Done. It can also file itself
-          once you have been quiet for a while, which is convenient until you
-          walk away from something half-finished and come back to find it
-          filed, read and turned into ideas.
-        </p>
-        <div className="row">
-          <button
-            className={s.auto_file ? "btn" : "btn on"}
-            onClick={() => void update({ auto_file: false })}
-          >
-            Turned off
-          </button>
-          {[10, 30, 60, 120].map((m) => (
-            <button
-              key={m}
-              className={s.auto_file && s.idle_minutes === m ? "btn on" : "btn"}
-              onClick={() => void update({ auto_file: true, idle_minutes: m })}
-            >
-              After {m < 60 ? `${m} min` : `${m / 60} hr`} of quiet
-            </button>
-          ))}
-        </div>
-      </Fold>
-
-      <Fold title="Transcripts" {...fold("transcripts")}>
-        <p className="blurb">
-          Every conversation is also written out as a plain Markdown file, so
-          the record outlives this app. Move the folder and new transcripts go
-          there; the ones already written stay where they are.
-        </p>
-        <p className="path">{dir}</p>
-        {dirError && <p className="blurb warn">{dirError}</p>}
-        <div className="row">
-          <button className="btn" onClick={() => void chooseDir()}>
-            Choose a folder
-          </button>
-          <button className="btn" onClick={() => void useDefaultDir()}>
-            Back to the default
-          </button>
-        </div>
-      </Fold>
-
-      <Fold title="Dictation" summary={speech?.installed ? "installed" : "not installed"} {...fold("dictation")}>
-                {speech?.installed ? (
-          <p className="blurb">Installed, runs on the CPU.</p>
-        ) : downloading ? (
-          <p className="blurb">
-            Downloading… {Math.round((downloading.received / (downloading.total || 1)) * 100)}%
-          </p>
-        ) : (
+        {category === "appearance" && (
           <>
-            <p className="blurb">About {speech?.mb ?? 488}MB, once, offline.</p>
-            <button className="btn" onClick={() => void downloadSpeechModel()}>
-              Download the speech model
-            </button>
+            <h3 className="section">Theme</h3>
+            <div className="row">
+              {THEMES.map((t) => (
+                <button
+                  key={t.value}
+                  className={s.theme === t.value ? "btn on" : "btn"}
+                  onClick={() => void update({ theme: t.value })}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <h3 className="section">Accent</h3>
+            <p className="blurb">The colour of links, highlights and the chosen model.</p>
+            <div className="row accent-row">
+              {ACCENTS.map((a) => (
+                <button
+                  key={a.id || "default"}
+                  className={s.accent === a.id ? "accent-swatch on" : "accent-swatch"}
+                  data-tip={a.label}
+                  aria-label={a.label}
+                  onClick={() => void update({ accent: a.id })}
+                  style={a.hex ? { ["--swatch" as string]: a.hex } : undefined}
+                />
+              ))}
+            </div>
+
+            <h3 className="section">The map</h3>
+            <p className="blurb">
+              How the map draws itself. Node size and line weight only — never
+              what is on it.
+            </p>
+            <div className="row">
+              {MAP_STYLES.map((m) => (
+                <button
+                  key={m.value}
+                  className={s.map_style === m.value ? "btn on" : "btn"}
+                  data-tip={m.blurb}
+                  onClick={() => void update({ map_style: m.value })}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <h3 className="section">Interface size</h3>
+            <div className="row scale-row">
+              <input
+                ref={scaleRef}
+                type="range"
+                className="scale-slider"
+                min={85}
+                max={160}
+                step={5}
+                value={s.ui_scale}
+                onChange={(e) => {
+                  // The number moves with the hand; the interface does not.
+                  // Rescaling the whole app on every step of the drag moves
+                  // the slider out from under the cursor as you use it, which
+                  // makes the setting fight the person changing it.
+                  setS({ ...s, ui_scale: Number(e.target.value) });
+                }}
+                onMouseUp={() => {
+                  applyUiScale(s.ui_scale);
+                  void update({ ui_scale: s.ui_scale });
+                }}
+                onKeyUp={() => {
+                  applyUiScale(s.ui_scale);
+                  void update({ ui_scale: s.ui_scale });
+                }}
+              />
+              <span className="scale-value">{s.ui_scale}%</span>
+              {s.ui_scale !== 100 && (
+                <button className="btn" onClick={() => void update({ ui_scale: 100 })}>
+                  Reset
+                </button>
+              )}
+            </div>
+
+            <h3 className="section">Advanced layout sides</h3>
+            <p className="blurb">
+              In the advanced layout: which side the conversations sit on. Make takes
+              the other side; the thinking stays in the middle.
+            </p>
+            <div className="row">
+              <button
+                className={!s.advanced_swap ? "btn on" : "btn"}
+                onClick={() => void update({ advanced_swap: false })}
+              >
+                Conversations right
+              </button>
+              <button
+                className={s.advanced_swap ? "btn on" : "btn"}
+                onClick={() => void update({ advanced_swap: true })}
+              >
+                Conversations left
+              </button>
+            </div>
+
+            <h3 className="section">Language</h3>
+            <p className="blurb">What the model answers in, and what your notes and ideas are written in.</p>
+            <div className="row">
+              {LANGUAGES.map((l) => (
+                <button
+                  key={l.value}
+                  className={s.language === l.value ? "btn on" : "btn"}
+                  onClick={() => {
+                    const was = s.language;
+                    void update({ language: l.value }).then(() => {
+                      // Nothing already read gets rewritten on its own — the
+                      // switch changes what happens from here forward, and
+                      // whether to go back and redo the rest is a real question,
+                      // not a side effect of picking a language.
+                      if (l.value !== was) setOfferRedigest(l.label);
+                    });
+                  }}
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
           </>
         )}
-      </Fold>
 
-      <Fold
-        title="The engine"
-        summary={server?.server_ready ? server.server_build ?? "installed" : "none"}
-        {...fold("engine")}
-      >
-        <p className="blurb">
-          What actually runs a model the app holds itself. The CPU build works
-          everywhere; the GPU build uses whatever graphics card is here,
-          whoever made it, and is several times faster where there is one.
-        </p>
-        <Engine onChanged={() => void embeddedStatus().then(setServer).catch(() => {})} />
-      </Fold>
+        {category === "conversation" && (
+          <>
+            <h3 className="section">How it responds</h3>
+            <div className="row">
+              <button
+                className={s.chat_stance === "challenge" ? "btn on" : "btn"}
+                onClick={() => void update({ chat_stance: "challenge" })}
+              >
+                Push back
+              </button>
+              <button
+                className={s.chat_stance === "organize" ? "btn on" : "btn"}
+                onClick={() => void update({ chat_stance: "organize" })}
+              >
+                Just organize
+              </button>
+            </div>
+            <p className="blurb">
+              Pushing back tests a thought; organizing lays it out without arguing.
+            </p>
 
-      {/* The Make tab's buttons are only saved instructions, and this is
-          where they can be argued with. A default cannot know what makes a
-          script sound like you rather than like a content farm — that is
-          exactly the sentence worth editing. */}
-      <Fold
-        title="What the Make buttons ask for"
-        summary={`${s.presets.length} instructions`}
-        {...fold("presets")}
-      >
-        <p className="blurb">
-          Each button on the Make tab sends the wording below, with the folder's
-          conversations in front of the model. Change any of it. The name is
-          what the button says; the instruction is what it does.
-        </p>
-        {s.presets.map((preset, i) => (
-          <div key={preset.id} className="preset">
-            <input
-              className="field preset-name"
-              value={preset.name}
-              onChange={(e) => {
-                const presets = [...s.presets];
-                presets[i] = { ...preset, name: e.target.value };
-                setS({ ...s, presets });
-              }}
-              onBlur={() => void update({ presets: s.presets })}
-            />
-            <textarea
-              className="field preset-prompt"
-              rows={4}
-              value={preset.prompt}
-              onChange={(e) => {
-                const presets = [...s.presets];
-                presets[i] = { ...preset, prompt: e.target.value };
-                setS({ ...s, presets });
-              }}
-              // Saved on leaving the box rather than on every keystroke: this
-              // writes a file and emits to every window, and doing that per
-              // character would fight the person typing.
-              onBlur={() => void update({ presets: s.presets })}
-            />
-          </div>
-        ))}
-        <div className="row">
-          <button
-            className="btn"
-            onClick={() => resetPresets().then(setS).catch((e) => setError(String(e)))}
-          >
-            Put them all back
-          </button>
-        </div>
-      </Fold>
+            <h3 className="section">Thinking before answering</h3>
+            <div className="row">
+              <button
+                className={s.reasoning ? "btn on" : "btn"}
+                onClick={() => void update({ reasoning: !s.reasoning })}
+              >
+                {s.reasoning ? "On" : "Off"}
+              </button>
+            </div>
+            <p className="blurb">
+              Reasoning models can deliberate at length first. None of it is shown or
+              recorded here — on a local model it is most of the wait.
+            </p>
 
-      <Fold title="How this app uses AI" {...fold("ai")}>
-                {/* Stated in the app, not only in a README. Someone using this to think
-            through something that matters deserves to know what is machine-made
-            without going looking for it. */}
-        <ul className="plain-list">
-          <li>Ideas are recorded by a model taking notes. It can misread, so every idea links back to the exact words it came from.</li>
-          <li>An idea the model cannot quote is discarded rather than shown. The Ideas page reports how often that happens.</li>
-          <li>Notes in the margin are the model's, marked <b>AI</b>, and never become recorded ideas.</li>
-          <li>The chat runs on one of two fixed instructions, chosen in <i>How it responds</i> above — arguing the substance, or organizing it without arguing — the same one every time regardless of model. Nothing about this app or its extraction is added.</li>
-          <li>With Recall on, the chat is also handed the <i>titles</i> of ideas already recorded in the folder you are in. Nothing else of yours reaches it, and turning Recall off removes even that.</li>
-          <li>Nothing leaves this machine unless a remote model is chosen in Models.</li>
-        </ul>
-      </Fold>
+            <h3 className="section">Recall</h3>
+            <div className="row">
+              <button
+                className={s.recall ? "btn on" : "btn"}
+                onClick={() => void update({ recall: !s.recall })}
+              >
+                {s.recall ? "Connecting to earlier ideas" : "Each turn on its own"}
+              </button>
+            </div>
+            <p className="blurb">
+              Hands the conversation the titles of ideas already recorded in this
+              folder. Titles only — never claims, quotes, or transcripts.
+            </p>
 
-      {redigesting && <p className="blurb">Reading everything again…</p>}
-      {redigestNote && <p className="blurb">{redigestNote}</p>}
+            <h3 className="section">Ending a session</h3>
+            <div className="row">
+              <button
+                className={s.auto_file ? "btn" : "btn on"}
+                onClick={() => void update({ auto_file: false })}
+              >
+                When you say so
+              </button>
+              {[10, 30, 60, 120].map((m) => (
+                <button
+                  key={m}
+                  className={s.auto_file && s.idle_minutes === m ? "btn on" : "btn"}
+                  onClick={() => void update({ auto_file: true, idle_minutes: m })}
+                >
+                  After {m < 60 ? `${m} min` : `${m / 60} hr`} of quiet
+                </button>
+              ))}
+            </div>
+            <p className="blurb">
+              A conversation files when you press Done. It can also file itself after
+              a stretch of quiet.
+            </p>
+          </>
+        )}
+
+        {category === "voice" && (
+          <>
+            <h3 className="section">Reading replies aloud</h3>
+            <div className="row">
+              <button
+                className={s.call_mode ? "btn on" : "btn"}
+                onClick={() => void update({ call_mode: !s.call_mode })}
+              >
+                {s.call_mode ? "Call mode on" : "Call mode off"}
+              </button>
+              <button
+                className={s.voice === "system" ? "btn on" : "btn"}
+                onClick={() => void update({ voice: s.voice === "system" ? "off" : "system" })}
+              >
+                This machine's voice
+              </button>
+              <button
+                className={s.voice === "neural" ? "btn on" : "btn"}
+                disabled={!voice?.installed}
+                onClick={() => void update({ voice: s.voice === "neural" ? "off" : "neural" })}
+              >
+                Downloaded voice
+              </button>
+            </div>
+            <p className="blurb">
+              Call mode keeps answers to a few sentences and reads them out. Reading
+              aloud is off unless you ask; a call turns it on for its length and
+              hanging up leaves this where you left it.
+            </p>
+
+            <div className="knobs">
+              <div className="knob">
+                <label className="knob-name">Pause before sending</label>
+                <input
+                  ref={silenceRef}
+                  type="range"
+                  className="scale-slider"
+                  min={1}
+                  max={15}
+                  step={1}
+                  value={s.call_silence_seconds}
+                  onChange={(e) => setS({ ...s, call_silence_seconds: Number(e.target.value) })}
+                  onMouseUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
+                  onKeyUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
+                />
+                <span className="knob-value">{s.call_silence_seconds}s</span>
+                <span className="knob-hint">
+                  How long a call waits after you stop talking before it sends what
+                  you said. Thinking out loud has pauses in it.
+                </span>
+              </div>
+            </div>
+
+            <h3 className="section">Dictation</h3>
+            {speech?.installed ? (
+              <p className="blurb">Installed, runs on the CPU.</p>
+            ) : downloading ? (
+              <p className="blurb">
+                Downloading… {Math.round((downloading.received / (downloading.total || 1)) * 100)}%
+              </p>
+            ) : (
+              <>
+                <p className="blurb">About {speech?.mb ?? 488}MB, once, offline.</p>
+                <button className="btn" onClick={() => void downloadSpeechModel()}>
+                  Download the speech model
+                </button>
+              </>
+            )}
+
+            {!voice?.installed &&
+              (fetching?.what === "voice" ? (
+                <p className="blurb">
+                  Downloading the voice…{" "}
+                  {Math.round((fetching.received / (fetching.total || 1)) * 100)}%
+                </p>
+              ) : (
+                <div className="row" style={{ marginTop: "0.6rem" }}>
+                  <button
+                    className={busy === "voice" ? "btn busy" : "btn"}
+                    disabled={busy !== null}
+                    onClick={() => {
+                      setBusy("voice");
+                      setError(null);
+                      installVoice()
+                        .then(() => voiceStatus().then(setVoice))
+                        .catch((e) => setError(String(e)))
+                        .finally(() => setBusy(null));
+                    }}
+                  >
+                    {busy === "voice" && <span className="spinner" aria-hidden="true" />}
+                    {busy === "voice"
+                      ? "Downloading…"
+                      : `Download the voice · ${voice?.download_mb ?? 78}MB`}
+                  </button>
+                </div>
+              ))}
+          </>
+        )}
+
+        {category === "engine" && (
+          <>
+            <h3 className="section">The engine</h3>
+            <p className="blurb">
+              What runs a model the app holds itself. The CPU build works everywhere;
+              the GPU build is several times faster where there is a graphics card.
+              Models themselves are picked from the chip at the top of the
+              conversation.
+            </p>
+            <Engine onChanged={() => void embeddedStatus().then(setServer).catch(() => {})} />
+          </>
+        )}
+
+        {category === "prompts" && (
+          <>
+            <h3 className="section">What the Make buttons ask for</h3>
+            <p className="blurb">
+              Each button on the Make tab sends the wording below, with the folder's
+              conversations in front of the model.
+            </p>
+            {s.presets.map((preset, i) => (
+              <div key={preset.id} className="preset">
+                <input
+                  className="field preset-name"
+                  value={preset.name}
+                  onChange={(e) => {
+                    const presets = [...s.presets];
+                    presets[i] = { ...preset, name: e.target.value };
+                    setS({ ...s, presets });
+                  }}
+                  onBlur={() => void update({ presets: s.presets })}
+                />
+                <textarea
+                  className="field preset-prompt"
+                  rows={4}
+                  value={preset.prompt}
+                  onChange={(e) => {
+                    const presets = [...s.presets];
+                    presets[i] = { ...preset, prompt: e.target.value };
+                    setS({ ...s, presets });
+                  }}
+                  // Saved on leaving the box rather than on every keystroke: this
+                  // writes a file and emits to every window, and doing that per
+                  // character would fight the person typing.
+                  onBlur={() => void update({ presets: s.presets })}
+                />
+              </div>
+            ))}
+            <div className="row">
+              <button
+                className="btn"
+                onClick={() => resetPresets().then(setS).catch((e) => setError(String(e)))}
+              >
+                Put them all back
+              </button>
+            </div>
+            <h3 className="section">Transcripts</h3>
+            <p className="blurb">
+              Every conversation is also written out as a plain Markdown file, so the
+              record outlives this app. New transcripts go to the folder chosen here.
+            </p>
+            <p className="path">{dir}</p>
+            {dirError && <p className="blurb warn">{dirError}</p>}
+            <div className="row">
+              <button className="btn" onClick={() => void chooseDir()}>
+                Choose a folder
+              </button>
+              <button className="btn" onClick={() => void useDefaultDir()}>
+                Back to the default
+              </button>
+            </div>
+
+          </>
+        )}
+
+        {category === "about" && (
+          <>
+            {/* Stated in the app, not only in a README. Someone using this to think
+                through something that matters deserves to know what is machine-made
+                without going looking for it. */}
+            <ul className="plain-list">
+              <li>Ideas are recorded by a model taking notes. It can misread, so every idea links back to the exact words it came from.</li>
+              <li>An idea the model cannot quote is discarded rather than shown. The Ideas page reports how often that happens.</li>
+              <li>Notes in the margin are the model's, marked <b>AI</b>, and never become recorded ideas.</li>
+              <li>The chat runs on one of two fixed instructions, chosen in <i>Conversation</i> — arguing the substance, or organizing it without arguing — the same one every time regardless of model. Nothing about this app or its extraction is added.</li>
+              <li>With Recall on, the chat is also handed the <i>titles</i> of ideas already recorded in the folder you are in. Nothing else of yours reaches it, and turning Recall off removes even that.</li>
+              <li>Nothing leaves this machine unless a remote model is chosen in Models.</li>
+            </ul>
+          </>
+        )}
+
+        {redigesting && <p className="blurb">Reading everything again…</p>}
+        {redigestNote && <p className="blurb">{redigestNote}</p>}
+      </div>
 
       {offerRedigest && (
         <Confirm

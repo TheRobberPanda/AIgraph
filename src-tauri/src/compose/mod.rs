@@ -50,6 +50,9 @@ pub struct Packed {
     /// Replies shortened to their first part.
     pub shortened: usize,
     pub characters: usize,
+    /// Titles of the conversations actually included, newest first — the
+    /// screen shows what the model will be reading, not just how much of it.
+    pub titles: Vec<String>,
 }
 
 /// Lay a folder's conversations out for a model to read.
@@ -106,10 +109,41 @@ pub fn pack(conversations: &[Recorded]) -> Packed {
         text.push_str(&block);
         out.conversations += 1;
         out.shortened += shortened;
+        out.titles.push(
+            if talk.title.trim().is_empty() { "Untitled conversation" } else { talk.title.trim() }
+                .to_string(),
+        );
     }
 
     out.characters = text.len();
     out.text = text;
+    out
+}
+
+/// Ideas chosen on their own, without the conversation around them.
+///
+/// A conversation ticked whole goes in as its transcript. An idea ticked by
+/// itself goes in as what was recorded of it — the statement, and the words it
+/// was drawn from. Both are that person's material; they differ in how much of
+/// the road to it comes along.
+pub fn pack_ideas(ideas: &[(String, String, Vec<String>)]) -> String {
+    if ideas.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\n===== Ideas chosen on their own =====\n");
+    for (title, claim, quotes) in ideas {
+        out.push_str("\n- ");
+        out.push_str(title);
+        if claim.trim() != title.trim() {
+            out.push_str("\n  ");
+            out.push_str(claim);
+        }
+        for q in quotes {
+            out.push_str("\n  THEM: ");
+            out.push_str(q);
+        }
+        out.push('\n');
+    }
     out
 }
 

@@ -88,6 +88,21 @@ pub struct StoredIdea {
     pub weak: Vec<String>,
 }
 
+/// One conversation and what came out of it. See [`Store::selectable`].
+#[derive(Debug, Clone, Serialize)]
+pub struct Selectable {
+    pub session_id: i64,
+    pub title: String,
+    pub started_at: String,
+    pub ideas: Vec<SelectableIdea>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectableIdea {
+    pub idea_id: i64,
+    pub title: String,
+}
+
 /// One conversation as it happened. See [`Store::folder_turns`].
 #[derive(Debug, Clone)]
 pub struct Recorded {
@@ -965,6 +980,72 @@ impl Store {
 
         let (strong, weak) = self.nudges_for("nudges", "idea_id", idea_id)?;
         Ok(IdeaView { id: idea_id, claim, title, revision, strong, weak, evidence, revisions })
+    }
+
+    /// A folder's conversations with the ideas each produced.
+    ///
+    /// What the Make tab offers to choose from. Ideas hang under the
+    /// conversation they were first found in — an idea supported by two
+    /// conversations appears under the earlier one rather than twice, because
+    /// a list that shows the same thing in two places invites you to pick it
+    /// twice and then sends it twice.
+    pub fn selectable(&self, folder: Option<i64>) -> Result<Vec<Selectable>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, COALESCE(s.title, ''), s.started_at, i.id, i.title, i.claim
+             FROM sessions s
+             LEFT JOIN evidence e ON e.session_id = s.id
+             LEFT JOIN ideas i ON i.id = e.idea_id
+             WHERE s.archived = 0 AND (?1 IS NULL OR s.folder_id = ?1)
+             ORDER BY s.started_at DESC, s.id DESC, i.id",
+        )?;
+        let rows = stmt.query_map([folder], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+            ))
+        })?;
+
+        let mut out: Vec<Selectable> = Vec::new();
+        let mut seen: std::collections::HashSet<i64> = Default::default();
+        for row in rows {
+            let (id, title, started_at, idea_id, idea_title, claim) = row?;
+            if out.last().map(|c: &Selectable| c.session_id != id).unwrap_or(true) {
+                out.push(Selectable { session_id: id, title, started_at, ideas: Vec::new() });
+            }
+            let Some(idea_id) = idea_id else { continue };
+            if !seen.insert(idea_id) {
+                continue;
+            }
+            let label = idea_title.filter(|t| !t.trim().is_empty()).or(claim).unwrap_or_default();
+            out.last_mut()
+                .expect("just pushed")
+                .ideas
+                .push(SelectableIdea { idea_id, title: label });
+        }
+        Ok(out)
+    }
+
+    /// One idea's own material, for a context built from ideas rather than
+    /// whole conversations.
+    pub fn idea_material(&self, idea_id: i64) -> Result<Option<(String, String, Vec<String>)>> {
+        let head: Option<(String, String)> = self
+            .conn
+            .query_row("SELECT title, claim FROM ideas WHERE id = ?1", [idea_id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        let Some((title, claim)) = head else { return Ok(None) };
+
+        let mut stmt =
+            self.conn.prepare("SELECT quote FROM evidence WHERE idea_id = ?1 ORDER BY id")?;
+        let quotes: Vec<String> =
+            stmt.query_map([idea_id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let label = if title.trim().is_empty() { claim.clone() } else { title };
+        Ok(Some((label, claim, quotes)))
     }
 
     /// Every turn of every conversation in one folder, in order.

@@ -381,10 +381,11 @@ export function IdeaFile({
           {worthShowing(dive, view.claim) ? (
             <section className="dive">
               <h3 className="section">In the margin</h3>
+              {/* Through the markdown renderer, not raw paragraphs — the model
+                  writes emphasis, lists and occasional headings, and showing
+                  its asterisks verbatim reads as broken. */}
               <div className="dive-text">
-                {dive!.split(/\n\s*\n/).map((para, i) => (
-                  <p key={i}>{para}</p>
-                ))}
+                <Markdown>{dive!}</Markdown>
               </div>
             </section>
           ) : (

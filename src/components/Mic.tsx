@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { IconChevron } from "./Icons";
 import {
   downloadSpeechModel,
   onDictation,
@@ -55,6 +56,7 @@ export default function Mic({
   const busy = phase === "starting" || phase === "stopping";
   const [error, setError] = useState<string | null>(null);
   const [showTimeouts, setShowTimeouts] = useState(false);
+  const timeoutMenuRef = useRef<HTMLSpanElement>(null);
   /** Seconds since the last time anything was heard, or since listening
    *  started if nothing has been yet. Not React state: it moves every
    *  second and nothing on screen reads it directly. */
@@ -112,6 +114,7 @@ export default function Mic({
       if (limit > 0 && quietFor.current >= limit) {
         void stopDictation().catch(() => {});
         setSpeaking(false);
+        speakingRef.current?.(false);
         setPhase("idle");
       }
     }, 1000);
@@ -127,6 +130,16 @@ export default function Mic({
 
   // Never leave the microphone open behind a closing window.
   useEffect(() => () => void stopDictation().catch(() => {}), []);
+
+  // Close the timeout dropdown when clicking elsewhere.
+  useEffect(() => {
+    if (!showTimeouts) return;
+    const onDown = (e: MouseEvent) => {
+      if (timeoutMenuRef.current && !timeoutMenuRef.current.contains(e.target as Node)) setShowTimeouts(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [showTimeouts]);
 
   async function toggle() {
     if (busy) return;
@@ -209,7 +222,7 @@ export default function Mic({
   return (
     <>
       {error && <span className="mic-status error">{error}</span>}
-      <span className="idle-pick">
+      <span className="idle-pick" ref={timeoutMenuRef}>
         <button
           className={`btn mic${active ? " on" : ""}${busy ? " busy" : ""}`}
           onClick={toggle}
@@ -236,13 +249,15 @@ export default function Mic({
             doesn't require starting to dictate first. */}
         <button
           className="mic-caret"
+          aria-expanded={showTimeouts}
+          aria-label="Dictation timeout"
           data-tip={`Stop listening after ${timeoutLabel(timeoutSeconds).toLowerCase()} of silence`}
           onClick={(e) => {
             e.stopPropagation();
             setShowTimeouts((v) => !v);
           }}
         >
-          ⌄
+          <IconChevron className={showTimeouts ? "flip" : undefined} aria-hidden="true" />
         </button>
         {showTimeouts && (
           <ul className="idle-list">

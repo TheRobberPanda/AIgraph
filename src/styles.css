@@ -85,6 +85,111 @@
   color-scheme: light;
 }
 
+/* Four more stops between the defaults. Each restates the whole set — the
+   media query above matches any theme that is not explicitly dark, so a
+   partial block here would let system-light variables bleed through. */
+:root[data-theme="ember"] {
+  /* The dark theme with more fire in it: browner ground, deeper amber. */
+  --bg: #1c1611;
+  --surface: #261e17;
+  --surface-lift: #30261d;
+  --user: #2a211a;
+  --line: #473828;
+  --fg: #f0e7db;
+  --muted: #ab9681;
+  --faint: #7e6c5a;
+  --accent: #d97e45;
+  --gold: #d0a044;
+  --verdant: #8a9a5f;
+  --danger: #d96a52;
+  color-scheme: dark;
+}
+
+:root[data-theme="ink"] {
+  /* Near-black for late nights. Cool without going blue. */
+  --bg: #0e0f12;
+  --surface: #15171b;
+  --surface-lift: #1c1f24;
+  --user: #1a1d22;
+  --line: #2b2f37;
+  --fg: #e7e9ec;
+  --muted: #9aa0a9;
+  --faint: #6c717a;
+  --accent: #93abbe;
+  --gold: #c4a95c;
+  --verdant: #7f9a72;
+  --danger: #cf6f60;
+  color-scheme: dark;
+}
+
+:root[data-theme="slate"] {
+  /* Blue-grey surfaces; the coldest of the dark set. */
+  --bg: #15181d;
+  --surface: #1c2027;
+  --surface-lift: #242932;
+  --user: #21262e;
+  --line: #333b47;
+  --fg: #e4e8ee;
+  --muted: #9ba6b2;
+  --faint: #6f7984;
+  --accent: #8fb0d0;
+  --gold: #c9ad5e;
+  --verdant: #83a077;
+  --danger: #d1705f;
+  color-scheme: dark;
+}
+
+:root[data-theme="paper"] {
+  /* Warm paper, deeper than Light — for daylight reading. */
+  --bg: #f0e8da;
+  --surface: #e8decf;
+  --surface-lift: #f7f2e8;
+  --user: #e5d9c4;
+  --line: #d3c3ab;
+  --fg: #332a20;
+  --muted: #6f6249;
+  --faint: #9c8c73;
+  --accent: #a85428;
+  --gold: #8a6410;
+  --verdant: #4a6b3c;
+  --danger: #a03c2c;
+  color-scheme: light;
+}
+
+/* Accent overrides, keyed off data-accent. Two tints each: the dark-ground
+   one, and a deeper version for light grounds where the dark tint would wash
+   out. These come after every theme block so an explicit choice wins. */
+:root[data-accent="coral"]   { --accent: #e08659; }
+:root[data-accent="gold"]    { --accent: #dba53f; }
+:root[data-accent="verdant"] { --accent: #7ead6f; }
+:root[data-accent="haze"]    { --accent: #9fb8d4; }
+:root[data-accent="rose"]    { --accent: #c9899f; }
+:root[data-accent="iris"]    { --accent: #a396c4; }
+
+:root[data-theme="light"][data-accent="coral"],
+:root[data-theme="paper"][data-accent="coral"]   { --accent: #bd5a2e; }
+:root[data-theme="light"][data-accent="gold"],
+:root[data-theme="paper"][data-accent="gold"]    { --accent: #93650f; }
+:root[data-theme="light"][data-accent="verdant"],
+:root[data-theme="paper"][data-accent="verdant"] { --accent: #4f7440; }
+:root[data-theme="light"][data-accent="haze"],
+:root[data-theme="paper"][data-accent="haze"]    { --accent: #5d7fa3; }
+:root[data-theme="light"][data-accent="rose"],
+:root[data-theme="paper"][data-accent="rose"]    { --accent: #a35e77; }
+:root[data-theme="light"][data-accent="iris"],
+:root[data-theme="paper"][data-accent="iris"]    { --accent: #6f6193; }
+
+/* The "auto" theme: attribute absent, so the system preference decides which
+   of the two tints above applies. */
+@media (prefers-color-scheme: light) {
+  :root[data-accent="coral"]:not([data-theme])   { --accent: #bd5a2e; }
+  :root[data-accent="gold"]:not([data-theme])    { --accent: #93650f; }
+  :root[data-accent="verdant"]:not([data-theme]) { --accent: #4f7440; }
+  :root[data-accent="haze"]:not([data-theme])    { --accent: #5d7fa3; }
+  :root[data-accent="rose"]:not([data-theme])    { --accent: #a35e77; }
+  :root[data-accent="iris"]:not([data-theme])    { --accent: #6f6193; }
+}
+
 * { box-sizing: border-box; }
 
 body {
@@ -117,9 +222,14 @@ input, textarea {
   grid-row: 1;
   position: relative;
   z-index: 70;
-  display: flex;
+  /* Three columns: everything on the left, the model chip in the true
+     centre, everything on the right. Centred like the absolute positioning
+     it replaces, but the chip can no longer slide under the tabs when the
+     bar gets crowded — each side is confined to its own column. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.4rem;
   padding: 0 0.6rem;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
@@ -128,6 +238,30 @@ input, textarea {
      bottom edge — the hint appeared to render behind the app. The bar has
      few enough items to never need scrolling. */
 }
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  min-width: 0;
+  justify-self: start;
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  justify-self: end;
+}
+
+/* The topbar degrades with the effective width — see applyUiScale, which
+   decides the classes: below 1190 effective pixels the tabs go icon-only
+   (the tooltip and the highlighted state still say where you are), and
+   between there and 1310 the labelled tabs tighten so five of them still
+   leave the centre column its room. */
+.topbar-tight .nav { padding-left: 0.42rem; padding-right: 0.42rem; }
+.topbar-tight .topbar-tabs { gap: 0.05rem; }
+.topbar-tight .brand { padding-right: 0.4rem; }
+.topbar-icons .topbar-left .nav-label { display: none; }
 
 .window-controls { display: flex; gap: 0.2rem; flex: none; margin-left: 0.4rem; }
 .window-btn {
@@ -166,40 +300,13 @@ input, textarea {
   margin-left: 0.4rem;
   border-left: 1px solid var(--line);
 }
-.topbar-spacer { flex: 1; }
 
-/* Fixed to the bar's own centre regardless of how wide anything else on
-   either side is, and pinned to the bar's z-index — the one thing on screen
-   that should never end up covered or squeezed by something else opening. */
-/* Fixed to the bar's own centre regardless of how wide anything else on
-   either side is — the one thing on screen that should never end up covered
-   or squeezed by something else opening. */
+/* The model chip sits in the centre grid column. Capped so a long model
+   name cannot reach out and touch either side on a narrow window. */
 .topbar-model {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  justify-self: center;
   max-width: min(40vw, 22rem);
 }
-
-/* Kept for the composer bar once a conversation is under way. */
-.folder-chip {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  max-width: 12rem;
-  padding: 0.35rem 0.7rem;
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-.folder-chip:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--fg); }
-.folder-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Named rather than drawn: "Simplified" and "Advanced" say what they are, and
    two abstract rectangles did not. */
@@ -410,18 +517,26 @@ input, textarea {
 
 /* ---- The workspace ---- */
 
-/* Everything at once: what came before on the left, the talking in the
-   middle, what came out of it on the right. */
+/* Everything at once rather than one tab at a time. Advanced: what the folder
+   is being turned into on the left, the talking in the middle, its past
+   conversations on the right. The map and the ideas are popups in this mode,
+   so no panel holds them. */
 .workspace {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(16rem, 26%) minmax(0, 1fr) minmax(15rem, 24%);
+  grid-template-columns: minmax(15rem, 26%) minmax(0, 1fr) minmax(14rem, 22%);
   gap: 1px;
   background: var(--line);
   overflow: hidden;
 }
 .ws-center { background: var(--bg); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+/* Advanced layout, flipped: the conversations-and-ideas panel moves to the
+   left edge and Make to the right. Order, not markup — the thinking stays
+   in the middle either way. */
+.workspace.swapped > .ws-left { order: 3; }
+.workspace.swapped > .ws-right { order: 1; }
 
 .ws-panel {
   background: var(--bg);
@@ -461,6 +576,99 @@ input, textarea {
 .ws-body .diag { font-size: 0.6rem; }
 .ws-body .filters { flex-wrap: wrap; }
 
+/* ---- The conversations rail ---- */
+
+/* The folder's past, beside the conversation being had now. Read one whole,
+   or pick one back up where it left off. */
+.rail {
+  flex: none;
+  width: 15.5rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: var(--bg);
+  overflow: hidden;
+}
+/* In the advanced layout the rail is the right panel itself, so it fills it
+   rather than sitting inside one. */
+.ws-body .rail { flex: 1; width: auto; border-left: none; }
+.rail-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.rail-title {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-head .icon-btn { width: 1.6rem; height: 1.6rem; }
+.rail-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rail-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.35rem 0.35rem 0.35rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+}
+.rail-item:last-child { border-bottom: none; }
+.rail-item:hover { background: var(--surface); }
+.rail-row {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-name {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-row:hover .rail-name { color: var(--accent); }
+.rail-meta {
+  display: block;
+  margin-top: 0.1rem;
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  color: var(--faint);
+}
+.rail-continue {
+  width: 1.6rem;
+  height: 1.6rem;
+  margin-top: 0.15rem;
+  /* The rewind arrow points back in time; continuing points forward into it. */
+  transform: scaleX(-1);
+}
+.rail-empty { padding: 0.8rem 0.7rem; font-size: 0.78rem; }
+
 /* Expanding a panel gives it the whole workspace. Growing the grid column
    rather than floating a copy on top means the map keeps its simulation and
    its position instead of being rebuilt. */
@@ -469,7 +677,9 @@ input, textarea {
 .workspace.expanded .ws-panel { display: none; }
 .workspace.expanded .ws-center { display: none; }
 .workspace.expanded-map .ws-map,
-.workspace.expanded-ideas .ws-right { display: flex; }
+.workspace.expanded-ideas .ws-right,
+.workspace.expanded-make .ws-left,
+.workspace.expanded-conversations .ws-right { display: flex; }
 /* Simple mode shows one place at a time, the chat included. */
 .workspace.expanded-chat .ws-center { display: flex; }
 .workspace.expanded .ws-body .pane-inner { padding: 1.1rem 1.5rem 2rem; }
@@ -516,9 +726,9 @@ input, textarea {
   padding-bottom: 0.35rem;
   border-bottom: 2px solid var(--accent);
 }
-.trace { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.35rem; }
+.trace { display: block; margin-top: 0.35rem; padding-left: 0.5rem; border-left: 2px solid var(--gold); }
 .trace-why { font-style: normal; font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
-.trace-quote { font-size: 0.78rem; color: var(--faint); border-left: 2px solid var(--gold); padding-left: 0.5rem; }
+.trace-quote { font-size: 0.78rem; color: var(--faint); border-left: none; padding-left: 0; }
 @media (max-width: 68rem) {
   .deep-aside { position: static; }
 }
@@ -566,16 +776,39 @@ input, textarea {
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
+/* A control panel rather than a file: models needs its own width and a
+   height that follows its content, not the window. */
+.sheet-mid {
+  width: min(48rem, 92vw);
+  height: min(56rem, 88vh);
+}
+/* The one row of chrome a control-panel sheet carries: a title and its way
+   out, then the content scrolls under it. */
+.sheet-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.sheet-title { flex: 1; margin: 0; font-size: 0.95rem; font-weight: 600; }
+.sheet-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sheet-body .pane-inner { flex: 1; min-height: 0; }
 .sheet .pane-inner { flex: 1; min-height: 0; }
 
 /* Opens upward — it sits at the bottom of the window. */
 .idle-pick { position: relative; display: inline-flex; align-items: center; }
 .mic-caret {
   border: none; background: transparent; cursor: pointer;
-  color: var(--muted); font-size: 0.7rem; line-height: 1;
+  color: var(--muted); line-height: 1;
   padding: 0 0.3rem; margin-left: -0.15rem; align-self: stretch;
+  display: flex; align-items: center;
 }
-.mic-caret:hover { color: var(--fg); }
+.mic-caret svg { width: 0.95rem; height: 0.95rem; }
+.mic-caret:hover { color: var(--accent); }
+.mic-caret[aria-expanded="true"] { color: var(--accent); }
 .idle-list {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -689,22 +922,6 @@ input, textarea {
    it, and each choice explains itself — these are not obvious enough from a
    name alone to pick between without one. */
 .menu-anchor { position: relative; display: inline-flex; margin-left: auto; }
-.menu-wash { position: fixed; inset: 0; z-index: 89; }
-.media-list {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 90;
-  width: 22rem;
-  max-width: 80vw;
-  margin: 0;
-  padding: 0.25rem;
-  list-style: none;
-  background: var(--surface-lift);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-}
 .media-option { flex-direction: column; align-items: flex-start; gap: 0.1rem; padding: 0.5rem; }
 .media-name { font-weight: 600; }
 .media-blurb { color: var(--muted); font-size: 0.75rem; line-height: 1.4; }
@@ -796,6 +1013,49 @@ input, textarea {
 }
 .folder-head:first-child { margin-top: 0; }
 .folder-head .row-meta { color: var(--faint); }
+
+/* ---- Settings: categories on the left, one pane at a time ---- */
+
+.settings-wrap {
+  display: grid;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  gap: 1.6rem;
+  align-items: start;
+}
+.settings-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.settings-cat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  padding: 0.45rem 0.6rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-cat:hover { background: var(--surface); color: var(--fg); }
+.settings-cat.on {
+  background: var(--surface-lift);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.settings-cat-title { font-weight: 500; }
+.settings-cat-summary {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: var(--faint);
+}
+.settings-pane { min-width: 0; max-width: 44rem; }
 
 /* ---- Panel headings, shared ---- */
 
@@ -992,6 +1252,12 @@ textarea.field { font-family: var(--mono); font-size: 0.76rem; resize: vertical;
 /* Keyboard focus stays visible even though hover states are subtle. */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* Fields draw their ring inside instead: an outside ring is clipped by any
+   ancestor with overflow hidden and crowds whatever sits below — a filter row
+   directly above a heading read as a double border. */
+input.field:focus-visible,
+textarea.field:focus-visible { outline-offset: -3px; }
+
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -1010,7 +1276,20 @@ textarea.field { font-family: var(--mono); font-size: 0.76rem; resize: vertical;
 
 /* ---- Think: the live conversation ---- */
 
-.think { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* The conversation, with the folder's past beside it. The rail is what makes
+   Think "talking to the folder": what was said in it stays one glance away. */
+/* Positioned so the rail's handle can hang off its right edge — which in the
+   simple layout is the right edge of the window. */
+.think { position: relative; display: flex; flex-direction: row; flex: 1; min-height: 0; }
+.think-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.think.opening .think-main { justify-content: center; }
+.think.opening .stream { flex: 0 0 auto; }
 .stream {
   flex: 1;
   overflow-y: auto;
@@ -1020,8 +1299,6 @@ textarea.field { font-family: var(--mono); font-size: 0.76rem; resize: vertical;
   gap: 0.9rem;
 }
 .stream > * { width: 100%; max-width: 52rem; margin: 0 auto; }
-.think.opening { justify-content: center; }
-.think.opening .stream { flex: 0 0 auto; }
 
 .turn { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.9rem; }
 .turn .md { white-space: normal; }
@@ -1774,34 +2051,6 @@ blockquote {
 .btn.big { padding: 0.6rem 1.1rem; font-size: 1rem; }
 
 /* A settings section, closed until asked for. */
-.fold { border-bottom: 1px solid var(--line); }
-.fold-head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  width: 100%;
-  padding: 0.75rem 0.2rem;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.fold-head:hover { background: var(--surface); }
-.fold-caret { flex: none; width: 0.8rem; color: var(--faint); font-size: 0.7rem; }
-.fold-title { font-size: 0.95rem; font-weight: 600; }
-/* The answer, beside the question — so most sections never need opening. */
-.fold-summary {
-  margin-left: auto;
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--muted);
-  text-align: right;
-}
-.fold-body { padding: 0.2rem 0.2rem 1.1rem 1.4rem; }
-.fold-body > .section:first-child { margin-top: 0; }
-
 /* Every knob the embedded model takes, laid out as a grid so the names line
    up and the numbers can be scanned down a column. */
 .params {
@@ -1952,10 +2201,6 @@ blockquote {
 
 /* Where a recorded idea came from, shown while pointing at it. */
 .trace {
-  display: block;
-  margin-top: 0.2rem;
-  padding-left: 0.6rem;
-  border-left: 2px solid var(--gold);
   color: var(--muted);
   font-size: 0.8rem;
 }
@@ -1964,6 +2209,27 @@ blockquote {
 .digest { font-size: 0.85rem; line-height: 1.55; color: var(--muted); }
 
 /* ---- Interface scale slider ---- */
+
+/* Accent swatches: round chips of the colour they pick. The "theme default"
+   one is empty — shown as a ring, since it has no colour of its own. */
+.accent-row { gap: 0.5rem; align-items: center; }
+.accent-swatch {
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--swatch, transparent);
+  cursor: pointer;
+}
+.accent-swatch.on {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--fg);
+}
+.accent-swatch:not([style]) {
+  background:
+    linear-gradient(135deg, transparent 44%, var(--accent) 44%, var(--accent) 56%, transparent 56%)
+    var(--surface-lift);
+}
 
 .scale-row { align-items: center; gap: 0.75rem; }
 .scale-slider {
@@ -2140,6 +2406,40 @@ blockquote {
   display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
   padding-bottom: 0.5rem;
 }
+/* The title holds its line and lets the counts wrap under it, not the other
+   way round — a broken-up heading reads as two headings. */
+.make-head .row-main { flex: none; }
+/* What the model is reading, spelled out. */
+.make-titles {
+  margin-bottom: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+.make-titles-head {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.7rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.05em;
+  text-align: left;
+  cursor: pointer;
+}
+.make-titles-head:hover { color: var(--fg); }
+.make-title-list {
+  margin: 0;
+  padding: 0.1rem 0.7rem 0.55rem 2rem;
+  font-size: 0.82rem;
+  color: var(--fg);
+  line-height: 1.5;
+  max-height: 14rem;
+  overflow-y: auto;
+}
 .make-presets { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; }
 
 .make-thread { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1.4rem; }
@@ -2166,3 +2466,85 @@ blockquote {
 .preset { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.9rem; }
 .preset-name { font-weight: 600; }
 .preset-prompt { line-height: 1.5; resize: vertical; font: inherit; font-size: 0.82rem; }
+
+
+/* ---- Choosing what the Make tab reads ---- */
+
+/* On a full page the picker belongs at the right edge, clear of the column the
+   answers are read in. In the narrow advanced panel there is no right edge
+   worth the name, so it stays stacked with everything else. */
+.make.roomy .make-picker { align-self: flex-end; width: min(30rem, 100%); }
+.make-picker { display: flex; flex-direction: column; margin-bottom: 0.7rem; }
+.make-picker-head {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.3rem 0; border: none; background: transparent;
+  color: var(--muted); font: inherit; font-size: 0.78rem; cursor: pointer;
+}
+.make-picker-head:hover { color: var(--fg); }
+.make-picker-body {
+  max-height: 22rem; overflow-y: auto;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface);
+}
+.pick-tree, .pick-ideas { list-style: none; margin: 0; padding: 0; }
+.pick-ideas { margin: 0.1rem 0 0.35rem 1.75rem; }
+.pick-row { display: flex; align-items: center; gap: 0.45rem; }
+
+/* A real tick rather than a checkbox: the third state — some of this
+   conversation's ideas, not all — is the one that matters here, and a native
+   checkbox cannot show it without scripting `indeterminate` anyway. */
+.tick {
+  flex: none;
+  width: 1.05rem; height: 1.05rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border: 1px solid var(--line); border-radius: 4px;
+  background: transparent; color: var(--bg);
+  font-size: 0.7rem; line-height: 1; cursor: pointer;
+}
+.tick:hover { border-color: var(--accent); }
+.tick.on { background: var(--accent); border-color: var(--accent); }
+.tick.part { color: var(--accent); border-color: var(--accent); }
+
+.pick-name {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 0.35rem;
+  padding: 0.25rem 0; border: none; background: transparent;
+  color: var(--fg); font: inherit; font-size: 0.8rem; text-align: left; cursor: pointer;
+}
+.pick-name:disabled { cursor: default; }
+.pick-name .row-meta { margin-left: auto; flex: none; }
+.pick-idea-name { font-size: 0.76rem; color: var(--muted); }
+
+/* Writing a new instruction, inline where it will be used. */
+.make-new {
+  display: flex; flex-direction: column; gap: 0.4rem;
+  margin-bottom: 0.8rem; padding: 0.6rem;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--surface);
+}
+
+
+/* The rail's handle: on the edge it opens from, pointing the way it moves.
+   Above the rail so it stays reachable once the panel is out, and it is the
+   only thing in the app anchored to a screen edge — which is the point, since
+   what it does is about that edge and not about the page. */
+.rail-handle {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+  display: flex; align-items: center; justify-content: center;
+  width: 1.15rem; height: 3.4rem;
+  padding: 0;
+  border: 1px solid var(--line); border-right: none;
+  border-radius: 7px 0 0 7px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.rail-handle:hover { color: var(--fg); border-color: var(--accent); }
+/* Pointing left to bring the panel out, right to send it back. */
+.rail-handle svg { transform: rotate(90deg); }
+.rail-handle.open { right: 15.5rem; }
+.rail-handle.open svg { transform: rotate(-90deg); }

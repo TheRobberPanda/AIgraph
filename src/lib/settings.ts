@@ -2,13 +2,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { LocalKind, Selected } from "./chat";
 
-export type Theme = "auto" | "dark" | "light";
+export type Theme = "auto" | "dark" | "light" | "ember" | "ink" | "slate" | "paper";
 
 export interface ModelChoice {
   kind: LocalKind;
   host: string;
   model: string;
 }
+
+/** Accent colours on offer, one swatch each. */
+export const ACCENTS: { id: string; label: string; hex: string }[] = [
+  { id: "", label: "Theme default", hex: "" },
+  { id: "coral", label: "Coral", hex: "#e08659" },
+  { id: "gold", label: "Gold", hex: "#dba53f" },
+  { id: "verdant", label: "Verdant", hex: "#7ead6f" },
+  { id: "haze", label: "Haze", hex: "#9fb8d4" },
+  { id: "rose", label: "Rose", hex: "#c9899f" },
+  { id: "iris", label: "Iris", hex: "#a396c4" },
+];
 
 export interface Settings {
   theme: Theme;
@@ -38,6 +49,11 @@ export interface Settings {
   mic_timeout_seconds: number;
   runtime: Runtime;
   layout: Layout;
+  map_style: MapStyle;
+  /** Advanced layout order: conversations left, Make right. */
+  advanced_swap: boolean;
+  /** The accent colour id. Empty means the theme's own. */
+  accent: string;
   /** The one-click instructions on the Make tab, yours to edit. */
   presets: Preset[];
 }
@@ -52,6 +68,16 @@ export interface Preset {
 
 /** One place at a time, or everything around the conversation at once. */
 export type Layout = "simple" | "advanced";
+
+/** How the map draws itself. Node size and line weight only, never what is
+ *  on it — a style that hid nodes would be a filter in disguise. */
+export type MapStyle = "constellation" | "bubbles" | "minimal";
+
+export const MAP_STYLES: { value: MapStyle; label: string; blurb: string }[] = [
+  { value: "constellation", label: "Constellation", blurb: "Small nodes, fine lines." },
+  { value: "bubbles", label: "Bubbles", blurb: "Larger and fuller. Easier to hit." },
+  { value: "minimal", label: "Minimal", blurb: "Dots and hairlines, for a crowded folder." },
+];
 
 export type Voice = "off" | "system" | "neural";
 
@@ -151,14 +177,51 @@ export function applyTheme(theme: Theme): void {
 }
 
 /**
+ * Apply the accent choice. Empty string clears the attribute so the theme's
+ * own accent shows through; anything else is a key into the stylesheet's
+ * accent overrides, which carry a dark and a light tint per colour.
+ */
+export function applyAccent(accent: string): void {
+  const root = document.documentElement;
+  if (accent) root.setAttribute("data-accent", accent);
+  else root.removeAttribute("data-accent");
+}
+
+/**
  * Scale the whole interface, not just its text.
  *
  * Set on the root font-size, since every dimension in the stylesheet is in rem —
  * a control that only enlarged type would leave the buttons and spacing behind,
  * which reads as broken rather than as bigger.
+ *
+ * The topbar degrades with the *effective* width — the window's width at the
+ * reference scale — because how much room its contents take scales with the
+ * interface while the window does not. At 135% on the same monitor, five
+ * labelled tabs are a third again as wide and no fixed pixel breakpoint can
+ * decide for every scale.
  */
+const TOPBAR_ROOMY = 1310;
+const TOPBAR_ICONS = 1190;
+const REFERENCE_FONT = 15;
+
+let topbarResizeInstalled = false;
+
+function applyTopbarClasses(): void {
+  const root = document.documentElement;
+  const scale = parseFloat(root.style.fontSize) / REFERENCE_FONT || 1;
+  const effective = window.innerWidth / scale;
+  const icons = effective < TOPBAR_ICONS;
+  root.classList.toggle("topbar-icons", icons);
+  root.classList.toggle("topbar-tight", !icons && effective < TOPBAR_ROOMY);
+}
+
 export function applyUiScale(percent: number): void {
-  document.documentElement.style.fontSize = `${(percent / 100) * 15}px`;
+  document.documentElement.style.fontSize = `${(percent / 100) * REFERENCE_FONT}px`;
+  applyTopbarClasses();
+  if (!topbarResizeInstalled) {
+    topbarResizeInstalled = true;
+    window.addEventListener("resize", applyTopbarClasses);
+  }
 }
 
 export interface KeyStatus {

@@ -1653,6 +1653,76 @@ pub async fn compose_load(
     Ok(out)
 }
 
+/// What there is to choose from, for the Make tab's selector.
+#[tauri::command]
+pub async fn compose_selectable(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+) -> Result<Vec<crate::store::Selectable>, String> {
+    state.store.lock().await.selectable(folder).map_err(|e| e.to_string())
+}
+
+/// Narrow the context to the conversations and ideas actually ticked.
+///
+/// Empty lists mean the whole folder — the state the tab opens in, and the
+/// one to fall back to rather than handing the model nothing at all.
+#[tauri::command]
+pub async fn compose_select(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+    sessions: Vec<i64>,
+    ideas: Vec<i64>,
+) -> Result<crate::compose::Packed, String> {
+    let (mut conversations, name, loose) = {
+        let store = state.store.lock().await;
+        let mut conversations = store.folder_turns(folder).map_err(|e| e.to_string())?;
+        if !sessions.is_empty() || !ideas.is_empty() {
+            conversations.retain(|c| sessions.contains(&c.session_id));
+        }
+        let name = match folder {
+            None => "Everything".to_string(),
+            Some(id) => store
+                .folders()
+                .ok()
+                .and_then(|fs| fs.into_iter().find(|f| f.id == id).map(|f| f.name))
+                .unwrap_or_else(|| "this folder".to_string()),
+        };
+        // Only ideas whose conversation is not already going in whole — its
+        // transcript already carries them, and saying it twice spends the
+        // budget on a repeat.
+        let mut loose = Vec::new();
+        for id in &ideas {
+            if let Ok(Some(m)) = store.idea_material(*id) {
+                loose.push(m);
+            }
+        }
+        (conversations, name, loose)
+    };
+    conversations.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+
+    let mut packed = crate::compose::pack(&conversations);
+    let extra = crate::compose::pack_ideas(&loose);
+    if !extra.is_empty() {
+        packed.text.push_str(&extra);
+        packed.characters = packed.text.len();
+    }
+
+    let system = crate::compose::system_prompt(&name, &packed);
+    let out = packed.clone();
+    let mut held = state.compose.lock().await;
+    match held.as_mut() {
+        // Keep the exchange: narrowing the material mid-conversation is a
+        // refinement of the same question, not a new one.
+        Some(c) => {
+            c.folder = folder;
+            c.system = system;
+            c.packed = packed;
+        }
+        None => *held = Some(Composing { folder, system, messages: Vec::new(), packed }),
+    }
+    Ok(out)
+}
+
 /// Throw away the exchange, keeping the loaded folder.
 #[tauri::command]
 pub async fn compose_clear(state: State<'_, AppState>) -> Result<(), String> {
@@ -2171,6 +2241,218 @@ pub async fn idea_deep_dive(
 #[tauri::command]
 pub async fn preview_import(text: String) -> Result<crate::session::import::Import, String> {
     Ok(crate::session::import::parse(&text))
+}
+
+/// One conversation Claude has already had on this machine, as an import.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ClaudeImport {
+    pub path: String,
+    /// The working folder the conversation happened in — Claude groups its
+    /// history by it, and it is the only name these files have.
+    pub project: String,
+    pub modified: String,
+    pub turns: usize,
+    /// How it opened, so a list of files is recognisable as conversations.
+    pub first: String,
+    /// Claude's own one-line summary of the conversation, when it wrote one.
+    pub title: Option<String>,
+}
+
+/// Pull the human-readable turns out of one Claude JSONL line.
+///
+/// The files are the desktop app's and CLI's session logs: one JSON object per
+/// line, the interesting ones carrying `type` of "user" or "assistant" and a
+/// message whose content is either a string or a list of blocks. Everything
+/// else — tool calls and their results, thinking blocks, queued interruptions,
+/// metadata — is machinery, not something anyone said.
+fn claude_line_to_text(kind: &str, value: &serde_json::Value) -> Option<String> {
+    if kind != "user" && kind != "assistant" {
+        return None;
+    }
+    if value.get("isMeta").and_then(|m| m.as_bool()).unwrap_or(false) {
+        return None;
+    }
+    if value.get("isSidechain").and_then(|m| m.as_bool()).unwrap_or(false) {
+        return None;
+    }
+    let message = value.get("message")?;
+    let content = message.get("content")?;
+    let text = match content {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(blocks) => {
+            let mut out = String::new();
+            for block in blocks {
+                if block.get("type")?.as_str()? == "text" {
+                    if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(t);
+                    }
+                }
+            }
+            out
+        }
+        _ => return None,
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    // Interrupted requests and tool plumbing leave stubs, not statements.
+    if text.starts_with("[Request interrupted")
+        || text.starts_with("<scheduled-task")
+        || text.starts_with("<local-command")
+        || text.starts_with("@")
+    {
+        return None;
+    }
+    Some(text.to_string())
+}
+
+#[tauri::command]
+pub async fn list_claude_imports() -> Result<Vec<ClaudeImport>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let home = std::env::var("HOME").map_err(|_| "no home directory".to_string())?;
+        let projects = std::path::Path::new(&home).join(".claude").join("projects");
+        let mut out: Vec<ClaudeImport> = Vec::new();
+        let Ok(entries) = std::fs::read_dir(&projects) else {
+            return Ok(out);
+        };
+        for project in entries.flatten() {
+            let project_path = project.path();
+            if !project_path.is_dir() {
+                continue;
+            }
+            let project_name = project_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let Ok(files) = std::fs::read_dir(&project_path) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let path = file.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let Ok(body) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let mut turns = 0usize;
+                let mut first = String::new();
+                let mut title: Option<String> = None;
+                for line in body.lines() {
+                    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                        continue;
+                    };
+                    if title.is_none() {
+                        if let Some(sum) = value.get("summary").and_then(|s| s.as_str()) {
+                            title = Some(sum.to_string());
+                            continue;
+                        }
+                    }
+                    let kind = match value.get("type").and_then(|t| t.as_str()) {
+                        Some(k) => k.to_string(),
+                        None => continue,
+                    };
+                    if let Some(text) = claude_line_to_text(&kind, &value) {
+                        turns += 1;
+                        if first.is_empty() {
+                            first = text.chars().take(120).collect();
+                        }
+                    }
+                }
+                if turns == 0 {
+                    continue;
+                }
+                let modified = file
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .map(|t| {
+                        let dt: chrono::DateTime<chrono::Local> = t.into();
+                        dt.to_rfc3339()
+                    })
+                    .unwrap_or_default();
+                out.push(ClaudeImport {
+                    path: path.to_string_lossy().to_string(),
+                    project: project_name.clone(),
+                    modified,
+                    turns,
+                    first,
+                    title,
+                });
+            }
+        }
+        out.sort_by(|a, b| b.modified.cmp(&a.modified));
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Import one of those conversations, through the same preview-then-keep
+/// pipeline the paste box runs. The text is laid out with labels the parser
+/// knows, so the roles arrive recognised rather than guessed.
+#[tauri::command]
+pub async fn import_claude_conversation(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    source: String,
+) -> Result<i64, String> {
+    let body = std::fs::read_to_string(&path).map_err(|e| format!("could not read {path}: {e}"))?;
+    let mut text = String::new();
+    for line in body.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(kind) = value.get("type").and_then(|t| t.as_str()) else {
+            continue;
+        };
+        let Some(said) = claude_line_to_text(kind, &value) else {
+            continue;
+        };
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(if kind == "assistant" { "Claude: " } else { "User: " });
+        text.push_str(&said);
+    }
+
+    let parsed = crate::session::import::parse(&text);
+    if parsed.turns.is_empty() {
+        return Err("nothing to import".into());
+    }
+
+    let messages = crate::session::import::to_messages(&parsed.turns);
+    let rendered = crate::session::transcript::render(&messages);
+    let label = if source.trim().is_empty() {
+        "imported/claude".to_string()
+    } else {
+        format!("imported/claude/{}", source.trim())
+    };
+
+    let session_id = {
+        let mut store = state.store.lock().await;
+        store
+            .archive_session(&rendered, &label, chrono::Utc::now(), Some(&state.md_dir))
+            .map_err(|e| e.to_string())?
+    };
+
+    let _ = app.emit(
+        "session:archived",
+        Archived { session_id, reason: EndReason::Done, turn_count: parsed.turns.len() },
+    );
+
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        drain_pending(&handle, &state).await;
+    });
+
+    Ok(session_id)
 }
 
 #[tauri::command]

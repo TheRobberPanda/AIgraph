@@ -221,6 +221,11 @@ genuinely load-bearing. It is not a critique quota.
   the exact claim, assumption, or link in the reasoning that breaks, and say
   what breaks it — "assumes the reader already agrees this is unfair" is a
   note; "this needs more thought" is not.
+- **A "questions" note follows the consequence shape.** Name what is claimed,
+  what it would rule out, and what that breaks: "If X is true, then it means
+  Y is wrong, which would affect Z." X is the idea as stated, Y is the
+  specific thing it contradicts, Z is what that conflict costs. A note that
+  cannot be phrased that way is not a questions note.
 - One plain sentence, ten to twenty words. No hedging ("might", "could
   perhaps"), no academic throat-clearing ("one could argue that"). Say the
   problem directly.

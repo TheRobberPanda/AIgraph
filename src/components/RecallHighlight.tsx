@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { conversationView, ideaView, type Segment } from "../lib/views";
 import { longDate } from "../lib/format";
 
@@ -23,6 +23,14 @@ export default function RecallHighlight({
   const [segments, setSegments] = useState<Segment[] | "error" | null>(null);
   const [when, setWhen] = useState<string | null>(null);
   const loaded = useRef(false);
+
+  // Reset when the idea changes — React reuses this component instance when
+  // the paragraph index stays the same but the ideaId prop updates (which
+  // happens during streaming as the text re-segments), so the load guard
+  // would otherwise show stale data from the previous idea.
+  useEffect(() => {
+    loaded.current = false;
+  }, [ideaId]);
 
   // Fetched once, on first hover — most paragraphs are never hovered, and a
   // reply that recalled several ideas would otherwise cost several idea and

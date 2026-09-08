@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { onEscapeLayer } from "../lib/escape";
 
 /**
  * Call mode: the screen becomes a waveform and the keyboard goes away.
@@ -127,11 +128,7 @@ export default function Call({
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onHangUp();
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onHangUp]);
+  useEffect(() => onEscapeLayer(onHangUp), [onHangUp]);
 
   return (
     <div className="call">

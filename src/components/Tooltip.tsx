@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /**
  * One tooltip for the whole app, positioned against the viewport.
@@ -16,6 +16,19 @@ export default function Tooltip() {
   const [tip, setTip] = useState<{ text: string; x: number; y: number; above: boolean } | null>(
     null,
   );
+  const ref = useRef<HTMLDivElement>(null);
+
+  // The anchor position only knows where the target is, not how wide the hint
+  // ends up — so a hint on a button near the right edge opened past the screen.
+  // Once it is in the DOM its real width is known, and it is slid back inside.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !tip) return;
+    const max = window.innerWidth - 8;
+    if (tip.x + el.offsetWidth > max) {
+      setTip({ ...tip, x: Math.max(8, max - el.offsetWidth) });
+    }
+  }, [tip]);
 
   useEffect(() => {
     let timer: number | undefined;
@@ -68,6 +81,7 @@ export default function Tooltip() {
 
   return (
     <div
+      ref={ref}
       className="tip"
       style={{
         left: tip.x,

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { onEscapeLayer } from "../lib/escape";
 
 /**
  * A file opened over what you were doing, rather than instead of it.
@@ -14,23 +15,17 @@ import { useEffect } from "react";
 export default function Sheet({
   onClose,
   depth = 0,
+  size = "full",
   children,
 }: {
   onClose: () => void;
   depth?: number;
+  /** "full" is a file you read against the thing behind it; "mid" is a
+   *  control panel — models, mostly — that only needs its own height. */
+  size?: "full" | "mid";
   children: React.ReactNode;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // Only the topmost sheet closes, or opening an idea over a conversation
-      // would shut both at once.
-      e.stopPropagation();
-      onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useEffect(() => onEscapeLayer(onClose), [onClose]);
 
   return (
     <div
@@ -43,7 +38,7 @@ export default function Sheet({
           over this one would be trapped inside it instead of covering the
           window. */}
       <div
-        className="sheet"
+        className={`sheet${size === "mid" ? " sheet-mid" : ""}`}
         style={{ marginTop: `${depth * 2.4}rem` }}
         onClick={(e) => e.stopPropagation()}
       >

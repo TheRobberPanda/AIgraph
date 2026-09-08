@@ -38,43 +38,24 @@ type Role = "chat" | "extraction";
  */
 type Source = "local" | "lmstudio" | "ollama" | "cloud";
 
-const SOURCES: { id: Source; label: string; blurb: string }[] = [
-  {
-    id: "local",
-    label: "Local",
-    blurb:
-      "The app downloads a model and an engine and runs them itself. Nothing else to install, and nothing said to it leaves this machine.",
-  },
-  {
-    id: "lmstudio",
-    label: "LM Studio",
-    blurb: "Running alongside the app. Whatever it has loaded is used automatically.",
-  },
-  {
-    id: "ollama",
-    label: "Ollama",
-    blurb: "Running alongside the app. Whatever it has pulled is offered here.",
-  },
-  {
-    id: "cloud",
-    label: "Cloud API",
-    blurb:
-      "Claude, and anything else that speaks the same API. Transcripts leave this machine.",
-  },
+const SOURCES: { id: Source; label: string }[] = [
+  { id: "local", label: "Local" },
+  { id: "lmstudio", label: "LM Studio" },
+  { id: "ollama", label: "Ollama" },
+  { id: "cloud", label: "Cloud API" },
 ];
 
 const ROLES: { role: Role; title: string; blurb: string }[] = [
   {
     role: "chat",
     title: "The model in the conversation",
-    blurb:
-      "Holds up the other end of the conversation. It is never given instructions about this app — it behaves exactly as it would anywhere else.",
+    blurb: "Holds up the other end of the conversation.",
   },
   {
     role: "extraction",
     title: "The model that reads it back",
     blurb:
-      "Reads the session back afterwards, records the ideas in it, and judges whether a new one repeats an older one. A mechanical, structured job — a small fast model usually does fine, and reasoning models are a poor fit.",
+      "Records the ideas and judges repeats. A small fast model does fine; reasoning models are a poor fit.",
   },
 ];
 
@@ -86,9 +67,29 @@ export default function Models() {
   const [keys, setKeys] = useState<KeyStatus | null>(null);
   const [keyInput, setKeyInput] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
-  const [routerInput, setRouterInput] = useState("");
-  const [routerBusy, setRouterBusy] = useState(false);
   const [source, setSource] = useState<Source>("local");
+  /** Narrowing the cloud lists — OpenRouter alone exposes hundreds. */
+  const [cloudQuery, setCloudQuery] = useState("");
+  /** Which provider the pasted key belongs to, from its prefix. */
+  const detectedProvider = (() => {
+    const k = keyInput.trim();
+    if (k.startsWith("sk-ant-")) {
+      return {
+        label: "Anthropic",
+        blurb: "Anthropic key — checked against their API, then stored in the system keychain.",
+        save: () => setAnthropicKey(k),
+      };
+    }
+    if (k.startsWith("sk-or-")) {
+      return {
+        label: "OpenRouter",
+        blurb:
+          "OpenRouter key — one key for Claude, GPT, Gemini, Llama and the rest. Checked, then stored in the system keychain.",
+        save: () => setOpenRouterKey(k),
+      };
+    }
+    return null;
+  })();
 
   const [showAll, setShowAll] = useState(false);
   const [embedded, setEmbedded] = useState<EmbeddedStatus | null>(null);
@@ -216,45 +217,54 @@ export default function Models() {
   const chatModels = (s: Detected) => s.models.filter((m) => m.kind === "chat");
   /** What a server actually has in memory right now. */
   const loadedModels = (s: Detected) => chatModels(s).filter((m) => m.loaded === true);
-  const loadedCount = servers.reduce((n, s) => n + loadedModels(s).length, 0);
-  const usable = servers.filter((s) => chatModels(s).length > 0);
+  /**
+   * Only the servers the chosen tab is about.
+   *
+   * These were filtered by nothing at all, so the Ollama tab listed LM
+   * Studio's models — and both listed the cloud providers, which have chat
+   * models like anything else. A tab that shows another tab's contents is
+   * not a tab; picking a source has to actually mean something.
+   */
+  const here = servers.filter((s) =>
+    source === "lmstudio"
+      ? s.kind === "lmstudio"
+      : source === "ollama"
+        ? s.kind === "ollama"
+        : source === "local"
+          ? s.kind === "embedded"
+          : isRemote(s.kind),
+  );
+  const loadedCount = here.reduce((n, s) => n + loadedModels(s).length, 0);
+  const usable = here.filter((s) => chatModels(s).length > 0);
 
   const serverName = (kind: string) =>
     ({
       lmstudio: "LM Studio",
       ollama: "Ollama",
       anthropic: "Anthropic",
+      openrouter: "OpenRouter",
       claudecli: "Claude CLI (subscription)",
     })[kind] ?? kind;
 
   const isRemote = (kind: string) =>
     kind === "anthropic" || kind === "claudecli" || kind === "openrouter";
 
-  async function saveKey() {
+  /** Key-gated providers, detected only once usable — the cloud pickers. */
+  const remote = servers.filter((s) => isRemote(s.kind) && chatModels(s).length > 0);
+
+  /** One save path for whatever provider the pasted key belongs to. */
+  async function saveDetectedKey() {
+    if (!detectedProvider) return;
     setKeyBusy(true);
     setError(null);
     try {
-      await setAnthropicKey(keyInput);
+      await detectedProvider.save();
       setKeyInput("");
       await refresh();
     } catch (e) {
       setError(String(e));
     } finally {
       setKeyBusy(false);
-    }
-  }
-
-  async function saveRouterKey() {
-    setRouterBusy(true);
-    setError(null);
-    try {
-      await setOpenRouterKey(routerInput);
-      setRouterInput("");
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setRouterBusy(false);
     }
   }
 
@@ -273,93 +283,149 @@ export default function Models() {
           </button>
         ))}
       </div>
-      <p className="blurb">{SOURCES.find((t) => t.id === source)!.blurb}</p>
-
-
 
       {source === "cloud" && (
-      <section className="model-role">
-        <h2 className="section">Anthropic</h2>
-        <p className="blurb">
-          Optional. Everything works without this — local models are found
-          automatically. A key sends transcripts to Anthropic's servers rather
-          than keeping them on this machine.
-        </p>
-        {keys?.anthropic ? (
-          <div className="row">
-            <span className="tag ready">key saved</span>
-            <button
-              className="btn"
-              onClick={() => clearAnthropicKey().then(refresh)}
-            >
-              Remove it
-            </button>
-          </div>
-        ) : (
-          <div className="row">
-            <input
-              type="password"
-              className="field"
-              placeholder="sk-ant-…"
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void saveKey()}
-            />
-            <button
-              className="btn"
-              disabled={keyBusy || !keyInput.trim()}
-              onClick={() => void saveKey()}
-            >
-              {keyBusy ? "Checking…" : "Save"}
-            </button>
-          </div>
-        )}
-        <p className="blurb">
-          Stored in the system keychain, never in the settings file, and checked
-          against the API before it is saved.
-        </p>
-        {keys?.claude_cli && (
-          <p className="blurb">
-            The <code>claude</code> command is installed, so a Claude
-            subscription can be used without a key. It rides a plan meant for
-            interactive use — a convenience rather than something to depend on.
-          </p>
-        )}
+        <>
+          <section className="model-role">
+            <h2 className="section">API key</h2>
+            <p className="blurb">
+              Paste a key — the provider is detected from it. Transcripts leave
+              this machine.
+            </p>
+            {keys?.anthropic || keys?.openrouter || keys?.claude_cli ? (
+              <div className="row">
+                {keys?.anthropic && (
+                  <>
+                    <span className="tag ready">Anthropic key saved</span>
+                    <button className="btn" onClick={() => clearAnthropicKey().then(refresh)}>
+                      Remove
+                    </button>
+                  </>
+                )}
+                {keys?.openrouter && (
+                  <>
+                    <span className="tag ready">OpenRouter key saved</span>
+                    <button className="btn" onClick={() => clearOpenRouterKey().then(refresh)}>
+                      Remove
+                    </button>
+                  </>
+                )}
+                {keys?.claude_cli && <span className="tag ready">claude CLI found</span>}
+              </div>
+            ) : null}
 
-        <h2 className="section">OpenRouter</h2>
-        <p className="blurb">
-          One key for most models there are — Claude, GPT, Gemini, Llama and the
-          rest — billed through OpenRouter rather than each provider separately.
-          Whatever the key can reach appears in the pickers above. Transcripts
-          go to OpenRouter and on to whichever model you pick.
-        </p>
-        {keys?.openrouter ? (
-          <div className="row">
-            <span className="tag ready">key saved</span>
-            <button className="btn" onClick={() => clearOpenRouterKey().then(refresh)}>
-              Remove it
-            </button>
-          </div>
-        ) : (
-          <div className="row">
-            <input
-              type="password"
-              className="field"
-              placeholder="sk-or-…"
-              value={routerInput}
-              onChange={(e) => setRouterInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void saveRouterKey()}
-            />
-            <button
-              className="btn"
-              disabled={routerBusy || !routerInput.trim()}
-              onClick={() => void saveRouterKey()}
-            >
-              {routerBusy ? "Checking…" : "Save"}
-            </button>
-          </div>
-        )}
-      </section>
+            {!(keys?.anthropic && keys?.openrouter) && (
+              <div className="row">
+                <input
+                  type="password"
+                  className="field"
+                  placeholder="Paste an API key — sk-ant-… or sk-or-…"
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && void saveDetectedKey()}
+                />
+                <button
+                  className="btn"
+                  disabled={keyBusy || !keyInput.trim()}
+                  onClick={() => void saveDetectedKey()}
+                >
+                  {keyBusy
+                    ? "Checking…"
+                    : detectedProvider
+                      ? `Save — ${detectedProvider.label}`
+                      : "Save"}
+                </button>
+              </div>
+            )}
+            {keyInput.trim() && !detectedProvider && (
+              <p className="blurb warn">
+                Not a key this app recognises — it should start with{" "}
+                <code>sk-ant-</code> (Anthropic) or <code>sk-or-</code> (OpenRouter).
+              </p>
+            )}
+            {detectedProvider && (
+              <p className="blurb">{detectedProvider.blurb}</p>
+            )}
+          </section>
+
+          {/* Whatever the saved keys can reach, as pickers. The lists arrive
+              from startup() the same way the local ones do — a provider is
+              only detected once it is usable, so an empty list here means the
+              key is missing or was rejected. */}
+          {source === "cloud" && remote.length > 0 && (
+            <>
+              <div className="row filters">
+                <input
+                  className="field filter-input"
+                  placeholder="Filter models — claude, gpt, llama…"
+                  value={cloudQuery}
+                  onChange={(e) => setCloudQuery(e.target.value)}
+                />
+              </div>
+              {remote.map((s) =>
+                ROLES.map(({ role, title }) => {
+                  const chosen = role === "chat" ? active?.chat : active?.extraction;
+                  // The API hands back duplicates; one row per model.
+                  const all = [
+                    ...new Map(chatModels(s).map((m) => [m.id, m])).values(),
+                  ].sort((a, b) => a.id.localeCompare(b.id));
+                  const q = cloudQuery.trim().toLowerCase();
+                  // Bounded, or OpenRouter's three hundred models would be one
+                  // unending wall. The filter is how the rest are reached.
+                  const models = (
+                    q ? all.filter((m) => m.id.toLowerCase().includes(q)) : all
+                  ).slice(0, 40);
+                  return (
+                    <section key={`${s.kind}:${role}`} className="model-role">
+                      <h3 className="section">
+                        {title} · {serverName(s.kind)}
+                        <span className="tag remote">leaves this machine</span>
+                      </h3>
+                      <p className="current">
+                        {chosen && chosen.kind === s.kind ? (
+                          <>Using <b>{chosen.model}</b></>
+                        ) : (
+                          "Nothing chosen yet"
+                        )}
+                      </p>
+                      <ul className="model-list">
+                        {models.map((m) => {
+                          const isChosen = chosen?.kind === s.kind && chosen?.model === m.id;
+                          return (
+                            <li key={m.id}>
+                              <button
+                                className={isChosen ? "model chosen" : "model"}
+                                disabled={busy !== null}
+                                onClick={() => void pick(role, s, m)}
+                              >
+                                <span className="model-name">{modelName(m.id)}</span>
+                                {isChosen && <span className="tag ready">in use</span>}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      {all.length > models.length && (
+                        <p className="blurb">
+                          {all.length - models.length} more — narrow the filter above.
+                        </p>
+                      )}
+                    </section>
+                  );
+                }),
+              )}
+            </>
+          )}
+
+          {source === "cloud" && remote.length === 0 && (
+            <p className="empty">
+              <strong>No cloud model connected.</strong>
+              <span className="empty-hint">
+                Save a key above — the models it can reach appear here, ready to pick.
+              </span>
+            </p>
+          )}
+        </>
       )}
 
       {(source === "lmstudio" || source === "ollama") && loadedCount > 0 && (
@@ -375,9 +441,16 @@ export default function Models() {
 
       {(source === "lmstudio" || source === "ollama") && (usable.length === 0 ? (
         <p className="empty">
-          <strong>No model server found.</strong>
-          Start <b>LM Studio</b> and load a model, or run <code>ollama serve</code>{" "}
-          after pulling one.
+          <strong>
+            {source === "lmstudio" ? "LM Studio is not running." : "Ollama is not running."}
+          </strong>
+          {source === "lmstudio" ? (
+            <>Start it and load a model.</>
+          ) : (
+            <>
+              Run <code>ollama serve</code> after pulling one.
+            </>
+          )}
           <span className="empty-hint">
             Then come back — this page finds them automatically.
           </span>

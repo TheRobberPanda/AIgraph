@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { onEscapeLayer } from "../lib/escape";
 import {
   createFolder,
   deleteFolder,
@@ -48,11 +49,7 @@ export default function FolderPicker({
     void refresh();
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useEffect(() => onEscapeLayer(onClose), [onClose]);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -124,7 +121,7 @@ export default function FolderPicker({
                     className="btn folder-remove armed"
                     onClick={() => {
                       setArming(null);
-                      void deleteFolder(f.id).then(refresh);
+                      void deleteFolder(f.id).then(refresh).catch((e) => setError(String(e)));
                     }}
                     onMouseLeave={() => setArming(null)}
                   >
