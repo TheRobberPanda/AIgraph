@@ -450,6 +450,23 @@ fn looks_transient(msg: &str) -> bool {
 /// request was tried, and extraction failed for good.
 fn looks_like_a_rejected_parameter(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
+    // Not every 4xx is an objection to the request's shape. A key that is
+    // missing, wrong or out of credit, and a model id that does not exist,
+    // all answer in the 400s — and asking the same question more simply
+    // cannot help with any of them. Walking the whole ladder there spends
+    // three more requests to arrive at the same refusal, and reports it as
+    // the last rung's failure rather than the real one.
+    if m.contains("401")
+        || m.contains("403")
+        || m.contains("404")
+        || m.contains("unauthorized")
+        || m.contains("forbidden")
+        || m.contains("authentication")
+        || m.contains("no auth credentials")
+        || m.contains("insufficient")
+    {
+        return false;
+    }
     m.starts_with('4')
         || m.contains("400")
         || m.contains("422")
@@ -1139,6 +1156,30 @@ mod tests {
             assert!(looks_like_a_rejected_parameter(msg));
             assert!(!looks_transient(msg), "retrying this unchanged would fail identically: {msg}");
         }
+    }
+
+    /// A key problem is not a parameter problem.
+    ///
+    /// Every one of these answers in the 400s, and the ladder read that as
+    /// "the server objected to something in the request" — so it asked three
+    /// more times, more simply each time, and reported the last rung's
+    /// failure instead of the plain fact that the key was not accepted.
+    #[test]
+    fn a_refused_key_is_not_answered_by_asking_more_simply() {
+        for msg in [
+            "401 Unauthorized: {\"error\":{\"message\":\"Missing Authentication header\"}}",
+            "403 Forbidden",
+            "404: model not found",
+            "401: No auth credentials found",
+            "402: insufficient credits",
+        ] {
+            assert!(
+                !looks_like_a_rejected_parameter(msg),
+                "retrying this more simply cannot help: {msg}"
+            );
+        }
+        // And the genuine parameter refusals must still be caught.
+        assert!(looks_like_a_rejected_parameter("400: response_format is not supported"));
     }
 
     /// The reason a working model kept stopping working.

@@ -4,10 +4,12 @@
 //! not run for someone who just cloned the repo. Run with:
 //!
 //! ```sh
-//! OPENROUTER_API_KEY=sk-or-... \
-//! AIGRAPH_OR_MODEL='~z-ai/glm-flash-latest' \
-//!   cargo test --test openrouter_live -- --ignored --nocapture
+//! cargo test --test openrouter_live -- --ignored --nocapture
 //! ```
+//!
+//! The key comes from the app's own keychain entry, so nothing has to be
+//! pasted. `OPENROUTER_API_KEY` overrides it, and `AIGRAPH_OR_MODEL` picks a
+//! different model than the one that was failing.
 //!
 //! This exists because a chain of correct-looking reasoning about a provider's
 //! dialect is not evidence that a request works. Four separate fixes went out
@@ -28,9 +30,24 @@ fn model() -> String {
     std::env::var("AIGRAPH_OR_MODEL").unwrap_or_else(|_| "~z-ai/glm-flash-latest".into())
 }
 
+/// The key, from the environment or from the same keychain the app reads.
+///
+/// Falling back to the keychain is the point: it means running this needs no
+/// secret handling at all, and it exercises the retrieval the app itself
+/// depends on. If the keychain cannot be read here it cannot be read there
+/// either, and every request goes out unauthenticated — which is worth
+/// finding out from a test rather than from a confusing 401 mid-digest.
 fn key() -> String {
-    std::env::var("OPENROUTER_API_KEY")
-        .expect("set OPENROUTER_API_KEY to run this; it is never read from the keychain here")
+    if let Ok(k) = std::env::var("OPENROUTER_API_KEY") {
+        if !k.trim().is_empty() {
+            return k;
+        }
+    }
+    aigraph_lib::secrets::get(aigraph_lib::secrets::OPENROUTER).expect(
+        "no OpenRouter key: not in OPENROUTER_API_KEY, and the keychain returned nothing. \
+         If one is saved in the app, the keychain is not readable from this shell — \
+         which is the same failure the app would hit, so it is worth knowing.",
+    )
 }
 
 /// Short, and unmistakably the user's own words, so a failure is about the
