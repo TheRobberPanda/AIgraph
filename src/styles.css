@@ -1240,8 +1240,20 @@ button { font-family: inherit; }
   color: var(--faint);
   white-space: nowrap;
 }
+/* A tag sitting inside a heading is a qualifier on it, not the next word. */
+.section .tag { margin-left: 0.5rem; vertical-align: middle; }
 .tag.ready { color: var(--accent); border-color: currentColor; }
 .tag.remote { color: var(--gold); border-color: currentColor; }
+
+/* On its own a field fills its column; sharing a row with the button that
+   acts on it, it shares. At 100% it took the whole line and pushed Save onto
+   the next one, orphaned under an input the width of the pane. */
+.row > input.field,
+.row > textarea.field {
+  flex: 1;
+  width: auto;
+  min-width: 12rem;
+}
 
 input.field, textarea.field {
   width: 100%;

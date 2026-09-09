@@ -217,11 +217,18 @@ impl ChatProvider for OpenAiCompat {
         // `enable_thinking` template argument is what LM Studio and vLLM pass
         // through to the chat template. Sending both is how one request works
         // against either.
-        // Said either way round. The embedded server is started with thinking
-        // off, so a request that wants it has to ask.
-        body["reasoning"] = serde_json::json!(if req.reasoning { "on" } else { "off" });
-        if !req.reasoning {
-            body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+        // In whichever dialect this server speaks. OpenRouter's `reasoning` is
+        // an object and it rejects the string llama.cpp wants, so sending both
+        // spellings at once fails against it outright.
+        if self.label == "openrouter" {
+            body["reasoning"] = serde_json::json!({ "enabled": req.reasoning });
+        } else {
+            // The embedded server is started with thinking off, so a request
+            // that wants it has to ask.
+            body["reasoning"] = serde_json::json!(if req.reasoning { "on" } else { "off" });
+            if !req.reasoning {
+                body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+            }
         }
 
         let resp = self
@@ -306,9 +313,73 @@ impl ChatProvider for OpenAiCompat {
 }
 
 /// Did the server reject us specifically over `reasoning_effort`?
-fn mentions_reasoning_effort(msg: &str) -> bool {
+/// Whether a failure looks like the server refusing a parameter rather than
+/// failing at the work.
+///
+/// Anything in the 400s: a rejected field, a model that does not do structured
+/// output, a switch this server has never heard of. Narrower than that was the
+/// bug — it only matched the words "reasoning_effort", so OpenRouter replying
+/// that `reasoning` should have been an object went unrecognised, no simpler
+/// request was tried, and extraction failed for good.
+fn looks_like_a_rejected_parameter(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
-    m.contains("reasoning_effort") || m.contains("reasoning effort")
+    m.starts_with('4')
+        || m.contains("400")
+        || m.contains("422")
+        || m.contains("unsupported")
+        || m.contains("not support")
+        || m.contains("invalid")
+        || m.contains("unrecognized")
+        || m.contains("unknown field")
+}
+
+impl OpenAiCompat {
+    /// Ask this particular server not to think first.
+    ///
+    /// Extraction is a mechanical structured task, and a model that reasons
+    /// its way through it spends the whole token budget and returns no JSON.
+    /// There is no agreed way to say so, so it is said in whichever dialect
+    /// the server at the other end speaks — sending all of them at once is
+    /// what broke OpenRouter, whose `reasoning` is an object and which
+    /// therefore rejected the string llama.cpp wants outright.
+    fn quieten_reasoning(&self, body: &mut serde_json::Value) {
+        if self.label == "openrouter" {
+            body["reasoning"] = serde_json::json!({ "enabled": false });
+            return;
+        }
+        // llama.cpp takes `reasoning`; `enable_thinking` is what LM Studio and
+        // vLLM pass through to the chat template; `reasoning_effort` is the
+        // OpenAI spelling. Servers ignore the ones they do not know.
+        body["reasoning_effort"] = serde_json::json!("none");
+        body["reasoning"] = serde_json::json!("off");
+        body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+    }
+
+    /// One structured call, giving up a parameter at a time.
+    ///
+    /// A server that refuses something is told less rather than treated as
+    /// broken: first without the reasoning switches, then without the schema
+    /// as well. The parser downstream salvages JSON out of prose, so a model
+    /// that cannot do structured output still produces ideas — which is the
+    /// difference between "this provider does not work" and "this provider
+    /// needs asking more simply".
+    async fn attempt(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError> {
+        let first = self.structured(prompt, schema.clone(), true, true).await;
+        let Err(LlmError::Transport(msg)) = &first else { return first };
+        if !looks_like_a_rejected_parameter(msg) {
+            return first;
+        }
+
+        tracing::debug!(error = %msg, "retrying without the reasoning switches");
+        let second = self.structured(prompt, schema.clone(), false, true).await;
+        let Err(LlmError::Transport(msg)) = &second else { return second };
+        if !looks_like_a_rejected_parameter(msg) {
+            return second;
+        }
+
+        tracing::debug!(error = %msg, "retrying without a response schema");
+        self.structured(prompt, schema, false, false).await
+    }
 }
 
 impl OpenAiCompat {
@@ -316,13 +387,11 @@ impl OpenAiCompat {
         &self,
         transcript: &str,
         known_categories: &[String],
-        disable_reasoning: bool,
     ) -> Result<crate::extract::prompt::Extracted, LlmError> {
         let raw = self
-            .structured(
+            .attempt(
                 &crate::extract::prompt::build_with_categories(transcript, known_categories),
                 crate::extract::prompt::json_schema(),
-                disable_reasoning,
             )
             .await?;
         crate::extract::prompt::parse(&raw)
@@ -338,6 +407,7 @@ impl OpenAiCompat {
         prompt: &str,
         schema: serde_json::Value,
         disable_reasoning: bool,
+        structured_output: bool,
     ) -> Result<String, LlmError> {
         let messages = vec![Message { role: Role::User, content: prompt.to_string() }];
 
@@ -353,13 +423,11 @@ impl OpenAiCompat {
             },
         });
         if disable_reasoning {
-            // Three spellings of one thing, because three families of server
-            // read different ones and ignore the rest. Extraction is a
-            // mechanical structured task: a model that thinks its way through
-            // it spends the whole token budget and returns no JSON at all.
-            body["reasoning_effort"] = serde_json::json!("none");
-            body["reasoning"] = serde_json::json!("off");
-            body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+            self.quieten_reasoning(&mut body);
+        }
+        // Dropped on the way back up when a server rejects it — see `attempt`.
+        if !structured_output {
+            body.as_object_mut().expect("object").remove("response_format");
         }
 
         let resp = self
@@ -460,33 +528,77 @@ impl IdeaExtractor for OpenAiCompat {
         transcript: &str,
         known_categories: &[String],
     ) -> Result<crate::extract::prompt::Extracted, LlmError> {
-        // Reasoning is switched off for extraction. This is a mechanical
-        // structured task, and a reasoning model will otherwise spend its entire
-        // token budget thinking and emit no JSON at all — an empty reply after
-        // ten minutes of work. Chat is deliberately left alone: there the
-        // model's normal behaviour is the whole point.
+        // Reasoning is switched off for extraction — a mechanical structured
+        // task, where a reasoning model spends the whole token budget thinking
+        // and emits no JSON at all. Chat is left alone: there the model's
+        // normal behaviour is the whole point.
         //
-        // Not every server accepts the parameter, so a rejection falls back to
-        // sending the request without it.
-        match self.extract_once(transcript, known_categories, true).await {
-            Err(LlmError::Transport(msg)) if mentions_reasoning_effort(&msg) => {
-                tracing::debug!("server rejected reasoning_effort; retrying without it");
-                self.extract_once(transcript, known_categories, false).await
-            }
-            other => other,
-        }
+        // `attempt` inside handles a server that refuses a parameter, giving
+        // one up at a time rather than treating the refusal as a failure.
+        self.extract_once(transcript, known_categories).await
     }
 
     async fn judge(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError> {
-        match self.structured(prompt, schema.clone(), true).await {
-            Err(LlmError::Transport(msg)) if mentions_reasoning_effort(&msg) => {
-                self.structured(prompt, schema, false).await
-            }
-            other => other,
-        }
+        self.attempt(prompt, schema).await
     }
 
     fn model_id(&self) -> String {
         format!("{}/{}", self.label, self.model)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body() -> serde_json::Value {
+        serde_json::json!({})
+    }
+
+    /// The bug this split exists for: OpenRouter's `reasoning` is an object,
+    /// and it rejects the string llama.cpp wants — which failed every
+    /// extraction against it, since the request never got as far as the model.
+    #[test]
+    fn openrouter_is_asked_in_its_own_dialect() {
+        let mut b = body();
+        OpenAiCompat::new("https://openrouter.ai/api/v1", "m", None, "openrouter")
+            .quieten_reasoning(&mut b);
+        assert_eq!(b["reasoning"], serde_json::json!({ "enabled": false }));
+        assert!(b.get("chat_template_kwargs").is_none(), "not a spelling it knows");
+        assert!(b.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn a_local_server_still_gets_all_three_spellings() {
+        let mut b = body();
+        OpenAiCompat::new("http://127.0.0.1:8127", "m", None, "embedded").quieten_reasoning(&mut b);
+        assert_eq!(b["reasoning"], serde_json::json!("off"));
+        assert_eq!(b["reasoning_effort"], serde_json::json!("none"));
+        assert_eq!(b["chat_template_kwargs"]["enable_thinking"], serde_json::json!(false));
+    }
+
+    /// It used to match the words "reasoning_effort" and nothing else, so a
+    /// provider complaining about anything else was treated as broken rather
+    /// than as wanting a simpler request.
+    #[test]
+    fn a_refused_parameter_is_recognised_however_it_is_worded() {
+        for msg in [
+            "400 Bad Request: reasoning: Expected object, received string",
+            "422: model does not support response_format",
+            "Invalid value for 'reasoning_effort'",
+            "unrecognized request argument supplied: chat_template_kwargs",
+        ] {
+            assert!(looks_like_a_rejected_parameter(msg), "should retry more simply: {msg}");
+        }
+    }
+
+    /// A model that ran out of context, or a server that fell over, is not a
+    /// parameter problem — retrying the same call more simply would only
+    /// spend the time twice.
+    #[test]
+    fn a_real_failure_is_not_mistaken_for_a_refused_parameter() {
+        for msg in ["500 Internal Server Error", "connection refused", "503: overloaded"] {
+            assert!(!looks_like_a_rejected_parameter(msg), "should not retry: {msg}");
+        }
     }
 }
