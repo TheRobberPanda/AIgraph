@@ -171,6 +171,8 @@ impl OpenAiCompat {
 struct StreamChunk {
     #[serde(default)]
     choices: Vec<StreamChoice>,
+    #[serde(default)]
+    provider: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -195,6 +197,8 @@ struct Delta {
 struct Streamed {
     content: String,
     finish_reason: Option<String>,
+    /// Which of a router's providers answered, where it says.
+    provider: Option<String>,
     /// The person pressed Stop. Distinct from finishing, and from failing.
     cancelled: bool,
 }
@@ -214,6 +218,7 @@ async fn drain_sse(
     // multibyte character, so decode only whole lines.
     let mut full = String::new();
     let mut finish_reason = None;
+    let mut provider = None;
     let mut buf = Vec::<u8>::new();
     let mut stream = resp.bytes_stream();
     let ticket = crate::llm::cancel::start();
@@ -225,7 +230,7 @@ async fn drain_sse(
         // is listening to. What arrived before the stop is kept: the person
         // ended it, they did not hit an error.
         if ticket.cancelled() {
-            return Ok(Streamed { content: full, finish_reason, cancelled: true });
+            return Ok(Streamed { content: full, finish_reason, provider, cancelled: true });
         }
         buf.extend_from_slice(&chunk.map_err(|e| LlmError::Transport(e.to_string()))?);
 
@@ -240,7 +245,7 @@ async fn drain_sse(
             let payload = payload.trim();
 
             if payload == "[DONE]" {
-                return Ok(Streamed { content: full, finish_reason, cancelled: false });
+                return Ok(Streamed { content: full, finish_reason, provider, cancelled: false });
             }
             if payload.is_empty() {
                 continue;
@@ -263,6 +268,9 @@ async fn drain_sse(
                 continue;
             };
 
+            if parsed.provider.is_some() {
+                provider = parsed.provider;
+            }
             for choice in parsed.choices {
                 if let Some(reason) = choice.finish_reason {
                     finish_reason = Some(reason);
@@ -283,7 +291,7 @@ async fn drain_sse(
         }
     }
 
-    Ok(Streamed { content: full, finish_reason, cancelled: false })
+    Ok(Streamed { content: full, finish_reason, provider, cancelled: false })
 }
 
 /// The failure in a response body or a stream frame, if there is one.
@@ -632,6 +640,12 @@ impl OpenAiCompat {
         self.through_the_network(prompt, schema, Reasoning::LeftAlone, false, false).await
     }
 
+    /// Whether this endpoint is a router in front of many providers, rather
+    /// than one server that either can do a thing or cannot.
+    fn routes_to_many_providers(&self) -> bool {
+        self.label == "openrouter"
+    }
+
     /// How many tokens extraction may spend on this provider.
     fn extract_budget(&self) -> u32 {
         if self.label == "openrouter" {
@@ -690,6 +704,21 @@ impl OpenAiCompat {
             },
         });
         self.quieten_reasoning(&mut body, reasoning);
+
+        // OpenRouter is a router, not a model. Behind one id sit many
+        // providers with different capabilities, and it picks one per request
+        // — so the same model works, then does not, then fails a third way,
+        // depending on where the request happened to land. For this model:
+        // some serve structured outputs, some accept `response_format` and
+        // then ignore the schema, and two do not take it at all.
+        //
+        // This tells the router that the parameters are requirements rather
+        // than preferences, so a provider that cannot honour them is not
+        // offered the request. Without it, asking for JSON is a coin toss and
+        // no amount of getting the dialect right can help.
+        if self.routes_to_many_providers() {
+            body["provider"] = serde_json::json!({ "require_parameters": true });
+        }
         // Dropped on the way back up when a server rejects it — see `attempt`.
         if !structured_output {
             body.as_object_mut().expect("object").remove("response_format");
@@ -725,7 +754,9 @@ impl OpenAiCompat {
             if streamed.cancelled {
                 return Err(LlmError::Transport("the read was stopped".into()));
             }
+            let served_by = streamed.provider.clone().unwrap_or_else(|| "unknown".into());
             if streamed.content.trim().is_empty() {
+                tracing::warn!(provider = %served_by, "the router's provider returned nothing");
                 return Err(LlmError::BadOutput(
                     if streamed.finish_reason.as_deref() == Some("length") {
                         // Nothing in `content` and the budget gone: the tokens
@@ -768,6 +799,12 @@ impl OpenAiCompat {
         // before anything can fail below, so a run that ends badly still
         // accounts for the time it spent.
         crate::llm::meter::record(completion.timings.as_ref());
+        if let Some(served_by) = &completion.provider {
+            // Which of the router's providers answered. Worth a line: when the
+            // same model works and then does not, this is usually the only
+            // thing that changed between the two.
+            tracing::debug!(provider = %served_by, "answered by");
+        }
 
         let Some(choice) = completion.choices.first() else {
             return Err(LlmError::BadOutput("no choices in response".into()));
@@ -806,6 +843,9 @@ impl OpenAiCompat {
 #[derive(Deserialize)]
 struct Completion {
     choices: Vec<CompletionChoice>,
+    /// Which of a router's providers answered. Absent everywhere else.
+    #[serde(default)]
+    provider: Option<String>,
     /// llama.cpp's own measurement of the call. Absent on servers that do not
     /// report one.
     #[serde(default)]
@@ -1099,6 +1139,23 @@ mod tests {
             assert!(looks_like_a_rejected_parameter(msg));
             assert!(!looks_transient(msg), "retrying this unchanged would fail identically: {msg}");
         }
+    }
+
+    /// The reason a working model kept stopping working.
+    ///
+    /// OpenRouter is a router. Twenty-six providers serve `glm-5.3-flash`, and
+    /// it picks one per request: Fireworks and Together honour a JSON schema,
+    /// Z.AI and Novita take `response_format` and then ignore it, SiliconFlow
+    /// and Io Net do not accept it at all. So the same id answered correctly,
+    /// then returned prose, then refused the parameter — and every fix aimed
+    /// at the dialect was aiming at the wrong thing, because the request was
+    /// landing somewhere different each time.
+    #[test]
+    fn a_router_is_told_the_parameters_are_requirements() {
+        let openrouter = OpenAiCompat::new("https://openrouter.ai/api/v1", "m", None, "openrouter");
+        let local = OpenAiCompat::new("http://127.0.0.1:8127", "m", None, "embedded");
+        assert!(openrouter.routes_to_many_providers());
+        assert!(!local.routes_to_many_providers(), "a local server is the only provider there is");
     }
 
     /// The reason glm-flash could never digest anything.
