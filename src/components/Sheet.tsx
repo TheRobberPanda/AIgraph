@@ -29,17 +29,20 @@ export default function Sheet({
 
   return (
     <div
-      className="sheet-overlay"
+      // The wash is only painted by the bottom layer. Stacked, each one
+      // darkened the last and the whole window silted up.
+      className={depth > 0 ? "sheet-overlay stacked" : "sheet-overlay"}
       style={{ zIndex: 70 + depth * 2 }}
       onClick={onClose}
     >
-      {/* Offset with margin rather than a transform: a transformed ancestor
-          becomes the containing block for `position: fixed`, so a sheet opened
-          over this one would be trapped inside it instead of covering the
-          window. */}
+      {/* A stacked sheet is inset on every side rather than pushed down. The
+          offset was a top margin, so an idea opened from a conversation sat
+          low in the window instead of centred — and the further in you went,
+          the lower it sat. Inset keeps it centred and still shows there is
+          something behind it. */}
       <div
         className={`sheet${size === "mid" ? " sheet-mid" : ""}`}
-        style={{ marginTop: `${depth * 2.4}rem` }}
+        style={depth > 0 ? { width: `calc(min(72rem, 92vw) - ${depth * 3}rem)` } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
         {children}

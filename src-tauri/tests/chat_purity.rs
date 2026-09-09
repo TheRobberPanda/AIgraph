@@ -21,7 +21,7 @@ const FORBIDDEN: &[&str] =
 #[test]
 fn outgoing_payload_carries_only_the_conversation_and_the_fixed_house_voice() {
     let mut c = Conversation::new("llama3.2");
-    c.push_user("Trump is a bad man");
+    c.push_user("Landlords are parasites");
     c.push_assistant("Say more about what you mean by that?");
     c.push_user("well, he acts badly in certain circumstances");
 
@@ -44,7 +44,7 @@ fn outgoing_payload_carries_only_the_conversation_and_the_fixed_house_voice() {
         "the navigation marker is plumbing and goes out whatever the stance"
     );
     // The point of the rule is that nothing in here comes from the person.
-    for said in ["Trump", "bad man", "circumstances"] {
+    for said in ["Landlords", "parasites", "circumstances"] {
         assert!(!sys.contains(said), "the system prompt echoed the conversation: {said:?}");
     }
 

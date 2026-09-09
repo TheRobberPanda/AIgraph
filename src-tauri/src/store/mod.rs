@@ -2134,8 +2134,8 @@ mod tests {
     fn a_refinement_rewrites_the_bubble_and_keeps_both_quotes() {
         let mut store = Store::open_in_memory().unwrap();
 
-        let (s1, t1) = session_with(&mut store, "Trump is a bad man");
-        let first = verified("Trump is a bad man", "Trump is a bad man", &t1);
+        let (s1, t1) = session_with(&mut store, "Landlords are parasites");
+        let first = verified("Landlords are parasites", "Landlords are parasites", &t1);
         let idea_id =
             store.apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m").unwrap();
 
@@ -2172,8 +2172,8 @@ mod tests {
     #[test]
     fn a_rewrite_can_always_be_undone() {
         let mut store = Store::open_in_memory().unwrap();
-        let (s1, t1) = session_with(&mut store, "Trump is a bad man");
-        let first = verified("Trump is a bad man", "Trump is a bad man", &t1);
+        let (s1, t1) = session_with(&mut store, "Landlords are parasites");
+        let first = verified("Landlords are parasites", "Landlords are parasites", &t1);
         let idea_id =
             store.apply_decision(s1, &first, &Decision::New { related: vec![] }, "t", "m").unwrap();
 
@@ -2195,7 +2195,7 @@ mod tests {
             .unwrap();
         store.revert_revision(revision).unwrap();
 
-        assert_eq!(store.ideas(None).unwrap()[0].claim, "Trump is a bad man");
+        assert_eq!(store.ideas(None).unwrap()[0].claim, "Landlords are parasites");
         // Reverting twice must not silently re-apply anything.
         assert!(store.revert_revision(revision).is_err());
     }
@@ -2321,8 +2321,8 @@ mod tests {
     #[test]
     fn conversations_are_labelled_by_their_opening_words() {
         assert_eq!(
-            conversation_label("", "Trump is a bad man", "2026-08-22T10:00:00Z"),
-            "Trump is a bad man",
+            conversation_label("", "Landlords are parasites", "2026-08-22T10:00:00Z"),
+            "Landlords are parasites",
             "the words identify the conversation; the date is shown elsewhere"
         );
         assert_eq!(conversation_label("", "   ", "2026-08-22T10:00:00Z"), "2026-08-22");

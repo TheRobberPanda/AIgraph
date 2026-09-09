@@ -1,6 +1,6 @@
 //! Deciding whether a freshly extracted idea is new, or changes an existing one.
 //!
-//! Ideas are mutable. Saying "Trump is a bad man" and later "he's not a bad guy,
+//! Ideas are mutable. Saying "landlords are parasites" and later "it's the arrangement,
 //! he acts like one in certain circumstances" should not produce two dots: the
 //! bubble is **rewritten** to the more nuanced claim and carries both quotes.
 //!

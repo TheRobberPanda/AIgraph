@@ -213,9 +213,8 @@ export default function Settings() {
 
             <h3 className="section">The map</h3>
             <p className="blurb">
-              How the map arranges itself — three ways of standing the same
-              material up, not three coats of paint. Nothing is ever hidden by
-              one: the map's job is to show everything you have thought.
+              Three ways of standing the same material up. None of them hides
+              anything.
             </p>
             <div className="row">
               {MAP_STYLES.map((m) => (
@@ -333,10 +332,7 @@ export default function Settings() {
               </button>
             </div>
             <p className="blurb">
-              Nothing added is the default: the model behaves as it would anywhere
-              else, because a house voice is a preference rather than something
-              you asked for. Pushing back tests a thought; organizing lays it out
-              without arguing.
+              Pushing back tests a thought; organizing lays it out without arguing.
             </p>
 
             <h3 className="section">Thinking before answering</h3>
@@ -508,8 +504,8 @@ export default function Settings() {
           <>
             <h3 className="section">What the Make buttons ask for</h3>
             <p className="blurb">
-              Each button on the Make tab sends the wording below, with the folder's
-              conversations in front of the model.
+              Each button sends the wording below, with the folder in front of the
+              model.
             </p>
             {s.presets.map((preset, i) => (
               <div key={preset.id} className="preset">
@@ -572,8 +568,8 @@ export default function Settings() {
             </div>
             <h3 className="section">Transcripts</h3>
             <p className="blurb">
-              Every conversation is also written out as a plain Markdown file, so the
-              record outlives this app. New transcripts go to the folder chosen here.
+              Every conversation is also written out as Markdown, so the record
+              outlives this app.
             </p>
             <p className="path">{dir}</p>
             {dirError && <p className="blurb warn">{dirError}</p>}

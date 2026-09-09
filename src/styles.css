@@ -765,6 +765,9 @@ input, textarea {
   background: color-mix(in srgb, var(--bg) 78%, transparent);
   backdrop-filter: blur(2px);
 }
+/* Already washed by the layer underneath. Painting it again turned the window
+   muddy the moment an idea was opened from a conversation. */
+.sheet-overlay.stacked { background: transparent; backdrop-filter: none; }
 .sheet {
   width: min(72rem, 92vw);
   height: min(88vh, 60rem);
@@ -2012,11 +2015,23 @@ blockquote {
   transition: width 400ms ease;
   pointer-events: none;
 }
-.digest-btn.running .digest-label,
-.digest-btn.running .digest-hover { position: relative; }
-.digest-btn.running .digest-hover { display: none; }
-.digest-btn.running:hover .digest-label { display: none; }
-.digest-btn.running:hover .digest-hover { display: inline; }
+.digest-btn.running .digest-label { position: relative; }
+/* Laid over the label rather than swapped for it. Swapping changed the
+   button's width — "Stop" is shorter than "Checking quotes" — so the edge
+   moved out from under the cursor, which un-hovered it, which put the long
+   label back, which moved the edge under the cursor again. That loop is the
+   flashing. Both now occupy the same box and only their visibility changes. */
+.digest-btn.running .digest-hover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+}
+.digest-btn.running:hover .digest-label { visibility: hidden; }
+.digest-btn.running:hover .digest-hover { opacity: 1; }
 .digest-btn.running:hover { color: var(--danger); }
 .queue-btn { padding: 0.2rem 0.5rem; font-size: 0.9rem; line-height: 1; }
 

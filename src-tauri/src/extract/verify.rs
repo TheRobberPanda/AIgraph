@@ -388,12 +388,12 @@ mod tests {
 
     #[test]
     fn smart_quotes_and_case_are_folded() {
-        let turns = vec![user(1, "He said \u{201C}Trump is a Bad Man\u{201D} loudly.")];
-        let got = verify(&idea("\"trump is a bad man\""), &turns).unwrap();
+        let turns = vec![user(1, "He said \u{201C}Landlords Are Parasites\u{201D} loudly.")];
+        let got = verify(&idea("\"landlords are parasites\""), &turns).unwrap();
         assert!(got.normalized_match);
         assert_eq!(
             &turns[0].text[got.start_byte..got.end_byte],
-            "\u{201C}Trump is a Bad Man\u{201D}"
+            "\u{201C}Landlords Are Parasites\u{201D}"
         );
     }
 

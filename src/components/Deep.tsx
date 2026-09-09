@@ -380,7 +380,6 @@ export function IdeaFile({
               first pushed those off the screen. */}
           {worthShowing(dive, view.claim) ? (
             <section className="dive">
-              <h3 className="section">In the margin</h3>
               {/* Through the markdown renderer, not raw paragraphs — the model
                   writes emphasis, lists and occasional headings, and showing
                   its asterisks verbatim reads as broken. */}
@@ -396,7 +395,7 @@ export function IdeaFile({
                 onClick={() => void think(true)}
               >
                 {diving && <span className="spinner" aria-hidden="true" />}
-                {diving ? "Reading…" : "Read it back — what this would need, and where it breaks"}
+                {diving ? "Reading…" : "Read it back"}
               </button>
             </div>
           )}

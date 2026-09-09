@@ -304,8 +304,7 @@ export default function Models() {
           <section className="model-role">
             <h2 className="section">API key</h2>
             <p className="blurb">
-              Paste a key — the provider is detected from it. Transcripts leave
-              this machine.
+              Transcripts leave this machine.
             </p>
             {keys?.anthropic || keys?.openrouter || keys?.claude_cli ? (
               <div className="row">

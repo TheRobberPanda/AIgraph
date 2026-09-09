@@ -42,8 +42,8 @@ fn cases() -> Vec<Case> {
     vec![
         Case {
             name: "the walk-back — same thought, made precise",
-            existing: "Trump is a bad man.",
-            incoming: "Trump is not a bad person exactly; he acts badly when cornered or when there is an audience.",
+            existing: "Landlords are parasites.",
+            incoming: "Landlords are not parasites exactly; the arrangement is, and they are the part of it you can see.",
             want: Want::Merge,
         },
         Case {

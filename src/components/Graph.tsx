@@ -74,6 +74,7 @@ interface Palette {
   labelConversation: string;
   labelIdea: string;
   labelHover: string;
+  bubble: string;
   halo: string;
   hoverRing: string;
 }
@@ -92,6 +93,7 @@ function readPalette(): Palette {
   const line = token(st, "--line", "#2c2722");
   const danger = token(st, "--danger", "#c96b5f");
   const verdant = token(st, "--verdant", "#7ead6f");
+  const surface = token(st, "--surface-lift", token(st, "--surface", "#221e1a"));
   return {
     conversation: accent,
     edge: `color-mix(in srgb, ${muted} 55%, ${line})`,
@@ -104,6 +106,10 @@ function readPalette(): Palette {
     labelConversation: accent,
     labelIdea: `color-mix(in srgb, ${muted} 85%, transparent)`,
     labelHover: fg,
+    /** Behind the label of whatever is being pointed at, so it stays readable
+     *  over links and other labels. Nearly opaque on purpose — a translucent
+     *  card over a dense map is the same unreadable label with a tint. */
+    bubble: `color-mix(in srgb, ${surface} 94%, transparent)`,
     halo: `color-mix(in srgb, ${gold} 18%, transparent)`,
     hoverRing: `color-mix(in srgb, ${fg} 16%, transparent)`,
   };
@@ -320,11 +326,23 @@ function arrangeForest(nodes: Node[], links: Link[]): Placed {
   const { hubs, ideasOf, loose } = hubsAndTheirIdeas(nodes, links);
   const placed: Placed = { rings: [], orbits: [], trunks: [] };
   const GROUND = 0;
-  const TRUNK = 150;
-  const SPACING = 340;
+  const TRUNK = 160;
+  const PER_LEVEL = 3;
+  const ROOT_STEP = 92;
+  /** How far a root reaches sideways at the deepest level it goes to. */
+  const reach = (level: number) => 70 + level * 52;
+
+  // Wide enough that the deepest roots of one tree clear the next tree's.
+  // A fixed gap meant two full root systems nearly touching, which read as
+  // one tangle rather than two trees.
+  const deepest = Math.max(
+    1,
+    ...hubs.map((h) => Math.ceil((ideasOf.get(h)?.length ?? 0) / PER_LEVEL)),
+  );
+  const spacing = reach(deepest) * 2 + 120;
 
   hubs.forEach((hub, i) => {
-    const x = (i - (hubs.length - 1) / 2) * SPACING;
+    const x = (i - (hubs.length - 1) / 2) * spacing;
     hub.x = x;
     hub.y = GROUND - TRUNK;
     hub.fx = hub.x;
@@ -334,15 +352,15 @@ function arrangeForest(nodes: Node[], links: Link[]): Placed {
     // Roots: each level fans wider and sits deeper, so the whole thing reads
     // downward from the trunk rather than as a second crown.
     const ideas = ideasOf.get(hub) ?? [];
-    const perLevel = 3;
     ideas.forEach((idea, k) => {
-      const level = Math.floor(k / perLevel) + 1;
-      const inLevel = ideas.length - level * perLevel >= 0 ? perLevel : ideas.length % perLevel;
-      const slot = k % perLevel;
-      const width = 46 + level * 34;
-      const across = inLevel === 1 ? 0 : (slot / Math.max(1, inLevel - 1) - 0.5) * 2 * width;
+      const level = Math.floor(k / PER_LEVEL) + 1;
+      // How many share this level — the last one is usually short.
+      const inLevel = Math.min(PER_LEVEL, ideas.length - (level - 1) * PER_LEVEL);
+      const slot = k % PER_LEVEL;
+      const width = reach(level);
+      const across = inLevel === 1 ? 0 : (slot / (inLevel - 1) - 0.5) * 2 * width;
       idea.x = x + across;
-      idea.y = GROUND + level * 76;
+      idea.y = GROUND + level * ROOT_STEP;
       idea.fx = idea.x;
       idea.fy = idea.y;
     });
@@ -604,7 +622,9 @@ export default function Graph({
     if (styleRef.current === "galaxy" && placed.orbits.length) {
       const t = performance.now() / 1000;
       for (const o of placed.orbits) {
-        const angle = o.angle + (t * 26) / o.radius;
+        // Slow. A galaxy that visibly races is a loading spinner; this should
+        // read as drift you notice only if you watch for it.
+        const angle = o.angle + (t * 7) / o.radius;
         o.node.x = (o.hub.x ?? 0) + Math.cos(angle) * o.radius;
         o.node.y = (o.hub.y ?? 0) + Math.sin(angle) * o.radius;
         o.node.fx = o.node.x;
@@ -645,6 +665,34 @@ export default function Graph({
       for (const trunk of placed.trunks) {
         const crown = toScreen(trunk.hub, w, h);
         const foot = toScreen({ x: trunk.x, y: trunk.groundY }, w, h);
+
+        // Branches. Without them a tree is a circle on a stick — the roots
+        // below say "tree" and nothing above ground agreed. Drawn from the
+        // conversation's own colour, thinning outward, and fanned upward so
+        // the canopy sits over the trunk rather than beside it.
+        ctx.strokeStyle = trunk.hub.color;
+        ctx.globalAlpha = 0.5;
+        ctx.lineCap = "round";
+        const span = Math.max(10, 74 * k);
+        for (const [lean, rise, weight] of [
+          [-0.85, 0.75, 1],
+          [-0.45, 1.05, 0.8],
+          [0.0, 1.2, 0.9],
+          [0.45, 1.05, 0.8],
+          [0.85, 0.75, 1],
+        ] as [number, number, number][]) {
+          ctx.lineWidth = Math.max(0.7, 2.4 * k * weight);
+          ctx.beginPath();
+          ctx.moveTo(crown.x, crown.y);
+          ctx.quadraticCurveTo(
+            crown.x + lean * span * 0.5,
+            crown.y - rise * span * 0.5,
+            crown.x + lean * span,
+            crown.y - rise * span,
+          );
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
         // Tapered: wide at the ground, narrow at the crown, the same shape the
         // branches use so a tree is one drawing rather than two.
         const wide = Math.max(1.2, 7 * k);
@@ -670,6 +718,10 @@ export default function Graph({
     for (const link of linksRef.current) {
       const a = link.source as Node;
       const b = link.target as Node;
+      // In a galaxy the ring says which conversation an idea belongs to, so
+      // drawing the join as well turns every hub into a wheel of spokes —
+      // which is the one shape a galaxy is not.
+      if (styleRef.current === "galaxy" && link.kind === "from") continue;
       // In a forest a root leaves the foot of the trunk, not the crown. Drawn
       // from the node itself, every root ran the length of the trunk and out
       // through the top of the tree.
@@ -907,6 +959,31 @@ export default function Graph({
         ? `600 ${labelPx * 1.04}px ui-sans-serif, system-ui, sans-serif`
         : `${labelPx}px ui-sans-serif, system-ui, sans-serif`;
       ctx.globalAlpha = inFocus(l.n) ? 1 : 0.2;
+
+      // What is being pointed at gets a bubble under it. On a dense map a
+      // label lands on top of links and other labels and becomes unreadable
+      // exactly when it is being read — this puts a card behind the one that
+      // matters, so it is legible whatever it is over.
+      if (hover === l.n) {
+        const pad = Math.max(3, labelPx * 0.42);
+        const widest = Math.max(...l.lines.map((line) => ctx.measureText(line).width));
+        const boxH = l.lines.length * l.lineHeight + pad * 1.4;
+        const boxW = widest + pad * 2;
+        const bx = l.x - boxW / 2;
+        const by = l.y - l.lineHeight * 0.82 - pad * 0.7;
+        const r = Math.min(7, pad * 1.5);
+        const was = ctx.globalAlpha;
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = C.bubble;
+        ctx.beginPath();
+        ctx.roundRect(bx, by, boxW, boxH, r);
+        ctx.fill();
+        ctx.strokeStyle = l.n.color;
+        ctx.globalAlpha = 0.55;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.globalAlpha = was;
+      }
       ctx.fillStyle =
         hover === l.n || isTraced(l.n)
           ? C.labelHover

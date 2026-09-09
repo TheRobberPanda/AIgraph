@@ -80,8 +80,7 @@ export default function Engine({ onChanged }: { onChanged?: () => void }) {
       </div>
     ) : (
       <p className="blurb">
-        Nothing to run a model with yet. The CPU build works everywhere; the
-        Vulkan build uses whatever graphics card is here, whoever made it.
+        Nothing to run a model with yet.
       </p>
     )}
 
@@ -118,18 +117,13 @@ export default function Engine({ onChanged }: { onChanged?: () => void }) {
     </div>
     {!status?.cuda_available && status?.vulkan_available && (
       <p className="blurb">
-        Vulkan is the GPU build here, and works on AMD, Nvidia and Intel alike.
-        CUDA is about twenty per cent faster on an Nvidia card, but llama.cpp
-        publishes no prebuilt CUDA archive for this platform — only Windows
-        gets one. Building <code>llama-server</code> with CUDA yourself and
-        putting it on your PATH is enough: one found there is used ahead of
-        anything installed here.
+        Vulkan works on AMD, Nvidia and Intel alike. CUDA is faster on Nvidia
+        but is published for Windows only — build <code>llama-server</code>
+        yourself and a copy on your PATH is used ahead of this one.
       </p>
     )}
     <p className="blurb">
-      Always the current build, resolved when you press it rather than fixed
-      when this was written — quantisations move faster than releases, and a
-      build pinned a year ago cannot read a model published last month.
+      Always the current build, resolved when you press it.
     </p>
 
     </>

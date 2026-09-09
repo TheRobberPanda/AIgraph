@@ -850,8 +850,11 @@ pub async fn extract_now(
     if state.progress.lock().await.running.is_some() {
         return Ok(false);
     }
-    // Asking for it explicitly clears any waiting period.
+    // Asking for it explicitly clears any waiting period, and any stop left
+    // over from last time.
     state.retry_after.lock().await.clear();
+    *state.stop_drain.lock().await = false;
+    state.progress.lock().await.stopping = false;
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         use tauri::Manager;
@@ -975,6 +978,13 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
 /// Ask a running digest to stop after the conversation it is on.
 #[tauri::command]
 pub async fn stop_digest(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    // Only when there is something to stop. The flags are cleared by the drain
+    // as it winds down, so setting them with no drain running left them set
+    // for the life of the app — and the button, which is disabled while a stop
+    // is pending, never came back.
+    if state.progress.lock().await.running.is_none() {
+        return Ok(());
+    }
     *state.stop_drain.lock().await = true;
     // Emitted with the flag set, so the button can say a stop is coming. It
     // used to send the snapshot back unchanged, which told the screen nothing

@@ -25,7 +25,7 @@ fn model() -> String {
 /// something more precise in the same conversation.
 fn refinement_session() -> Vec<Turn> {
     let lines = [
-        (Role::User, "I've been thinking that Trump is a bad man, plain and simple."),
+        (Role::User, "I've been thinking that landlords are parasites, plain and simple."),
         (Role::Assistant, "What leads you to that?"),
         (Role::User, "Well, actually, I'm not sure he's a bad guy exactly. He acts like a bad person in certain circumstances, especially when he's cornered or when there's an audience. That's different from being rotten all the way through."),
         (Role::Assistant, "That's a meaningful distinction. What turns on it for you?"),
