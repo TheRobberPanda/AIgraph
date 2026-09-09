@@ -7,7 +7,6 @@ import {
   listFolders,
   ROOT_FOLDER,
   type Folder,
-  setFolderLanguage,
 } from "../lib/folders";
 import FolderMark from "./FolderMark";
 import { reextractAll } from "../lib/settings";
@@ -90,28 +89,8 @@ export default function FolderPicker({
                 <span className="folder-name">{f.name}</span>
                 <span className="row-meta">
                   {f.session_count} {f.session_count === 1 ? "conversation" : "conversations"}
-                  {f.language && ` · ${f.language}`}
                 </span>
               </button>
-              {/* What this folder is thought in. A Polish folder beside an
-                  English one is the ordinary case, and one global setting
-                  cannot be right for both — so the folder gets to say, and
-                  the setting only decides for the ones that have not. */}
-              <select
-                className="field folder-language"
-                value={f.language}
-                data-tip={`What ${f.name} is thought in`}
-                onChange={(e) =>
-                  setFolderLanguage(f.id, e.target.value).then(refresh).catch((err) =>
-                    setError(String(err)),
-                  )
-                }
-              >
-                <option value="">Follow the setting</option>
-                <option value="english">English</option>
-                <option value="polish">Polski</option>
-                <option value="spanish">Español</option>
-              </select>
               {rereading === f.id ? (
                 <button
                   className="btn folder-remove armed"

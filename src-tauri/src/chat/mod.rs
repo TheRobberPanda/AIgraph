@@ -80,7 +80,7 @@ impl Conversation {
             recall: Vec::new(),
             recall_set: false,
             reasoning: false,
-            stance: crate::settings::ChatStance::Challenge,
+            stance: crate::settings::ChatStance::default(),
         }
     }
 
@@ -175,7 +175,12 @@ impl Conversation {
             messages: self.messages.clone(),
             reasoning: self.reasoning,
             system: Some({
+                // Neutral adds nothing: no voice, no instructions about how to
+                // answer. What follows — the navigation marker, the language
+                // line, call mode, recall — is plumbing the app needs whatever
+                // stance is chosen, and is not a character.
                 let mut sys = String::from(match self.stance {
+                    crate::settings::ChatStance::Neutral => "",
                     crate::settings::ChatStance::Challenge => style::SYSTEM_PROMPT,
                     crate::settings::ChatStance::Organize => style::ORGANIZE_SYSTEM_PROMPT,
                 });
@@ -254,8 +259,23 @@ mod tests {
     }
 
     #[test]
-    fn the_default_stance_is_unchanged_from_before_the_setting_existed() {
+    fn the_default_stance_adds_no_voice_of_its_own() {
         let c = Conversation::new("m");
+        let sys = c.to_request().system.unwrap();
+        // Neutral is the default now. The model answers as it would anywhere
+        // else; a house voice is a preference, and this one was nobody's
+        // choice until they made it.
+        assert!(!sys.contains(style::SYSTEM_PROMPT));
+        assert!(!sys.contains(style::ORGANIZE_SYSTEM_PROMPT));
+        // The navigation marker still goes: it is how the app is asked to open
+        // a tab, which is plumbing rather than character.
+        assert!(sys.contains(style::NAVIGATION));
+    }
+
+    #[test]
+    fn asking_to_be_challenged_gets_the_voice_that_challenges() {
+        let mut c = Conversation::new("m");
+        c.set_stance(crate::settings::ChatStance::Challenge);
         assert!(c.to_request().system.unwrap().starts_with(style::SYSTEM_PROMPT));
     }
 
@@ -286,7 +306,6 @@ mod tests {
         // Composed from compile-time constants only — never from anything the
         // person said. That is the part worth guarding.
         let sys = req.system.as_deref().unwrap();
-        assert!(sys.starts_with(style::SYSTEM_PROMPT));
         assert!(sys.contains(style::NAVIGATION));
         assert!(!sys.contains("latency"), "the system prompt drew on the conversation");
     }

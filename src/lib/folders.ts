@@ -8,10 +8,6 @@ export interface Folder {
   name: string;
   /** How many conversations are filed here. */
   session_count: number;
-  /** What this folder is thought in. `""` follows the global setting — a
-   *  folder is where one line of thinking lives, and one person's lines are
-   *  not all in the same language. */
-  language: string;
 }
 
 /** A folder's colour and mark, from its name — same trick the subjects use,
@@ -49,11 +45,6 @@ export function renameFolder(folderId: number, name: string): Promise<void> {
 }
 
 /** Remove a folder. Whatever was filed in it goes back to Root. */
-/** Say which language a folder is thought in. `""` follows the setting. */
-export function setFolderLanguage(folderId: number, language: string): Promise<void> {
-  return invoke("set_folder_language", { folderId, language });
-}
-
 export function deleteFolder(folderId: number): Promise<void> {
   return invoke("delete_folder", { folderId });
 }

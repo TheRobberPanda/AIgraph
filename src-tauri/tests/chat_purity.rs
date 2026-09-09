@@ -12,7 +12,7 @@
 //! intentional, but it is a product decision, not a refactor — change the
 //! README and the pitch before you change this test.
 
-use aigraph_lib::chat::style::SYSTEM_PROMPT;
+use aigraph_lib::chat::style::NAVIGATION;
 use aigraph_lib::chat::Conversation;
 
 const FORBIDDEN: &[&str] =
@@ -35,9 +35,13 @@ fn outgoing_payload_carries_only_the_conversation_and_the_fixed_house_voice() {
     assert_eq!(keys, vec!["messages", "model", "reasoning", "system"]);
 
     let sys = json["system"].as_str().expect("system prompt is a string");
+    // Not the house voice any more: the default stance is neutral, and adds
+    // none. What this file guards is unchanged and is the part that matters —
+    // whatever the system prompt is, it is built from compile-time constants
+    // and never from anything the person said.
     assert!(
-        sys.starts_with(SYSTEM_PROMPT),
-        "the system prompt must begin with the fixed house voice"
+        sys.contains(NAVIGATION),
+        "the navigation marker is plumbing and goes out whatever the stance"
     );
     // The point of the rule is that nothing in here comes from the person.
     for said in ["Trump", "bad man", "circumstances"] {

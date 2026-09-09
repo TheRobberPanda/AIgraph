@@ -91,6 +91,8 @@ export default function Settings() {
   );
   const [downloading, setDownloading] = useState<DownloadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Which instruction is one more click from being deleted. */
+  const [removing, setRemoving] = useState<string | null>(null);
   /** What is being fetched right now, so a button that has been pressed says
    *  so. A download with no sign of life reads as a dead button, and the
    *  second press is someone giving up on the first. */
@@ -144,7 +146,12 @@ export default function Settings() {
     {
       id: "conversation",
       title: "Conversation",
-      summary: s.chat_stance === "challenge" ? "pushes back" : "organizes",
+      summary:
+        s.chat_stance === "challenge"
+          ? "pushes back"
+          : s.chat_stance === "organize"
+            ? "organizes"
+            : "nothing added",
     },
     { id: "voice", title: "Voice & dictation", summary: voiceLabel },
     {
@@ -306,6 +313,12 @@ export default function Settings() {
             <h3 className="section">How it responds</h3>
             <div className="row">
               <button
+                className={s.chat_stance === "neutral" ? "btn on" : "btn"}
+                onClick={() => void update({ chat_stance: "neutral" })}
+              >
+                Nothing added
+              </button>
+              <button
                 className={s.chat_stance === "challenge" ? "btn on" : "btn"}
                 onClick={() => void update({ chat_stance: "challenge" })}
               >
@@ -319,7 +332,10 @@ export default function Settings() {
               </button>
             </div>
             <p className="blurb">
-              Pushing back tests a thought; organizing lays it out without arguing.
+              Nothing added is the default: the model behaves as it would anywhere
+              else, because a house voice is a preference rather than something
+              you asked for. Pushing back tests a thought; organizing lays it out
+              without arguing.
             </p>
 
             <h3 className="section">Thinking before answering</h3>
@@ -520,6 +536,29 @@ export default function Settings() {
                   // character would fight the person typing.
                   onBlur={() => void update({ presets: s.presets })}
                 />
+                {/* Two clicks, like everything else here that destroys
+                    something: an instruction someone wrote out is not worth
+                    losing to a stray press. */}
+                <div className="row">
+                  {removing === preset.id ? (
+                    <button
+                      className="btn armed"
+                      onMouseLeave={() => setRemoving(null)}
+                      onClick={() => {
+                        setRemoving(null);
+                        const presets = s.presets.filter((x) => x.id !== preset.id);
+                        setS({ ...s, presets });
+                        void update({ presets });
+                      }}
+                    >
+                      Delete “{preset.name}”
+                    </button>
+                  ) : (
+                    <button className="btn" onClick={() => setRemoving(preset.id)}>
+                      Remove
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
             <div className="row">

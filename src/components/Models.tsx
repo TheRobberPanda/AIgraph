@@ -26,8 +26,6 @@ import {
   type RemoteFile,
 } from "../lib/settings";
 
-type Role = "chat" | "extraction";
-
 /** Where a model comes from. One tab each, because the setup is different. */
 /**
  * Where the model comes from.
@@ -57,20 +55,16 @@ const SOURCES: { id: Source; label: string }[] = [
   { id: "cloud", label: "Cloud API" },
 ];
 
-const ROLES: { role: Role; title: string; blurb: string }[] = [
-  {
-    role: "chat",
-    title: "The model in the conversation",
-    blurb: "Holds up the other end of the conversation.",
-  },
-  {
-    role: "extraction",
-    title: "The model that reads it back",
-    blurb:
-      "Records the ideas and judges repeats. A small fast model does fine; reasoning models are a poor fit.",
-  },
-];
-
+/**
+ * One model, for everything.
+ *
+ * There were two pickers — the model in the conversation, and the model that
+ * reads it back — because a small fast model does fine at extraction and a
+ * larger one may be wanted for talking. They are still separate objects
+ * underneath, since extraction must never borrow the chat's context; but
+ * asking the question twice on screen was asking almost nobody's question,
+ * and answering it once is what people were doing anyway.
+ */
 export default function Models() {
   const [servers, setServers] = useState<Detected[]>([]);
   const [active, setActive] = useState<ActiveModels | null>(null);
@@ -213,11 +207,21 @@ export default function Models() {
     }
   }
 
-  async function pick(role: Role, s: Detected, m: ModelInfo) {
-    setBusy(`${role}:${m.id}`);
+  /**
+   * Choose the model, for everything.
+   *
+   * There were two pickers: one for the conversation, one for reading it back
+   * afterwards. They are still separate underneath — extraction must never
+   * borrow the chat's context, and it gets its own object — but choosing them
+   * apart was a question almost nobody wanted asked. One list, one answer,
+   * both roles set from it.
+   */
+  async function pick(s: Detected, m: ModelInfo) {
+    setBusy(m.id);
     setError(null);
     try {
-      await chooseModel(role, s.kind, s.host, m.id);
+      await chooseModel("chat", s.kind, s.host, m.id);
+      await chooseModel("extraction", s.kind, s.host, m.id);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -373,9 +377,8 @@ export default function Models() {
                   onChange={(e) => setCloudQuery(e.target.value)}
                 />
               </div>
-              {remote.map((s) =>
-                ROLES.map(({ role, title }) => {
-                  const chosen = role === "chat" ? active?.chat : active?.extraction;
+              {remote.map((s) => {
+                  const chosen = active?.chat;
                   // The API hands back duplicates; one row per model.
                   const all = [
                     ...new Map(chatModels(s).map((m) => [m.id, m])).values(),
@@ -387,9 +390,9 @@ export default function Models() {
                     q ? all.filter((m) => m.id.toLowerCase().includes(q)) : all
                   ).slice(0, 40);
                   return (
-                    <section key={`${s.kind}:${role}`} className="model-role">
+                    <section key={s.kind} className="model-role">
                       <h3 className="section">
-                        {title} · {serverName(s.kind)}
+                        {serverName(s.kind)}
                         <span className="tag remote">leaves this machine</span>
                       </h3>
                       <p className="current">
@@ -407,7 +410,7 @@ export default function Models() {
                               <button
                                 className={isChosen ? "model chosen" : "model"}
                                 disabled={busy !== null}
-                                onClick={() => void pick(role, s, m)}
+                                onClick={() => void pick(s, m)}
                               >
                                 {/* The whole id, not `modelName`. That strips
                                     everything before a slash, which is right
@@ -430,8 +433,7 @@ export default function Models() {
                       )}
                     </section>
                   );
-                }),
-              )}
+              })}
             </>
           )}
 
@@ -474,11 +476,10 @@ export default function Models() {
           </span>
         </p>
       ) : (
-        ROLES.map(({ role, blurb }) => {
-          const chosen = role === "chat" ? active?.chat : active?.extraction;
+        (() => {
+          const chosen = active?.chat;
           return (
-            <section key={role} className="model-role">
-              <p className="blurb">{blurb}</p>
+            <section className="model-role">
               <p className="current">
                 {chosen ? (
                   <>
@@ -515,7 +516,7 @@ export default function Models() {
                             <button
                               className={isChosen ? "model chosen" : "model"}
                               disabled={busy !== null}
-                              onClick={() => void pick(role, s, m)}
+                              onClick={() => void pick(s, m)}
                             >
                               <span className="model-name">{modelName(m.id)}</span>
                               {m.loaded === true && <span className="tag ready">loaded</span>}
@@ -532,7 +533,7 @@ export default function Models() {
               ))}
             </section>
           );
-        })
+        })()
       ))}
 
       {source === "local" && (

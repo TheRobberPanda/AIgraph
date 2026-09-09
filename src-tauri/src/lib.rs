@@ -141,7 +141,6 @@ pub fn run() {
             commands::compose_clear,
             commands::compose_send,
             commands::stop_generation,
-            commands::set_folder_language,
             commands::save_text,
             commands::reset_presets,
             commands::create_folder,

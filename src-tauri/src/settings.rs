@@ -208,9 +208,15 @@ pub enum Layout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ChatStance {
-    /// Find the weakest part of what was said and press on it. Today's
-    /// default, and the app's original voice.
+    /// Nothing added. The model behaves exactly as it would anywhere else,
+    /// because that is what most people arriving here already know how to
+    /// talk to — and because a house voice is a preference, not a default
+    /// anyone asked for. Only the navigation marker and the language line go
+    /// out, and both are plumbing rather than character.
     #[default]
+    Neutral,
+    /// Find the weakest part of what was said and press on it. The app's
+    /// original voice, and still the sharper tool for testing a thought.
     Challenge,
     /// Help structure and clarify without arguing the substance.
     Organize,

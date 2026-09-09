@@ -990,7 +990,7 @@ export default function App() {
                   would be dead most of the time. */}
               <button
                 className={digesting?.running ? "digest-btn running" : "digest-btn"}
-                disabled={digestBusy}
+                disabled={digestBusy || digesting?.stopping}
                 onClick={() => {
                   if (digesting?.running) {
                     void stopDigest();
@@ -1005,9 +1005,14 @@ export default function App() {
                     <span className="digest-label">
                       {digesting.running.total > 1 &&
                         `${digesting.running.index} of ${digesting.running.total} · `}
-                      {PHASE_WORD[digesting.running.phase] ?? digesting.running.phase}
+                      {digesting.stopping
+                        ? "stopping after this one"
+                        : PHASE_WORD[digesting.running.phase] ?? digesting.running.phase}
                     </span>
-                    <span className="digest-hover">Stop</span>
+                    {/* Nothing to press once a stop is already coming, and a
+                        button still offering "Stop" after you pressed Stop is
+                        how it came to look broken. */}
+                    {!digesting.stopping && <span className="digest-hover">Stop</span>}
                     {digestPct !== null && (
                       <span className="digest-fill" style={{ width: `${digestPct}%` }} />
                     )}
@@ -1023,7 +1028,7 @@ export default function App() {
                 data-tip="What is waiting to be read"
                 onClick={() => setShowQueue(true)}
               >
-                ⋯
+                More
               </button>
             </span>
           )}

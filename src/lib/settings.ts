@@ -82,7 +82,7 @@ export const MAP_STYLES: { value: MapStyle; label: string; blurb: string }[] = [
 export type Voice = "off" | "system" | "neural";
 
 /** Argue the substance, or just help lay it out. */
-export type ChatStance = "challenge" | "organize";
+export type ChatStance = "neutral" | "challenge" | "organize";
 
 export type Language = "auto" | "english" | "polish" | "spanish";
 

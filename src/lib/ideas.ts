@@ -90,6 +90,9 @@ export interface ExtractionProgress {
   running: RunningExtraction | null;
   last: LastExtraction | null;
   pending: number;
+  /** A stop was asked for and has not happened yet. Reading stops between
+   *  conversations, never inside one, so there is a wait worth explaining. */
+  stopping: boolean;
 }
 
 export function extractionProgress(): Promise<ExtractionProgress> {

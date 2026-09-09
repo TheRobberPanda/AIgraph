@@ -41,8 +41,6 @@ pub struct Store {
 pub struct Folder {
     pub id: i64,
     pub name: String,
-    /// `""` when the folder follows the global language setting.
-    pub language: String,
     /// How many conversations are filed here.
     pub session_count: i64,
 }
@@ -1700,44 +1698,17 @@ impl Store {
     /// Every folder, Root first, then by name.
     pub fn folders(&self) -> Result<Vec<Folder>> {
         let mut stmt = self.conn.prepare(
-            "SELECT f.id, f.name, f.language,
+            "SELECT f.id, f.name,
                     (SELECT COUNT(*) FROM sessions s WHERE s.folder_id = f.id)
              FROM folders f
              ORDER BY (f.id <> 1), f.name",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok(Folder {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                language: r.get(2)?,
-                session_count: r.get(3)?,
-            })
+            Ok(Folder { id: r.get(0)?, name: r.get(1)?, session_count: r.get(2)? })
         })?;
         rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
     }
 
-    /// The language this folder is thought in, if it has been told one.
-    ///
-    /// Empty means the global setting decides, which is every folder until
-    /// somebody says otherwise.
-    pub fn folder_language(&self, folder: Option<i64>) -> Result<String> {
-        let Some(id) = folder else { return Ok(String::new()) };
-        Ok(self
-            .conn
-            .query_row("SELECT language FROM folders WHERE id = ?1", [id], |r| r.get(0))
-            .optional()?
-            .unwrap_or_default())
-    }
-
-    pub fn set_folder_language(&mut self, folder_id: i64, language: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE folders SET language = ?2 WHERE id = ?1",
-            params![folder_id, language],
-        )?;
-        Ok(())
-    }
-
-    /// Make a folder, or return the one already using that name.
     pub fn create_folder(&mut self, name: &str) -> Result<i64> {
         let name = name.trim();
         if let Some(id) = self
