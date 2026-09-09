@@ -48,6 +48,34 @@ pub fn strip_recall_markers(text: &str) -> String {
     out
 }
 
+/// The navigation markers a reply may open with, longest first so a prefix
+/// test cannot match the short one and leave the rest of a longer marker
+/// behind. Kept beside the stripper rather than beside the prompt: the prompt
+/// asks for them, this is the only place that has to know their exact shape.
+const OPEN_MARKERS: [&str; 3] = ["[[open:conversations]]", "[[open:ideas]]", "[[open:map]]"];
+
+/// Remove a leading `[[open:…]]` marker from a reply.
+///
+/// The marker asks the app to open a tab. It means nothing to a future
+/// request, to extraction, or to a transcript file — and a stored turn that
+/// begins with it teaches the model that this is a normal way to answer, so
+/// it starts arriving where nobody asked to see anything.
+pub fn strip_open_marker(text: &str) -> String {
+    let lead = text.trim_start();
+    for marker in OPEN_MARKERS {
+        if lead.len() >= marker.len() && lead[..marker.len()].eq_ignore_ascii_case(marker) {
+            return lead[marker.len()..].trim_start().to_string();
+        }
+    }
+    text.to_string()
+}
+
+/// Everything the app writes into a reply, taken back out again before the
+/// reply is stored.
+pub fn strip_markers(text: &str) -> String {
+    strip_open_marker(&strip_recall_markers(text))
+}
+
 #[derive(Debug, Clone)]
 pub struct Conversation {
     model: String,
@@ -246,6 +274,34 @@ mod tests {
     #[test]
     fn a_marker_cut_off_mid_stream_is_dropped_rather_than_shown_raw() {
         assert_eq!(strip_recall_markers("Debt cuts both ways.[[recall:1"), "Debt cuts both ways.");
+    }
+
+    #[test]
+    fn the_open_marker_never_reaches_the_record() {
+        assert_eq!(
+            strip_open_marker("[[open:map]]\nOpening the map."),
+            "Opening the map."
+        );
+        // The longest marker wins: matching "[[open:map]]" first would leave
+        // "conversations]]" sitting at the front of the stored turn.
+        assert_eq!(strip_open_marker("[[open:conversations]] Here they are."), "Here they are.");
+        assert_eq!(strip_open_marker("[[OPEN:IDEAS]] Right."), "Right.");
+    }
+
+    #[test]
+    fn a_reply_that_only_mentions_a_marker_later_keeps_its_words() {
+        // Only the front of a reply is the app's plumbing. Anywhere else the
+        // brackets are something that was said, and saying it is allowed.
+        let said = "I would write [[open:map]] to do that.";
+        assert_eq!(strip_open_marker(said), said);
+    }
+
+    #[test]
+    fn both_kinds_of_marker_come_out_together() {
+        assert_eq!(
+            strip_markers("[[open:ideas]] Debt cuts both ways.[[recall:12]]"),
+            "Debt cuts both ways."
+        );
     }
 
     #[test]

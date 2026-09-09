@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Markdown from "./Markdown";
+import SpeakInto from "./SpeakInto";
+import { useUndoable } from "../lib/undo";
 import Sheet from "./Sheet";
 import Resolve from "./Resolve";
 import { IconChevron } from "./Icons";
 import { dateTime, plainDate } from "../lib/format";
 import { categoryColor } from "../lib/categories";
-import { getSettings, onSettingsChanged } from "../lib/settings";
+import { getSettings, onSettingsChanged, type ChatStance } from "../lib/settings";
 import {
+  answerDispute,
   conversationView,
+  digestDisputeAnswer,
   ideaDeepDive,
   ideaView,
   revertRevision,
   type ConversationView,
+  type DisputeAnswer,
   type Segment,
   type IdeaView,
 } from "../lib/views";
@@ -35,41 +40,261 @@ function paragraphs(segments: Segment[]): Segment[][] {
 }
 
 /**
+ * The arrow from a challenge to the box that answers it.
+ *
+ * An arc rather than a straight line, and drawn rather than described: the
+ * note and the box are two things a long way apart on the page, and without
+ * something joining them the box reads as a general comment field that
+ * happens to sit nearby. The curve is the sentence "this one — answer this
+ * one", which is not a sentence worth writing out.
+ *
+ * Purely decorative, so it takes no pointer and no place in the reading
+ * order, and it is laid over the row it belongs to rather than taking a
+ * column of its own — a stretched SVG between two flex items would move every
+ * time either of them wrapped.
+ */
+function ArcToAnswer() {
+  return (
+    <svg
+      className="dispute-arc"
+      viewBox="0 0 120 80"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {/* Born at the note's baseline on the left, over the top, down into the
+          box. `preserveAspectRatio="none"` lets it stretch to whatever the
+          gap turns out to be. */}
+      <path d="M4 12 C 40 -6, 86 6, 108 62" fill="none" />
+      <path className="dispute-arc-head" d="M100 50 L108 64 L114 50" fill="none" />
+    </svg>
+  );
+}
+
+/**
+ * One of the AI's notes, and the box that answers it.
+ *
+ * The notes were the end of the conversation: the app said "no measurement is
+ * offered" and there was nothing to do about it — an observation you cannot
+ * reply to is a verdict. This is the reply, in the person's own words, typed
+ * or spoken.
+ *
+ * The answer is saved first and read back second. Reading back is a model
+ * call; on a local model that is tens of seconds, and an answer lost because
+ * the machine was busy would be the worst thing this could do to somebody who
+ * had just written one.
+ */
+function Dispute({
+  ideaId,
+  challenge,
+  answers,
+  startOpen,
+  asked,
+  onAnswered,
+}: {
+  ideaId: number;
+  challenge: string;
+  /** Replies already recorded against this exact note. */
+  answers: DisputeAnswer[];
+  /** Open with the box already waiting — this is the doubt that was clicked
+   *  on the map to get here. */
+  startOpen?: boolean;
+  /** A question put to the reader rather than a doubt the model raised, so
+   *  it is not dressed as one and carries no "AI" badge. */
+  asked?: boolean;
+  onAnswered: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [open, setOpen] = useState(startOpen ?? false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const undo = useUndoable(draft, setDraft);
+  const boxRef = useRef<HTMLTextAreaElement>(null);
+
+  // Opened from the map, on a doubt several screens down a long file. Being
+  // taken to the right page and left at the top of it is the same as not
+  // being taken anywhere. Keyed on `open` as well, because the box does not
+  // exist to be scrolled to until the render that opens it has happened.
+  useEffect(() => {
+    if (!startOpen) return;
+    setOpen(true);
+  }, [startOpen]);
+  useEffect(() => {
+    if (!startOpen || !open) return;
+    boxRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [startOpen, open]);
+
+  async function save() {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const id = await answerDispute(ideaId, challenge, text);
+      setDraft("");
+      setOpen(false);
+      onAnswered();
+      // Reading it back is what makes it a moon. It can fail — no extraction
+      // model, a model that returns nothing usable — and the answer is
+      // already safe by then, so the failure is worth saying and not worth
+      // undoing anything for.
+      try {
+        await digestDisputeAnswer(id);
+      } catch (e) {
+        setError(`Saved, but not read back yet: ${e}`);
+      }
+      onAnswered();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className={`dispute${open ? " open" : ""}${asked ? " asked" : ""}`}>
+      {asked ? (
+        <p className="ask-why">{challenge}</p>
+      ) : (
+        <p className="note weak">
+          <span className="badge">AI</span>
+          {challenge}
+        </p>
+      )}
+
+      {answers.map((a) => (
+        <p key={a.id} className="dispute-answered">
+          <span className="badge you">You</span>
+          {a.answer}
+          {!a.claim && <span className="tag">not read back yet</span>}
+        </p>
+      ))}
+
+      {open ? (
+        <div className="dispute-reply">
+          <ArcToAnswer />
+          <div className="dispute-box">
+            <textarea
+              ref={boxRef}
+              className="field dispute-field"
+              rows={3}
+              autoFocus
+              placeholder={asked ? "answer this" : "answer this dispute"}
+              value={draft}
+              disabled={busy}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                undo(e);
+                if (e.key === "Escape" && !draft.trim()) setOpen(false);
+                // Enter sends, as it does in the composer. A dispute is
+                // answered in a sentence or two; a paragraph needs shift.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void save();
+                }
+              }}
+            />
+            {/* Spoken rather than typed is the point of this box as much as
+                the box is: an argument you make out loud comes out in your
+                own words, and typing it invites editing it into something
+                tidier than you think. */}
+            <SpeakInto
+              disabled={busy}
+              onPhrase={(text) =>
+                setDraft((d) => (d ? `${d.replace(/\s+$/, "")} ${text}` : text))
+              }
+            />
+          </div>
+          <div className="row dispute-actions">
+            <button className={busy ? "btn busy" : "btn"} disabled={busy || !draft.trim()} onClick={() => void save()}>
+              {busy && <span className="spinner" aria-hidden="true" />}
+              {busy ? "Reading it back…" : "Answer"}
+            </button>
+            <button className="btn subtle" disabled={busy} onClick={() => { setDraft(""); setOpen(false); }}>
+              Not now
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="dispute-open" onClick={() => setOpen(true)}>
+          {answers.length > 0 ? "Say more" : asked ? "Answer this" : "Answer this dispute"}
+        </button>
+      )}
+
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+/**
  * Notes taken alongside an idea.
  *
  * Split under two headings rather than run together, and often absent entirely —
  * an idea with nothing left open is finished, and recording that is the right
  * outcome rather than a gap to fill.
+ *
+ * Which of the two you get follows the stance the conversation is set to,
+ * because they are the same choice asked twice. Someone who set the chat to
+ * push back is not asking for a summary of what held up; someone who set it
+ * to lay things out is not asking to be argued with in the margin either.
+ * The default shows both, which is what "default" has to mean.
  */
 function Nudges({
   strong,
   weak,
   about,
+  ideaId,
+  answers,
+  openChallenge,
+  onAnswered,
 }: {
   strong: string[];
   weak: string[];
   /** What the question should be about — the idea's own claim. */
   about?: string;
+  /** Set only in an idea's own file. On a conversation's file the notes are
+   *  about the whole session, and there is no single idea to hang a moon
+   *  from — so they stay observations there. */
+  ideaId?: number;
+  answers?: DisputeAnswer[];
+  /** The one doubt to open ready to be answered. */
+  openChallenge?: string | null;
+  onAnswered?: () => void;
 }) {
   const [askWhy, setAskWhy] = useState(true);
+  const [stance, setStance] = useState<ChatStance>("neutral");
   useEffect(() => {
     let alive = true;
-    void getSettings().then((s) => alive && setAskWhy(s.ask_why));
-    const un = onSettingsChanged((s) => alive && setAskWhy(s.ask_why));
+    const take = (s: { ask_why: boolean; chat_stance: ChatStance }) => {
+      if (!alive) return;
+      setAskWhy(s.ask_why);
+      setStance(s.chat_stance);
+    };
+    void getSettings().then(take);
+    const un = onSettingsChanged(take);
     return () => {
       alive = false;
       void un.then((f) => f());
     };
   }, []);
 
-  if (!strong.length && !weak.length) return null;
+  // "Push back" wants the doubts; "lay it out" wants what held up, quietly.
+  const showStrong = stance !== "challenge";
+  const showWeak = stance !== "organize";
+  const strongShown = showStrong ? strong : [];
+  const weakShown = showWeak ? weak : [];
+
+  if (!strongShown.length && !weakShown.length) return null;
   return (
     <div className="notes-panel">
-      {strong.length > 0 && (
+      {strongShown.length > 0 && (
         <section>
           <h3 className="section">Noted alongside</h3>
-          <div className="notes">
-            {strong.map((t, i) => (
+          {/* Greyed back when it is the only thing here. Laying a thought out
+              is not the same as endorsing it, and a lone column of green
+              ticks reads as a verdict rather than as a summary. */}
+          <div className={showWeak ? "notes" : "notes summary-only"}>
+            {strongShown.map((t, i) => (
               <p key={i} className="note strong">
                 <span className="badge">AI</span>
                 {t}
@@ -78,30 +303,64 @@ function Nudges({
           </div>
         </section>
       )}
-      {weak.length > 0 && (
+      {weakShown.length > 0 && (
         <section>
           <div className="notes">
-            {weak.map((t, i) => (
-              <p key={i} className="note weak">
-                <span className="badge">AI</span>
-                {t}
-              </p>
-            ))}
+            {weakShown.map((t, i) =>
+              // A doubt you can answer, where there is an idea for the answer
+              // to belong to. Elsewhere — a whole conversation's notes — it
+              // stays what it was, an observation with nowhere to hang a
+              // reply.
+              ideaId !== undefined && onAnswered ? (
+                <Dispute
+                  key={i}
+                  ideaId={ideaId}
+                  challenge={t}
+                  answers={(answers ?? []).filter((a) => a.challenge === t)}
+                  startOpen={openChallenge === t}
+                  onAnswered={onAnswered}
+                />
+              ) : (
+                <p key={i} className="note weak">
+                  <span className="badge">AI</span>
+                  {t}
+                </p>
+              ),
+            )}
           </div>
         </section>
       )}
       {/* A question, not another note — and deliberately not in the AI's
           voice. The notes above say what the model observed; this asks the
-          one thing an observation cannot answer for you. Styled apart from
-          them because it is addressed to the reader, and switched off in
-          Settings by anyone who finds it presumptuous. */}
-      {askWhy && (strong.length > 0 || weak.length > 0) && (
-        <p className="ask-why">
-          Why would {about ? shortenClaim(about) : "this"} be so?
-        </p>
+          one thing an observation cannot answer for you. Switched off in
+          Settings by anyone who finds it presumptuous.
+          
+          And answerable, like the doubts are. It was the one thing on the
+          page addressed directly to the reader with nowhere to reply: a
+          question that cannot be answered is a rhetorical question, which
+          is not what this was for. */}
+      {askWhy && (strongShown.length > 0 || weakShown.length > 0) && (
+        ideaId !== undefined && onAnswered ? (
+          <Dispute
+            asked
+            ideaId={ideaId}
+            challenge={askWhyText(about)}
+            answers={(answers ?? []).filter((a) => a.challenge === askWhyText(about))}
+            startOpen={openChallenge === askWhyText(about)}
+            onAnswered={onAnswered}
+          />
+        ) : (
+          <p className="ask-why">{askWhyText(about)}</p>
+        )
       )}
     </div>
   );
+}
+
+/** The question put to the reader, worded once so the answer recorded against
+ *  it still matches after a re-render. */
+function askWhyText(about?: string): string {
+  return `Why would ${about ? shortenClaim(about) : "this"} be so?`;
 }
 
 /** A claim, cut to something that fits inside a sentence. */
@@ -121,10 +380,15 @@ function shortenClaim(claim: string): string {
  */
 export function ConversationFile({
   sessionId,
+  highlightIdea,
   onTrace,
   onClose,
 }: {
   sessionId: number;
+  /** An idea whose words to go straight to and flash — set when this file was
+   *  opened by clicking that idea's quote somewhere else. A citation that
+   *  drops you at the top of a transcript has not taken you anywhere. */
+  highlightIdea?: number | null;
   /** Pointing at one of these picks it out on the map behind the panel. */
   onTrace?: (ideaId: number | null) => void;
   onClose: () => void;
@@ -167,22 +431,50 @@ export function ConversationFile({
    * edge has no surrounding sentence to read it against — and the surrounding
    * sentence is the point.
    */
-  function show(ideaId: number) {
+  function show(ideaId: number): HTMLElement | null {
     const box = transcriptRef.current;
     const mark = box?.querySelector<HTMLElement>(`mark[data-idea="${ideaId}"]`);
-    if (!box || !mark) return;
-    // The nearest scrolling ancestor is the pane, not the transcript, so the
-    // offset is worked out by hand rather than left to scrollIntoView — which
-    // would scroll the whole file and take the list off screen with it.
-    const scroller = box.closest<HTMLElement>(".pane-inner");
-    if (!scroller) return;
+    if (!box || !mark) return null;
+    // The transcript's own column is the scroller, not the whole file. It used
+    // to be the pane: running the pointer down the list of extracted ideas
+    // scrolled the entire page, so the list you were reading slid out from
+    // under the pointer as each row answered it.
+    const scroller = box.closest<HTMLElement>(".deep-main");
+    if (!scroller) return mark;
     const top =
       mark.getBoundingClientRect().top -
       scroller.getBoundingClientRect().top +
       scroller.scrollTop -
       scroller.clientHeight / 2;
     scroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    return mark;
   }
+
+  /**
+   * Go to an idea's words and flash them.
+   *
+   * Arriving from a citation, the highlight is already one of several on the
+   * page and looks like all the others — so it pulses a few times, which is
+   * the only thing on a page of static text that the eye goes to on its own.
+   * The class is removed afterwards rather than left on: a permanent marker
+   * would still be there the next time this file is opened for another
+   * reason, pointing at something nobody asked about.
+   */
+  useEffect(() => {
+    if (!view || highlightIdea === null || highlightIdea === undefined) return;
+    // After paint: the marks do not exist until the transcript has rendered.
+    const id = requestAnimationFrame(() => {
+      const mark = show(highlightIdea);
+      if (!mark) return;
+      setTrace(highlightIdea);
+      mark.classList.add("flashing");
+      window.setTimeout(() => mark.classList.remove("flashing"), 2600);
+    });
+    return () => cancelAnimationFrame(id);
+    // `show` closes over refs only, and re-running on every render would
+    // restart the flash for as long as the file is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, highlightIdea]);
 
   useEffect(() => {
     setView(null);
@@ -198,7 +490,10 @@ export function ConversationFile({
   useEffect(() => () => traceRef.current?.(null), []);
 
   return (
-    <div className="pane-inner">
+    // Its own scroll regions rather than one for the whole file: the
+    // transcript and the list of what came out of it are two things read
+    // against each other, and moving one must not move the other.
+    <div className="pane-inner deep-file">
       <header className="head">
         <button className="btn" onClick={onClose}>← Back</button>
         {view && (
@@ -295,7 +590,10 @@ export function ConversationFile({
                       {trace === t.ideaId && (
                         <span className="trace">
                           {/* The quote alone rarely says why it was recorded —
-                              the crystallisation is the part that does. */}
+                              the crystallisation is the part that does. Two
+                              blocks, not two inline spans: run together on one
+                              line the words that were said read as the tail of
+                              the sentence explaining them. */}
                           {t.reasoning && <em className="trace-why">{t.reasoning}</em>}
                           <span className="trace-quote">“{t.quote}”</span>
                         </span>
@@ -319,7 +617,20 @@ export function ConversationFile({
         <Sheet depth={1} onClose={() => setOpenIdea(null)}>
           <IdeaFile
             ideaId={openIdea}
-            onOpenConversation={() => setOpenIdea(null)}
+            // Already reading the conversation this quote came from: going
+            // "to" it means closing the idea and flashing the words, not
+            // opening a second copy of the file underneath.
+            onOpenConversation={(_id, ideaId) => {
+              setOpenIdea(null);
+              if (ideaId !== undefined) {
+                const mark = show(ideaId);
+                if (mark) {
+                  setTrace(ideaId);
+                  mark.classList.add("flashing");
+                  window.setTimeout(() => mark.classList.remove("flashing"), 2600);
+                }
+              }
+            }}
             onClose={() => setOpenIdea(null)}
           />
         </Sheet>
@@ -392,7 +703,7 @@ function Reply({
 const STANCE_WORD: Record<string, string | undefined> = {
   neutral: "default",
   challenge: "pushed back",
-  organize: "organised",
+  organize: "laid out",
 };
 
 /** An idea's file: everything supporting it, and how it has changed. */
@@ -414,17 +725,24 @@ function worthShowing(dive: string | null, claim: string): boolean {
 
 export function IdeaFile({
   ideaId,
+  openChallenge,
   onOpenConversation,
   onClose,
 }: {
   ideaId: number;
-  onOpenConversation: (id: number) => void;
+  /** One of the AI's doubts to open ready to be answered — set when the file
+   *  was opened by clicking that doubt on the map, so the reader lands on the
+   *  thing they clicked rather than at the top of the page. */
+  openChallenge?: string | null;
+  /** Go to the conversation a quote came from. The idea comes with it so the
+   *  transcript can go straight to those words and flash them, rather than
+   *  opening at the top and leaving them to be found. */
+  onOpenConversation: (id: number, ideaId?: number) => void;
   onClose: () => void;
 }) {
   const [view, setView] = useState<IdeaView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dive, setDive] = useState<string | null>(null);
-  const [diving, setDiving] = useState(false);
   /** A contradiction being settled, opened over this file. */
   const [settling, setSettling] = useState<{
     relationId: number;
@@ -435,24 +753,13 @@ export function IdeaFile({
 
   const load = () => ideaView(ideaId).then(setView).catch((e) => setError(String(e)));
 
-  // Only the cached copy on open; generating costs a model call, so that waits
-  // for you to ask.
+  // The cached copy only. Nothing here asks a model for one: the button that
+  // used to is gone, and an open that quietly spent a model call would be a
+  // worse version of the same thing.
   useEffect(() => {
     setDive(null);
-    ideaDeepDive(ideaId).then(setDive).catch(() => {});
+    ideaDeepDive(ideaId, false, true).then(setDive).catch(() => {});
   }, [ideaId]);
-
-  async function think(regenerate = false) {
-    setDiving(true);
-    setError(null);
-    try {
-      setDive(await ideaDeepDive(ideaId, regenerate));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setDiving(false);
-    }
-  }
   useEffect(() => {
     setView(null);
     void load();
@@ -474,9 +781,75 @@ export function IdeaFile({
         <p className="muted">Loading…</p>
       ) : (
         <>
+          {/* The title, and nothing under it. The claim used to sit here as a
+              second line, and it is the same sentence said at greater length —
+              two headings for one idea, the second of which reads like a
+              quotation and is not one. The claim is still what the notes and
+              the question below are written about; it just no longer opens
+              the page by repeating its own name. */}
           <h2 className="deep-claim">{view.title}</h2>
-          {view.title !== view.claim && <p className="deep-subclaim">{view.claim}</p>}
-          <Nudges strong={view.strong} weak={view.weak} about={view.claim} />
+
+          {/* The words this rests on, first. They used to be at the very
+              bottom, under the notes and the reading — which put the model's
+              opinion of the idea above the person's own sentence, on the one
+              page where the sentence is the evidence for everything else on
+              it. Each is the whole citation: what was said, when, and in
+              which conversation, and clicking it goes there. */}
+          {view.evidence.map((e) => (
+            <div key={e.id} className="quote-source">
+              {/* Only the quote goes anywhere. The whole card used to be one
+                  button, so reading the date — or moving the pointer across
+                  on the way to something else — lit up as though the words
+                  were about to be left behind. */}
+              <blockquote
+                role="link"
+                tabIndex={0}
+                data-tip="Go to this in the conversation"
+                onClick={() => onOpenConversation(e.session_id, view.id)}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter" || ev.key === " ") {
+                    ev.preventDefault();
+                    onOpenConversation(e.session_id, view.id);
+                  }
+                }}
+              >
+                {/* The words either side, smaller and dimmer. A quote on its
+                    own is the one sentence the model chose, which is exactly
+                    the sentence you cannot check it against — whether it
+                    means what the claim says depends on what surrounded it.
+                    Set back rather than beside: the quote has to stay the
+                    thing being read. */}
+                {e.before && <span className="quote-context">{e.before}</span>}
+                <span className="quote-said">“{e.quote}”</span>
+                {e.after && <span className="quote-context">{e.after}</span>}
+              </blockquote>
+              {/* The footing of the citation: when on the left, where on the
+                  right. The conversation's name was the one thing a citation
+                  needs and did not have — a date alone does not tell you
+                  which piece of thinking this came out of. The loose-match
+                  mark sits here too rather than inside the quotation, where
+                  it read as a word somebody had said. */}
+              <div className="quote-foot">
+                <span className="quote-date">{plainDate(e.started_at)}</span>
+                {e.normalized && (
+                  <span className="tag" data-tip="The words were found with small differences — punctuation or a substituted word.">
+                    loose match
+                  </span>
+                )}
+                {e.session_title && <span className="quote-where">{e.session_title}</span>}
+              </div>
+            </div>
+          ))}
+
+          <Nudges
+            strong={view.strong}
+            weak={view.weak}
+            about={view.claim}
+            ideaId={view.id}
+            answers={view.answers}
+            openChallenge={openChallenge}
+            onAnswered={load}
+          />
 
           {view.evidence.map((e) => (
             <div key={e.id} className="evidence">
@@ -484,10 +857,13 @@ export function IdeaFile({
             </div>
           ))}
 
-          {/* Below the evidence, not above it: the model's reading of an idea
-              is worth less than the words the idea came from, and putting it
-              first pushed those off the screen. */}
-          {worthShowing(dive, view.claim) ? (
+          {/* A reading already made for this idea, if there is one. There is
+              no button to make one any more: it sat under every idea offering
+              the model's opinion of a claim whose own words are three lines
+              above, and pressing it was a model call spent on being told what
+              you had just read. What is shown here now is only what was
+              generated before that button went. */}
+          {worthShowing(dive, view.claim) && (
             <section className="dive">
               {/* Through the markdown renderer, not raw paragraphs — the model
                   writes emphasis, lists and occasional headings, and showing
@@ -496,17 +872,6 @@ export function IdeaFile({
                 <Markdown>{dive!}</Markdown>
               </div>
             </section>
-          ) : (
-            <div className="sources">
-              <button
-                className={diving ? "btn busy" : "btn"}
-                disabled={diving}
-                onClick={() => void think(true)}
-              >
-                {diving && <span className="spinner" aria-hidden="true" />}
-                {diving ? "Reading…" : "Read it back"}
-              </button>
-            </div>
           )}
 
           {/* Reconciliation has recorded these since it started judging pairs,
@@ -551,33 +916,6 @@ export function IdeaFile({
             </p>
           ))}
 
-          {/* The words this rests on, at the very bottom — this is where a
-              quote belongs, not floating in the middle of the reading. Each
-              is the whole citation: what was said and when, and opens the
-              conversation it was said in, the way a citation would. */}
-          {view.evidence.map((e) => (
-            <div key={e.id} className="quote-source">
-              {/* Only the quote goes anywhere. The whole card used to be one
-                  button, so reading the date — or moving the pointer across
-                  on the way to something else — lit up as though the words
-                  were about to be left behind. */}
-              <blockquote
-                role="link"
-                tabIndex={0}
-                onClick={() => onOpenConversation(e.session_id)}
-                onKeyDown={(ev) => {
-                  if (ev.key === "Enter" || ev.key === " ") {
-                    ev.preventDefault();
-                    onOpenConversation(e.session_id);
-                  }
-                }}
-              >
-                “{e.quote}”
-                {e.normalized && <span className="tag">loose match</span>}
-              </blockquote>
-              <span className="quote-date">{plainDate(e.started_at)}</span>
-            </div>
-          ))}
         </>
       )}
 

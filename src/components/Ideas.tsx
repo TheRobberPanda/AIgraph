@@ -82,7 +82,12 @@ export default function Ideas({
   // which meant anything newly extracted arrived expanded and the list grew
   // unreadable on its own.
   const [opened, setOpened] = useState<Set<number>>(new Set());
-  const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
+  const [panel, setPanel] = useState<{
+    kind: "idea" | "conversation";
+    id: number;
+    /** For a conversation opened from a citation: which idea's words to flash. */
+    flash?: number;
+  } | null>(null);
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
@@ -222,8 +227,14 @@ export default function Ideas({
   function openIdea(id: number) {
     setPanel((p) => (p?.kind === "idea" && p.id === id ? null : { kind: "idea", id }));
   }
-  function openConversation(id: number) {
-    setPanel((p) => (p?.kind === "conversation" && p.id === id ? null : { kind: "conversation", id }));
+  /** `flash` is the idea whose words to go to and pulse, when this was
+   *  reached by clicking that idea's quote. */
+  function openConversation(id: number, flash?: number) {
+    setPanel((p) =>
+      p?.kind === "conversation" && p.id === id && flash === undefined
+        ? null
+        : { kind: "conversation", id, flash },
+    );
   }
 
   useEffect(() => {
@@ -591,11 +602,15 @@ export default function Ideas({
         {panel.kind === "idea" ? (
           <IdeaFile
             ideaId={panel.id}
-            onOpenConversation={(id) => openConversation(id)}
+            onOpenConversation={(id, ideaId) => openConversation(id, ideaId)}
             onClose={() => setPanel(null)}
           />
         ) : (
-          <ConversationFile sessionId={panel.id} onClose={() => setPanel(null)} />
+          <ConversationFile
+            sessionId={panel.id}
+            highlightIdea={panel.flash}
+            onClose={() => setPanel(null)}
+          />
         )}
       </Sheet>
     )}

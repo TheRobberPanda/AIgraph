@@ -31,6 +31,31 @@ export function parseReply(text: string): Parsed {
   return { open: m[1].toLowerCase() as OpenTarget, text: text.slice(m[0].length) };
 }
 
+const OPENERS = ["[[open:map]]", "[[open:ideas]]", "[[open:conversations]]"];
+
+/**
+ * A reply as it should look on screen while it is still arriving.
+ *
+ * `parseReply` can only run once the whole answer is back, so until then the
+ * marker was on the screen — the app's own plumbing typed out a character at a
+ * time in front of somebody who had just asked to see their map. Worse while
+ * it is half-arrived: `[[open:conv` is not even the plumbing, it is a
+ * fragment of it.
+ *
+ * So anything that is still only a *prefix* of a marker shows as nothing. It
+ * either completes and is dropped, or it turns out to be something that was
+ * actually said and appears whole on the next chunk.
+ */
+export function visibleReply(text: string): string {
+  const lead = text.replace(/^\s+/, "");
+  const lower = lead.toLowerCase();
+  for (const opener of OPENERS) {
+    if (lower.startsWith(opener)) return lead.slice(opener.length).replace(/^\s+/, "");
+    if (opener.startsWith(lower)) return "";
+  }
+  return text;
+}
+
 /** Strip markdown that has no spoken equivalent, so it isn't read out. */
 function forSpeech(text: string): string {
   return text

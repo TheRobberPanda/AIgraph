@@ -705,6 +705,33 @@ input, textarea {
    list of titles yields three times as fast, and the transcript stops at a
    floor rather than being squeezed into a column two words wide. The panel
    cannot be dragged narrower than the two of them need. */
+/* A conversation's file scrolls in two places, not one. Pointing at a row in
+   the list of extracted ideas scrolls the transcript to those words — and
+   while that was one scroller for the whole page, doing so slid the list out
+   from under the pointer that had just asked. */
+.deep-file { overflow: hidden; display: flex; flex-direction: column; }
+.deep-file > .head { flex: none; }
+.deep-file > .deep-split { flex: 1; min-height: 0; max-width: none; }
+.deep-file .deep-main,
+.deep-file .deep-aside {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  /* Room for the last line to clear the bottom edge, since the pane's own
+     bottom padding is outside these now. */
+  padding-bottom: 1.5rem;
+}
+/* Sticky was how the list stayed put while the page scrolled. It has its own
+   scroller now, so it stays put by being one. */
+.deep-file .deep-aside { position: static; }
+.deep-file .deep-aside .taken-head {
+  /* The heading holds while its list scrolls under it. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+
 .deep-split { display: flex; gap: 1.6rem; align-items: flex-start; }
 /* The list is a fixed column and the transcript takes whatever is left, so
    widening the panel widens the words. The transcript's basis is zero rather
@@ -726,9 +753,27 @@ input, textarea {
   padding-bottom: 0.35rem;
   border-bottom: 2px solid var(--accent);
 }
-.trace { display: block; margin-top: 0.35rem; padding-left: 0.5rem; border-left: 2px solid var(--gold); }
-.trace-why { font-style: normal; font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
-.trace-quote { font-size: 0.78rem; color: var(--faint); border-left: none; padding-left: 0; }
+/* Why it was recorded, then the words it was recorded from. Two blocks with
+   air between them: as inline spans they ran together on one line, so the
+   quotation read as the tail of the sentence explaining it. */
+.trace {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--gold);
+}
+.trace-why { display: block; font-style: normal; font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+.trace-quote {
+  display: block;
+  padding-top: 0.35rem;
+  border-top: 1px dashed var(--line);
+  font-size: 0.78rem;
+  color: var(--faint);
+  font-style: italic;
+  line-height: 1.5;
+}
 @media (max-width: 68rem) {
   .deep-aside { position: static; }
 }
@@ -1464,15 +1509,6 @@ textarea.field:focus-visible { outline-offset: -3px; }
   border-left: 3px solid var(--accent);
   text-wrap: balance;
 }
-/* The claim as spoken, under the title that names it. Quieter than the
-   title — it's the source material, not the headline. */
-.deep-subclaim {
-  margin: -0.6rem 0 0.85rem;
-  padding-left: 0.75rem;
-  color: var(--muted);
-  font-size: 0.92rem;
-  line-height: 1.5;
-}
 /* The citation at the bottom of an idea's file: what it rests on and when it
    was said, styled and behaving like a source rather than a labeled button —
    the whole thing is the control, so nothing here reads as chrome. */
@@ -1560,6 +1596,32 @@ blockquote {
     0 0 0 2px color-mix(in srgb, var(--tag-color) 45%, transparent);
   transition: background 120ms ease, box-shadow 120ms ease;
 }
+/* Arrived at from a citation. On a page already carrying half a dozen
+   highlights, being lit is not enough to be found — the eye goes to the one
+   thing that moves, so it pulses a few times and then stops. Stopping matters
+   as much as starting: a permanent beacon would still be here the next time
+   this file is opened for some other reason. */
+.extracted.flashing { animation: quote-flash 620ms ease-in-out 4; }
+@keyframes quote-flash {
+  0%, 100% {
+    background: color-mix(in srgb, var(--tag-color) 52%, transparent);
+    box-shadow:
+      inset 0 -1px 0 var(--tag-color),
+      0 0 0 2px color-mix(in srgb, var(--tag-color) 45%, transparent);
+  }
+  50% {
+    background: var(--tag-color);
+    box-shadow:
+      inset 0 -1px 0 var(--tag-color),
+      0 0 0 6px color-mix(in srgb, var(--tag-color) 30%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No pulse, but still the brightest thing on the page — the point is being
+     findable, and only the means is motion. */
+  .extracted.flashing { animation: none; background: var(--tag-color); }
+}
+
 .why {
   display: none; position: absolute; left: 0; top: calc(100% + 0.35rem); z-index: 5;
   width: min(28rem, 70vw); padding: 0.55rem 0.7rem;
@@ -1758,10 +1820,35 @@ blockquote {
 .graph:active { cursor: grabbing; }
 .graph-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
 
-.graph-reset { position: absolute; left: 0.6rem; top: 0.6rem; }
+/* Down the right edge, halfway. Every corner of the map is already spoken
+   for — the arrangement chip top left, the subject key bottom right, and the
+   hover card takes whichever of the four is furthest from the node being
+   pointed at. "Fit" used to be a bare text button pinned to the top left,
+   which is exactly where the arrangement chip sits: the one control that gets
+   you back to seeing everything lived underneath the one that changes how it
+   is drawn, invisible and unclickable. */
+.graph-zoom {
+  position: absolute;
+  right: 0.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+/* Over a canvas, so it needs a ground of its own: a transparent border on a
+   dark forest is a button you can only find by hovering for it. */
+.graph-zoom .icon-btn {
+  width: 1.9rem;
+  height: 1.9rem;
+  background: var(--surface);
+}
 .graph-tip {
   position: absolute; z-index: 6;
-  max-width: 30rem; padding: 0.5rem 0.7rem;
+  /* In a side-panel map, 30rem is wider than the map — the card ran off its
+     own edge and took the end of the title with it. */
+  max-width: min(30rem, calc(100% - 1.2rem)); padding: 0.5rem 0.7rem;
   border: 1px solid var(--line); border-radius: 9px;
   background: var(--surface-lift); font-size: 0.82rem; pointer-events: none;
 }
@@ -2174,6 +2261,18 @@ blockquote {
 .ai-nudge.up .ai-text { top: auto; bottom: calc(100% + 0.4rem); }
 .ai-nudge:hover { z-index: 4; }
 .ai-nudge:hover .ai-text { display: block; }
+/* A doubt you can reply to, rather than one you can only read. The mark
+   itself is unchanged — what changes is that it takes a click, and says so
+   on the card it opens. */
+button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size: 0.55rem; font-weight: 600; }
+.ai-nudge.answerable { cursor: pointer; }
+.ai-nudge.answerable:hover { background: var(--surface); }
+.ai-nudge.answerable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ai-answer {
+  display: block; margin-top: 0.35rem;
+  font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.04em;
+  color: var(--accent);
+}
 
 /* ---- Import ---- */
 
@@ -2533,6 +2632,36 @@ blockquote {
 .preset:last-of-type { border-bottom: none; }
 .preset-name { font-weight: 600; }
 .preset-prompt { line-height: 1.5; resize: vertical; font: inherit; font-size: 0.82rem; }
+/* The name and its way out on one line. Removing used to be a full-width
+   button under the wording — the same size and weight as everything else, so
+   the largest control in the block was the one that destroys it. */
+.preset-top { display: flex; align-items: center; gap: 0.5rem; }
+.preset-top .preset-name { flex: 1; min-width: 0; }
+.preset-remove { color: var(--faint); }
+.preset-remove:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+/* What the instruction is asking to be made, beside the wording that asks. */
+.preset-formats { flex-wrap: wrap; }
+.preset-formats .btn { font-size: 0.76rem; padding: 0.22rem 0.5rem; }
+
+/* What a Make button will produce, on the button itself. A quiet second line
+   rather than a word beside the name: the name is what you are looking for,
+   and the format is what you check once you have found it. */
+.make-format {
+  display: block;
+  margin-top: 0.1rem;
+  font-family: var(--mono);
+  font-size: 0.56rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.btn.on .make-format, .btn:hover .make-format { color: inherit; }
+.make-presets .btn { text-align: left; line-height: 1.25; }
+
+/* The wording, read before it is sent. */
+.preset-preview .section:first-child { margin-top: 0; }
+.preset-preview .preset-prompt { font-size: 0.86rem; }
+.preset-preview-bar { margin-top: 1.1rem; align-items: center; }
 
 
 /* ---- Choosing what the Make tab reads ---- */
@@ -2800,10 +2929,6 @@ blockquote {
   margin: 0 0 0.3rem; font-size: 1.28rem; line-height: 1.32;
   text-wrap: balance; color: var(--fg);
 }
-.deep-subclaim {
-  margin: 0 0 0.9rem; font-size: 0.94rem; line-height: 1.6;
-  color: var(--muted); max-width: 38rem;
-}
 /* The quote is a link; the card around it is not. Spaced well clear of the
    idea above so the two do not read as one block. */
 .quote-source {
@@ -2818,17 +2943,141 @@ blockquote {
 }
 .quote-source blockquote:hover { color: var(--accent); }
 .quote-source blockquote:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* What surrounded the quote. Smaller and dimmer than the words themselves, so
+   the citation still reads as one sentence with a setting around it rather
+   than as a paragraph with one sentence lost in it. */
+.quote-context { font-size: 0.82rem; color: var(--faint); }
+.quote-said { color: inherit; }
+/* Hovering lights the quote, not its surroundings — the surroundings are not
+   what the click opens. */
+.quote-source blockquote:hover .quote-context { color: var(--faint); }
+/* When on the left, where on the right — the conversation's name is the one
+   thing a citation needs that a date cannot give it. The loose-match mark
+   lives here rather than inside the quotation, where it read as a word
+   somebody had said. */
+.quote-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  font-size: 0.72rem;
+  color: var(--faint);
+}
+.quote-foot .quote-where {
+  margin-left: auto;
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+  color: var(--muted);
+}
 .quote-date { font-size: 0.72rem; color: var(--faint); }
 .why-inline {
   margin: 0.5rem 0 0; font-size: 0.83rem; line-height: 1.55; color: var(--muted);
   max-width: 38rem;
 }
-/* A hint whose explanation came before its controls would otherwise sit alone
-   on a line, reading as a stray mark. Pulled up onto the heading it belongs
-   to, taking no vertical space of its own. */
-.section + .hint {
-  position: relative;
-  top: -1.35rem;
+/* A hint inside its heading, which is where it belongs: it explains the name
+   it sits beside, not the last control of the group above. The heading is
+   uppercase mono at 0.6rem, so the mark is sized against the page rather than
+   against the text it is in — a "?" scaled to a 0.6rem label is a speck. */
+.section .hint {
   margin-left: 0.45rem;
-  height: 0;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
 }
+.section .hint-mark { width: 0.95rem; height: 0.95rem; font-size: 0.6rem; }
+/* `.hint:last-child` flips the popup to the right edge so it cannot run off
+   the pane. Inside a heading the mark is always the last child and always
+   near the left edge, so the flip would push the words off the other side —
+   over the navigation, in the settings pane. Matched with the same
+   `:last-child` so this wins on specificity rather than on source order. */
+.section .hint:last-child .hint-body { font-family: var(--sans); left: 0; right: auto; }
+/* A heading carrying a mark has to be able to hold it upright. */
+h3.section { display: flex; align-items: center; }
+
+/* ---- Answering the AI's doubt about an idea ---- */
+
+/* A note that can be replied to, and the reply. Not a card: the note has to
+   stay one of the notes, or the list of them turns into a stack of boxes. */
+.dispute { display: flex; flex-direction: column; gap: 0.3rem; }
+.dispute + .dispute { margin-top: 0.55rem; }
+.dispute.open { margin: 0.5rem 0; }
+
+/* The offer, kept to a link's weight. A button here competed with "Settle it"
+   and "Read it back" — both of which do more — and won on size alone. */
+.dispute-open {
+  align-self: flex-start;
+  margin-left: 1.9rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--faint);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+.dispute-open:hover { color: var(--accent); }
+
+/* The box the arrow lands in, indented under the note it answers. */
+.dispute-reply { position: relative; margin: 0.15rem 0 0 1.9rem; padding-top: 2.4rem; }
+/* Over the gap between the note and the box rather than in a column of its
+   own: a stretched SVG between two flex items would move every time either
+   of them wrapped. */
+.dispute-arc {
+  position: absolute;
+  left: -1.2rem;
+  top: 0.1rem;
+  width: 9rem;
+  height: 2.6rem;
+  pointer-events: none;
+  stroke: var(--faint);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.75;
+  /* Non-scaling strokes: the arc is stretched by `preserveAspectRatio="none"`
+     and without this the line thins out along the shallow part of the curve
+     and fattens on the steep part. */
+  vector-effect: non-scaling-stroke;
+}
+.dispute-arc path { vector-effect: non-scaling-stroke; }
+
+.dispute-box { position: relative; display: flex; align-items: flex-start; gap: 0.4rem; }
+.dispute-field { flex: 1; min-width: 0; resize: vertical; font-size: 0.88rem; line-height: 1.55; }
+.dispute-field::placeholder { color: var(--faint); }
+/* Beside the box, at the top, where the first line of the answer will be. */
+.speak-into { margin-top: 0.15rem; }
+.speak-into.live { color: var(--accent); border-color: var(--accent); }
+
+.dispute-actions { margin-top: 0.45rem; }
+
+/* An answer already recorded. Marked as yours, in the same shape as the note
+   it replies to, so the pair reads as an exchange. */
+.dispute-answered {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin: 0.15rem 0 0 1.9rem;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: var(--fg);
+}
+.dispute-answered .badge { color: var(--accent); }
+/* The reader's own question, made answerable. It keeps the ask-why voice
+   rather than being dressed as one of the AI's doubts — it is not one. */
+.dispute.asked { margin-top: 0.7rem; }
+.dispute.asked .dispute-open,
+.dispute.asked .dispute-reply,
+.dispute.asked .dispute-answered { margin-left: 0; }
+/* What held up, when it is the only thing shown. Laying a thought out is not
+   the same as endorsing it, and a lone column of green ticks reads as a
+   verdict rather than as a summary. */
+.notes.summary-only .note.strong { color: var(--faint); }
+.notes.summary-only .note.strong .badge { color: var(--faint); }
+.dispute-answered .tag { margin-left: 0.35rem; }

@@ -166,6 +166,35 @@ CREATE TABLE IF NOT EXISTS idea_deep_dives (
     created_at TEXT NOT NULL
 );
 
+-- An answer to one of the AI's notes on an idea, and what it became.
+--
+-- The notes are the model's doubts about a claim; until now they were the end
+-- of the conversation — the app said "no measurement is offered" and there was
+-- nothing to do about it. This is the reply, in the person's own words.
+--
+-- It is deliberately *not* an `ideas` row. Every idea in this app owes its
+-- existence to a verified span of transcript, and an answer typed into a box
+-- has no transcript to point at. Rather than weaken that rule, an answer gets
+-- its own table and its own kind of node: a moon, held by the idea it answers,
+-- with the answer itself as its whole provenance.
+--
+-- `challenge` is stored verbatim rather than as a foreign key into `nudges`:
+-- re-reading a conversation throws every nudge away and writes new ones, and
+-- an answer must not evaporate because the note it replied to was rewritten.
+CREATE TABLE IF NOT EXISTS dispute_answers (
+    id          INTEGER PRIMARY KEY,
+    idea_id     INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    challenge   TEXT NOT NULL,
+    answer      TEXT NOT NULL,
+    -- What the answer says, in one short claim, and a name for it. Empty
+    -- until it has been read back: digesting costs a model call, and an
+    -- answer is worth keeping whether or not that call ever succeeds.
+    claim       TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL DEFAULT '',
+    digested_at TEXT,
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS embeddings (
     idea_id INTEGER PRIMARY KEY REFERENCES ideas(id) ON DELETE CASCADE,
     dims    INTEGER NOT NULL,
@@ -195,6 +224,7 @@ CREATE INDEX IF NOT EXISTS idx_turns_session   ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_idea   ON evidence(idea_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_turn   ON evidence(turn_id);
 CREATE INDEX IF NOT EXISTS idx_nudges_idea     ON nudges(idea_id);
+CREATE INDEX IF NOT EXISTS idx_answers_idea    ON dispute_answers(idea_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_state  ON sessions(extract_state);
 "#;
 
@@ -293,6 +323,22 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             "ALTER TABLE sessions ADD COLUMN folder_id INTEGER NOT NULL DEFAULT 1;",
         )?;
     }
+
+    // Answers to the AI's notes. Created here as well as in the schema so a
+    // database made before them gains the table without a rebuild.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS dispute_answers (
+            id          INTEGER PRIMARY KEY,
+            idea_id     INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+            challenge   TEXT NOT NULL,
+            answer      TEXT NOT NULL,
+            claim       TEXT NOT NULL DEFAULT '',
+            title       TEXT NOT NULL DEFAULT '',
+            digested_at TEXT,
+            created_at  TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_answers_idea ON dispute_answers(idea_id);",
+    )?;
 
     // Root always exists, on a fresh database and on one made before folders.
     conn.execute(

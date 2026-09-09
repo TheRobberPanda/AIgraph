@@ -64,6 +64,7 @@ import {
   speakNext,
   stopSpeaking,
   takeSentences,
+  visibleReply,
 } from "./lib/voice";
 import { modelName } from "./lib/format";
 import { runtimeStatus } from "./lib/settings";
@@ -127,7 +128,13 @@ const PHASE_WORD: Record<string, string> = {
   saving: "Saving",
 };
 
-type Deep = { kind: "idea"; id: number } | { kind: "conversation"; id: number } | null;
+type Deep =
+  | { kind: "idea"; id: number }
+  /** `flash` is set when this was reached by clicking an idea's quote: the
+   *  transcript goes to those words and pulses them, rather than opening at
+   *  the top and leaving them to be found. */
+  | { kind: "conversation"; id: number; flash?: number }
+  | null;
 
 /**
  * Where you are lives in the URL hash — a tab, or an open file.
@@ -251,6 +258,11 @@ export default function App() {
   const [talking, setTalking] = useState(false);
   /** Reply text that has arrived but has not yet completed a sentence. */
   const pendingSpeech = useRef("");
+  /** The reply exactly as it came back, markers and all. The turn on screen
+   *  holds the cleaned version, so this is what the next chunk is appended
+   *  to — cleaning what has already been cleaned would eat a sentence that
+   *  legitimately opens with a bracket. */
+  const rawReply = useRef("");
   /**
    * Whether a reply is being generated, readable from a timer.
    *
@@ -671,6 +683,7 @@ export default function App() {
     setDraft("");
     setError(null);
     pendingSpeech.current = "";
+    rawReply.current = "";
     streamingRef.current = true;
     interruptedRef.current = false;
     setStreaming(true);
@@ -690,8 +703,15 @@ export default function App() {
           setThinking(false);
           setTurns((t) => {
             const next = [...t];
-            const last = next[next.length - 1];
-            next[next.length - 1] = { role: "assistant", content: last.content + chunk };
+            // Raw for the accumulation, stripped for the screen: the marker
+            // sits on the front of the first chunk, and rendering it meant
+            // the app's own plumbing typed itself out in front of somebody
+            // who had just asked to see their map.
+            next[next.length - 1] = {
+              role: "assistant",
+              content: visibleReply(rawReply.current + chunk),
+            };
+            rawReply.current += chunk;
             return next;
           });
           // Spoken a sentence at a time as it arrives, rather than after the
@@ -1558,11 +1578,17 @@ export default function App() {
           {deep.kind === "idea" ? (
             <IdeaFile
               ideaId={deep.id}
-              onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
+              onOpenConversation={(id, ideaId) =>
+                setDeep({ kind: "conversation", id, flash: ideaId })
+              }
               onClose={() => setDeep(null)}
             />
           ) : (
-            <ConversationFile sessionId={deep.id} onClose={() => setDeep(null)} />
+            <ConversationFile
+              sessionId={deep.id}
+              highlightIdea={deep.flash}
+              onClose={() => setDeep(null)}
+            />
           )}
         </Sheet>
       )}

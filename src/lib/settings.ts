@@ -70,6 +70,61 @@ export interface Preset {
   id: string;
   name: string;
   prompt: string;
+  /** What pressing it is meant to produce. The model is told the shape to
+   *  write in, and saving the answer writes that kind of file. */
+  format: OutputFormat;
+}
+
+/**
+ * What an instruction is asking the model to make.
+ *
+ * Not a save-time choice, a write-time one. A deck and an essay are not the
+ * same text in two wrappers — one is a sequence of slides with a title and
+ * four bullets each, the other is prose with headings — so the format has to
+ * reach the model, not just the file writer. That is why it lives on the
+ * preset beside the wording rather than on the Save button.
+ */
+export type OutputFormat = "markdown" | "pdf" | "docx" | "pptx";
+
+export const OUTPUT_FORMATS: {
+  value: OutputFormat;
+  label: string;
+  /** What the file ends in, and what the save dialog offers. */
+  ext: string;
+  blurb: string;
+}[] = [
+  {
+    value: "markdown",
+    label: "Markdown",
+    ext: "md",
+    blurb: "Plain text with headings. Opens anywhere, and stays readable in fifty years.",
+  },
+  {
+    value: "pdf",
+    label: "PDF",
+    ext: "pdf",
+    blurb: "Typeset for reading and printing. Nobody can edit it, which is sometimes the point.",
+  },
+  {
+    value: "docx",
+    label: "Word",
+    ext: "docx",
+    blurb: "A document to be edited by somebody else, in Word or anything that reads it.",
+  },
+  {
+    value: "pptx",
+    label: "Slides",
+    ext: "pptx",
+    blurb: "A deck. The model writes in slides — a title and a few lines each — rather than prose.",
+  },
+];
+
+export function formatLabel(f: OutputFormat): string {
+  return OUTPUT_FORMATS.find((x) => x.value === f)?.label ?? "Markdown";
+}
+
+export function formatExt(f: OutputFormat): string {
+  return OUTPUT_FORMATS.find((x) => x.value === f)?.ext ?? "md";
 }
 
 /** One place at a time, or everything around the conversation at once. */

@@ -15,6 +15,7 @@ pub mod book;
 pub mod chat;
 pub mod commands;
 pub mod compose;
+pub mod export;
 pub mod embed;
 pub mod extract;
 pub mod llm;
@@ -143,6 +144,7 @@ pub fn run() {
             commands::compose_send,
             commands::stop_generation,
             commands::save_text,
+            commands::save_document,
             commands::reset_presets,
             commands::create_folder,
             commands::rename_folder,
@@ -170,6 +172,10 @@ pub fn run() {
             commands::set_openrouter_key,
             commands::clear_openrouter_key,
             commands::idea_deep_dive,
+            commands::answer_dispute,
+            commands::digest_dispute_answer,
+            commands::dispute_answers,
+            commands::delete_dispute_answer,
             commands::preview_import,
             commands::list_claude_imports,
             commands::import_claude_conversation,

@@ -411,10 +411,13 @@ pub async fn send_message(
         }
     };
 
-    // Kept out of anything that persists: the marker means nothing to a
-    // future request, to extraction, or to the transcript file — it exists
-    // only so this one response can be highlighted in this one window.
-    let archived = crate::chat::strip_recall_markers(&reply);
+    // Kept out of anything that persists: the markers mean nothing to a
+    // future request, to extraction, or to the transcript file — they exist
+    // only so this one response can be highlighted, or can open a tab, in
+    // this one window. A stored turn that opens with `[[open:…]]` is worse
+    // than noise: the model reads its own past answers, and starts offering
+    // to open things nobody asked to see.
+    let archived = crate::chat::strip_markers(&reply);
     if let Some(convo) = state.conversation.lock().await.as_mut() {
         convo.push_assistant(&archived);
     }
@@ -1885,9 +1888,19 @@ pub async fn compose_select(
         };
         // Only ideas whose conversation is not already going in whole — its
         // transcript already carries them, and saying it twice spends the
-        // budget on a repeat.
+        // budget on a repeat. The comment said so before the code did: with
+        // every idea under a ticked conversation now ticked as well (which is
+        // what was true all along, and what the screen finally admits), the
+        // repeat would have been every idea in the folder, twice over.
+        let whole: std::collections::HashSet<i64> =
+            conversations.iter().map(|c| c.session_id).collect();
         let mut loose = Vec::new();
         for id in &ideas {
+            if let Ok(Some(session)) = store.idea_session(*id) {
+                if whole.contains(&session) {
+                    continue;
+                }
+            }
             if let Ok(Some(m)) = store.idea_material(*id) {
                 loose.push(m);
             }
@@ -2025,6 +2038,25 @@ pub async fn compose_send(
 #[tauri::command]
 pub async fn save_text(path: String, text: String) -> Result<String, String> {
     std::fs::write(&path, text).map_err(|e| format!("could not write {path}: {e}"))?;
+    Ok(path)
+}
+
+/// Write one answer out in the shape its instruction asked for.
+///
+/// The model wrote markdown whichever format was chosen — that is the one
+/// shape every model writes well — and the difference is what the markdown is
+/// *of*: a deck is headings and short lines, a document is headings and
+/// prose. Turning that into a PDF, a Word file or a deck happens here rather
+/// than being asked of a language model.
+#[tauri::command]
+pub async fn save_document(
+    path: String,
+    text: String,
+    format: crate::settings::OutputFormat,
+    title: String,
+) -> Result<String, String> {
+    let bytes = crate::export::render(&text, format, &title).map_err(|e| e.to_string())?;
+    std::fs::write(&path, bytes).map_err(|e| format!("could not write {path}: {e}"))?;
     Ok(path)
 }
 
@@ -2421,10 +2453,18 @@ pub async fn idea_deep_dive(
     state: State<'_, AppState>,
     idea_id: i64,
     regenerate: bool,
+    // `cached_only`: return what is stored and nothing else. Opening an idea
+    // asks with this set — the button that used to offer to write one is
+    // gone, and an open that quietly spent a model call would be a worse
+    // version of that button rather than the absence of it.
+    cached_only: Option<bool>,
 ) -> Result<String, String> {
     if !regenerate {
         if let Ok(Some(cached)) = state.store.lock().await.deep_dive(idea_id) {
             return Ok(cached);
+        }
+        if cached_only.unwrap_or(false) {
+            return Ok(String::new());
         }
     }
 
@@ -2443,6 +2483,96 @@ pub async fn idea_deep_dive(
 
     let _ = state.store.lock().await.set_deep_dive(idea_id, &text, &label);
     Ok(text)
+}
+
+// ------------------------------------------------ answering the AI's notes
+
+/// Record a reply to one of the AI's notes on an idea.
+///
+/// Saved first and read back second, as two separate commands. Digesting costs
+/// a model call, and on a local model that is a wait measured in tens of
+/// seconds — an answer that vanished because the machine was busy would be the
+/// worst thing this could do to somebody who had just written one.
+#[tauri::command]
+pub async fn answer_dispute(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    idea_id: i64,
+    challenge: String,
+    answer: String,
+) -> Result<i64, String> {
+    let answer = answer.trim().to_string();
+    if answer.is_empty() {
+        return Err("nothing was written".into());
+    }
+    let id = state
+        .store
+        .lock()
+        .await
+        .add_dispute_answer(idea_id, challenge.trim(), &answer)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(id)
+}
+
+/// Read a saved answer back as one claim, which is what puts it on the map.
+///
+/// Until this succeeds the answer is recorded and readable in the idea's file
+/// but has no moon: a dot with no name beside a node is furniture, not
+/// information.
+#[tauri::command]
+pub async fn digest_dispute_answer(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    answer_id: i64,
+) -> Result<String, String> {
+    let (model, _label) = {
+        let guard = state.extractor.lock().await;
+        let e = guard.as_ref().ok_or("no extraction model selected")?;
+        (e.provider.clone(), e.model.clone())
+    };
+
+    let (idea_id, challenge, answer) =
+        state.store.lock().await.dispute_answer(answer_id).map_err(|e| e.to_string())?;
+    let (claim, _, _, _) =
+        state.store.lock().await.idea_context(idea_id).map_err(|e| e.to_string())?;
+
+    let read = crate::extract::answer::run(model.as_ref(), &claim, &challenge, &answer)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if read.claim.is_empty() {
+        return Err("the answer did not come back as a claim".into());
+    }
+
+    state
+        .store
+        .lock()
+        .await
+        .digest_dispute_answer(answer_id, &read.claim, &read.title)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(read.claim)
+}
+
+/// Every reply recorded against one idea's notes.
+#[tauri::command]
+pub async fn dispute_answers(
+    state: State<'_, AppState>,
+    idea_id: i64,
+) -> Result<Vec<crate::store::DisputeAnswer>, String> {
+    state.store.lock().await.dispute_answers(idea_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_dispute_answer(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    answer_id: i64,
+) -> Result<(), String> {
+    state.store.lock().await.delete_dispute_answer(answer_id).map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
 }
 
 // ------------------------------------------------------------ import

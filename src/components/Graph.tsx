@@ -28,6 +28,7 @@ import {
 import { ConversationFile, IdeaFile } from "./Deep";
 import FilePanel from "./FilePanel";
 import Resolve from "./Resolve";
+import { IconFit, IconZoomIn, IconZoomOut } from "./Icons";
 
 /**
  * The map, drawn on a 2D canvas over a live force simulation.
@@ -247,10 +248,73 @@ function hubsAndTheirIdeas(nodes: Node[], links: Link[]) {
   }
   // An idea whose conversation was deleted still has to go somewhere: the map
   // shows everything, and a node with nowhere to be is a node that vanishes.
+  // Moons are the exception — they are placed against their planet after the
+  // arrangement has run, so they must not be given a place of their own here.
   for (const n of nodes) {
-    if (n.data.kind !== "conversation" && !claimed.has(n)) loose.push(n);
+    if (n.data.kind === "conversation" || n.data.kind === "moon") continue;
+    if (!claimed.has(n)) loose.push(n);
   }
   return { hubs, ideasOf, loose };
+}
+
+/** A moon and the planet it keeps station on. */
+interface Moon {
+  node: Node;
+  planet: Node;
+  angle: number;
+  away: number;
+}
+
+/**
+ * Work out where every moon sits relative to the idea it answers.
+ *
+ * A moon has no conversation of its own, so each of the three layouts would
+ * have to learn what one is — and each would find a different wrong place to
+ * put it. Instead this is the one rule true in all three: an answer sits
+ * beside the claim it defends, close enough that nothing comes between them.
+ * Which is a *relative* position, so it is worked out once here and applied
+ * every frame — a galaxy's planets are still turning, and a force layout's
+ * are still settling.
+ *
+ * Above and to the right, fanning as they multiply. Above, because ideas fan
+ * downward in the forest and outward in the galaxy, and a moon underneath
+ * would land in the next thing along.
+ */
+function moonsOf(nodes: Node[]): Moon[] {
+  const byIdea = new Map<number, Node>();
+  for (const n of nodes) {
+    if (n.data.kind === "idea" && n.data.idea_id !== null) byIdea.set(n.data.idea_id, n);
+  }
+  const counted = new Map<Node, number>();
+  const moons: Moon[] = [];
+  for (const n of nodes) {
+    if (n.data.kind !== "moon" || n.data.idea_id === null) continue;
+    const planet = byIdea.get(n.data.idea_id);
+    if (!planet) continue;
+    const k = counted.get(planet) ?? 0;
+    counted.set(planet, k + 1);
+    // A fifth of a turn per moon, starting up and to the right; a second lap
+    // sits slightly further out rather than on top of the first.
+    moons.push({
+      node: n,
+      planet,
+      angle: -Math.PI / 3 + (k % 4) * (Math.PI / 5),
+      away: MOON_ORBIT + Math.floor(k / 4) * 16,
+    });
+  }
+  return moons;
+}
+
+/** Put every moon where it belongs, given where its planet is right now. */
+function settleMoons(moons: Moon[]) {
+  for (const m of moons) {
+    m.node.x = (m.planet.x ?? 0) + Math.cos(m.angle) * m.away;
+    m.node.y = (m.planet.y ?? 0) + Math.sin(m.angle) * m.away;
+    // Pinned, so neither the simulation nor a drag pulls one away from the
+    // claim it belongs to.
+    m.node.fx = m.node.x;
+    m.node.fy = m.node.y;
+  }
 }
 
 /**
@@ -495,6 +559,28 @@ function inTree(t: ReturnType<typeof treeShape>, px: number, py: number): boolea
 /** How tall a tree stands above the ground, in world units. */
 const FOREST_TRUNK = 160;
 
+/**
+ * How far in and out the map goes, and where it stops being a map of things
+ * with names and becomes a shape.
+ *
+ * Past `READABLE_ZOOM` a node draws as a dot in a bed of dots: titles are not
+ * drawn at that size, and neither is the hover card — a bubble a fifth of the
+ * screen wide, hanging off a speck, describing something you cannot see.
+ * Pulled back that far the question is "what shape is this", and the map
+ * itself is the answer to it.
+ */
+const MIN_ZOOM = 0.15;
+const MAX_ZOOM = 4;
+const READABLE_ZOOM = 0.55;
+/** One press of a zoom button. About four presses to double. */
+const ZOOM_STEP = 1.2;
+
+/** How far a moon sits from the idea it answers, in world units. Close: the
+ *  point of it is that it belongs to that one claim. */
+const MOON_ORBIT = 46;
+/** And how big it is. Smaller than an idea, on purpose. */
+const MOON_RADIUS = 3.2;
+
 /** What each spread multiplies the push between nodes by. */
 const SPREAD_PUSH: Record<MapSpread, number> = {
   loose: 2.1,
@@ -577,6 +663,9 @@ export default function Graph({
   /** What an arranged style worked out: rings to draw, orbits to turn,
    *  trunks to stand. Empty under `nodes`, which is laid out by force. */
   const placedRef = useRef<Placed>(NOTHING_PLACED);
+  /** Answers and the claims they hang from. Applied every frame rather than
+   *  once: a galaxy's planets turn, and a force layout's are still moving. */
+  const moonsRef = useRef<Moon[]>([]);
   const [, restyle] = useState(0);
   // Held in a ref rather than state because the draw loop and the hit test
   // read it every frame; the counter is only to get one render out of a
@@ -588,6 +677,9 @@ export default function Graph({
   const [style, setStyle] = useState<MapStyle>("nodes");
   const [spread, setSpread] = useState<MapSpread>("balanced");
   const [showArrange, setShowArrange] = useState(false);
+  /** A doubt the map asked to answer, so the file it opens starts on that
+   *  one rather than at the top. Cleared once the file has taken it. */
+  const [answering, setAnswering] = useState<string | null>(null);
   const buildRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
@@ -621,7 +713,12 @@ export default function Graph({
   // Opening a node's file happens over the map, not instead of it — clicking
   // the same node again closes it, clicking a different one swaps the panel's
   // content, rather than navigating away and losing the map's state.
-  const [panel, setPanel] = useState<{ kind: "idea" | "conversation"; id: number } | null>(null);
+  const [panel, setPanel] = useState<{
+    kind: "idea" | "conversation";
+    id: number;
+    /** For a conversation opened from a citation: which idea's words to flash. */
+    flash?: number;
+  } | null>(null);
   /** A node right-clicked on the map, and where. */
   const [menu, setMenu] = useState<{ x: number; y: number; node: GraphNode } | null>(null);
   /** The open file, readable from the canvas handlers without making them
@@ -648,20 +745,28 @@ export default function Graph({
   } | null>(null);
   /** Following a link out of an idea's file to the conversation it came from,
    *  which swaps the panel rather than stacking. */
-  const openConversation = useRef((id: number) => {
+  const openConversation = useRef((id: number, flash?: number) => {
     if (onOpenFile) {
       onOpenFile("conversation", id);
       return;
     }
-    setPanel((p) => (p?.kind === "conversation" && p.id === id ? null : { kind: "conversation", id }));
+    setPanel((p) =>
+      p?.kind === "conversation" && p.id === id && flash === undefined
+        ? null
+        : { kind: "conversation", id, flash },
+    );
   });
   useEffect(() => {
-    openConversation.current = (id: number) => {
+    openConversation.current = (id: number, flash?: number) => {
       if (onOpenFile) {
         onOpenFile("conversation", id);
         return;
       }
-      setPanel((p) => (p?.kind === "conversation" && p.id === id ? null : { kind: "conversation", id }));
+      setPanel((p) =>
+        p?.kind === "conversation" && p.id === id && flash === undefined
+          ? null
+          : { kind: "conversation", id, flash },
+      );
     };
   }, [onOpenFile]);
 
@@ -755,6 +860,9 @@ export default function Graph({
       }
     }
 
+    // Whatever moved the planets this frame, the moons follow.
+    settleMoons(moonsRef.current);
+
     // The rings themselves, faint, so a shared orbit reads as one thing.
     if (styleRef.current === "galaxy") {
       ctx.strokeStyle = C.related;
@@ -840,7 +948,10 @@ export default function Graph({
     const traced = tracedRef.current;
     const isTraced = (n: Node) => traced !== null && n.data.idea_id === traced;
     const inFocus = (n: Node) =>
-      !focus || (n.data.kind === "idea" && n.data.category === focus) || n === hover || isTraced(n);
+      !focus ||
+      (n.data.kind !== "conversation" && n.data.category === focus) ||
+      n === hover ||
+      isTraced(n);
 
     for (const link of linksRef.current) {
       const a = link.source as Node;
@@ -903,8 +1014,13 @@ export default function Graph({
             ? C.contradicts
             : link.kind === "related"
               ? C.related
-              : C.category;
-        ctx.lineWidth = link.kind === "category" ? 1 : 1.6;
+              : link.kind === "answers"
+                ? // The colour of the claim being answered, so the tether
+                  // reads as part of that node rather than as another
+                  // relation between two ideas.
+                  (link.source as Node).color
+                : C.category;
+        ctx.lineWidth = link.kind === "category" ? 1 : link.kind === "answers" ? 1 : 1.6;
         if (link.kind === "related" || link.kind === "contradicts") ctx.setLineDash([4, 4]);
         if (link.kind === "category") ctx.setLineDash([1, 3]);
         ctx.beginPath();
@@ -1023,7 +1139,7 @@ export default function Graph({
     // and becomes a shape. Titles there are unreadable at that size and
     // land on each other whatever the crowding test decides, so they are not
     // drawn at all — the landmarks and whatever is being pointed at still are.
-    const tooFarOutToRead = viewRef.current.scale < 0.55;
+    const tooFarOutToRead = viewRef.current.scale < READABLE_ZOOM;
 
     const laid: Placed[] = [];
     for (const n of candidates) {
@@ -1040,10 +1156,29 @@ export default function Graph({
         ? `600 ${labelPx * 1.04}px ui-sans-serif, system-ui, sans-serif`
         : `${labelPx}px ui-sans-serif, system-ui, sans-serif`;
 
-      // Conversation titles get a wider column and an extra line.
-      const maxLabelWidth = isConversation ? baseLabelWidth * 1.4 : baseLabelWidth;
+      // Conversation titles get a wider column and an extra line — and the
+      // one node being pointed at gets far more of both.
+      //
+      // Every label on the map is squeezed into a narrow column so a hundred
+      // of them can coexist. The hovered one has no such problem: it is the
+      // only thing being read, it has a card behind it, and everything else is
+      // dimmed. In the narrow column a claim of any length wrapped into four
+      // short lines and then lost its ending to an ellipsis — a bubble taller
+      // than it was wide, cutting off the very words it appeared to show. Wide
+      // enough to read a sentence across, and enough lines to finish it.
+      const isHovered = hover === n;
+      const maxLabelWidth = isHovered
+        ? Math.min(w * 0.42, baseLabelWidth * 3.2)
+        : isConversation
+          ? baseLabelWidth * 1.4
+          : baseLabelWidth;
       const lineHeight = labelPx * 1.3;
-      const lines = wrapLines(ctx, n.data.label, maxLabelWidth, isConversation ? 5 : 4);
+      const lines = wrapLines(
+        ctx,
+        n.data.label,
+        maxLabelWidth,
+        isHovered ? 8 : isConversation ? 5 : 4,
+      );
       const widest = Math.max(...lines.map((l) => ctx.measureText(l).width));
       // Beside the node, not beneath it. Underneath, a label sat on whatever
       // was below — links, roots, the next node down — and on a dense map the
@@ -1058,9 +1193,26 @@ export default function Graph({
         styleRef.current === "forest" && isConversation && forestGround !== null
           ? treeShape(s, forestGround)
           : null;
-      const textX = s.x + (tree ? tree.halfWidth : r) + gap;
+      const half = tree ? tree.halfWidth : r;
+      // The hovered card is several times wider than an ordinary label, so
+      // near the right edge it ran off the canvas and took the end of the
+      // claim with it. Only the card flips: an ordinary label is narrow
+      // enough that the column reads better staying on one side.
+      const pad = Math.max(7, labelPx * 0.85);
+      const flip = isHovered && s.x + half + gap + widest + pad > w;
+      const textX = flip ? s.x - half - gap - widest : s.x + half + gap;
       const anchorY = tree ? s.y + tree.height * 0.5 : s.y;
-      const textY = anchorY - (lines.length * lineHeight) / 2;
+      // A card that would hang off the top or the bottom is pushed back
+      // inside. Eight lines of claim is tall enough for this to matter, and a
+      // bubble cut off by the edge of the map is the same failure as one cut
+      // off by its own width.
+      const blockH = lines.length * lineHeight;
+      const textY = isHovered
+        ? Math.min(
+            Math.max(anchorY - blockH / 2, pad + 4),
+            Math.max(pad + 4, h - blockH - pad - 4),
+          )
+        : anchorY - blockH / 2;
       const box = {
         x0: textX - 3,
         x1: textX + widest + 3,
@@ -1224,11 +1376,20 @@ export default function Graph({
     const nodes: Node[] = data.nodes.map((d) => {
       const old = previous.get(d.id);
       const isConversation = d.kind === "conversation";
+      const isMoon = d.kind === "moon";
       return {
         data: d,
+        // A moon is visibly smaller than the claim it hangs from. It is the
+        // reply, not a second idea — drawn the same size it would read as one
+        // more thing to be argued with rather than as the argument back.
         r: isConversation
           ? CONVERSATION_RADIUS + Math.min(12, d.weight * 2)
-          : IDEA_RADIUS + Math.min(8, (d.weight - 1) * 4),
+          : isMoon
+            ? MOON_RADIUS
+            : IDEA_RADIUS + Math.min(8, (d.weight - 1) * 4),
+        // Its planet's colour: an answer is about the same subject as the
+        // claim it defends, and giving it one of its own would put a stray
+        // colour in the key for something that is not a subject.
         color: isConversation ? C.conversation : colors.get(d.category) ?? UNCATEGORISED,
         labelHalf: estimateLabelHalfWidth(d.label, isConversation),
         x: old?.x ?? (Math.random() - 0.5) * 400,
@@ -1270,6 +1431,8 @@ export default function Graph({
     if (styleRef.current !== "nodes") {
       placedRef.current =
         styleRef.current === "forest" ? arrangeForest(nodes, links) : arrangeGalaxy(nodes, links);
+      moonsRef.current = moonsOf(nodes);
+      settleMoons(moonsRef.current);
       simRef.current = null;
       fitToView();
       return;
@@ -1279,6 +1442,7 @@ export default function Graph({
       n.fx = null;
       n.fy = null;
     }
+    moonsRef.current = moonsOf(nodes);
 
     const sim = forceSimulation<Node, Link>(nodes)
       .force(
@@ -1291,16 +1455,23 @@ export default function Graph({
           // gets enough arc length for its label.
           .distance((l) => {
             const rules = ruleset(planWidth());
+            // A moon is already pinned beside its planet every frame, so this
+            // spring can only pull on the *planet*. At the "related" distance
+            // it would shove the claim 280 units away from its own answer.
+            if (l.kind === "answers") return MOON_ORBIT;
             if (l.kind !== "from") return rules.related;
             const n = orbitCount.get((l.source as Node).data.id) ?? 1;
             return rules.orbit + Math.max(0, n - 4) * rules.orbitGrowth;
           })
-          .strength((l) => (l.kind === "from" ? 0.7 : 0.15)),
+          .strength((l) => (l.kind === "from" ? 0.7 : l.kind === "answers" ? 0 : 0.15)),
       )
       // Bigger nodes push harder, so conversations claim their own space.
       .force(
         "charge",
         forceManyBody<Node>().strength((n) => {
+          // A moon takes no part in the push: it is held where it is put, and
+          // all its charge could do is shove the very claim it belongs to.
+          if (n.data.kind === "moon") return 0;
           const rules = ruleset(planWidth());
           // How hard everything pushes apart, which is the one thing that
           // decides whether the map reads as a shape or as a list of things.
@@ -1315,6 +1486,10 @@ export default function Graph({
         "collide",
         forceCollide<Node>().radius((n) => {
           const rules = ruleset(planWidth());
+          // A moon holds station on its planet and is unnamed unless pointed
+          // at, so reserving a claim's worth of label space around one would
+          // push the map apart to make room for nothing.
+          if (n.data.kind === "moon") return n.r + 2;
           // Labels are not drawn in a panel, so reserving room for them there
           // only pushes everything apart for nothing.
           return n.r + rules.padding + n.labelHalf * rules.labelShare;
@@ -1350,6 +1525,9 @@ export default function Graph({
     // frame final.
     let guard = 0;
     while (sim.alpha() > sim.alphaMin() && guard++ < 600) sim.tick();
+    // Before the frame is measured, or a moon the simulation flung somewhere
+    // is part of what the map is framed around.
+    settleMoons(moonsRef.current);
     fitToView();
     // Rebuilds when the folder changes: a folder is a separate tree, so the
     // map has to be a different map, not the same one filtered on screen.
@@ -1529,6 +1707,44 @@ export default function Graph({
     travel.node.fx = null;
     travel.node.fy = null;
     travelRef.current = null;
+  }
+
+  /**
+   * Zoom about the middle of the map, by a factor.
+   *
+   * The same arithmetic the wheel does, minus the cursor: a button has no
+   * position on the map, so the centre of the frame is what stays put. The
+   * spread rides along, exactly as it does on the wheel — without that, the
+   * map slides sideways every time the zoom changes.
+   */
+  function zoomBy(factor: number) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    cancelTravel();
+    const v = viewRef.current;
+    const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.scale * factor));
+    if (scale === v.scale) return;
+    const k = (scale * spreadOf(scale)) / (v.scale * spreadOf(v.scale));
+    v.x *= k;
+    v.y *= k;
+    v.scale = scale;
+    // Pulling back is a way of saying you are done with what you were looking
+    // at, the same as it is on the wheel.
+    if (factor < 1 && focusNodeRef.current && !panelRef.current) {
+      focusNodeRef.current = null;
+      revealRef.current = new Set();
+    }
+    dropHover();
+  }
+
+  /** Let go of whatever was being pointed at. The overlay is anchored to
+   *  where the node was on screen, so any move of the view leaves it sitting
+   *  over empty map. */
+  function dropHover() {
+    hoverRef.current = null;
+    keepAliveRef.current = null;
+    setHovered(null);
+    setHoverAt(null);
   }
 
   /** Fly the view to a node and hold it still while doing so. */
@@ -1745,7 +1961,15 @@ export default function Graph({
             pan.y = e.clientY;
             return;
           }
-          let hit = nodeAt(e.clientX, e.clientY);
+          // Pulled back past the point where anything is legible, pointing
+          // stops meaning anything. Nodes draw as dots a few pixels apart, so
+          // the pointer is over one of *something* wherever it rests, and the
+          // map spent the whole time dimmed behind a card naming a speck the
+          // cursor happened to land on. Clicking and dragging still find their
+          // node: those are decisions, not a side effect of where the mouse
+          // came to rest.
+          let hit =
+            viewRef.current.scale < READABLE_ZOOM ? null : nodeAt(e.clientX, e.clientY);
 
           // Reaching for a note means leaving the node — the notes sit in a ring
           // around it, so the pointer crosses bare canvas on the way. Without
@@ -1778,7 +2002,11 @@ export default function Graph({
             if (edgeHover) setEdgeHover(null);
             return;
           }
-          const edge = edgeAt(e.clientX, e.clientY);
+          // Same reasoning as the node cards above: at that size the lines
+          // are a pixel apart and the popup is a fifth of the screen, so it
+          // is a large explanation of a line nobody can point at on purpose.
+          const edge =
+            viewRef.current.scale < READABLE_ZOOM ? null : edgeAt(e.clientX, e.clientY);
           if (edge) {
             const rect = canvasRef.current?.getBoundingClientRect();
             setEdgeHover({
@@ -1835,9 +2063,14 @@ export default function Graph({
           // already open closes it and stays where it is — flying the map
           // somewhere while taking away what you were reading is the worst of
           // both. Anything else opens and travels together.
-          const id = hit.data.kind === "idea" ? hit.data.idea_id : hit.data.session_id;
+          // A moon opens the file of the idea it hangs from — that is where
+          // its dispute lives, and where the answer can be added to or taken
+          // back. It has no file of its own to open, deliberately: it is a
+          // reply to a claim, not a claim.
+          const isConversation = hit.data.kind === "conversation";
+          const id = isConversation ? hit.data.session_id : hit.data.idea_id;
           if (id === null) return;
-          const kind = hit.data.kind === "idea" ? "idea" : "conversation";
+          const kind = isConversation ? "conversation" : "idea";
           if (onOpenFile) {
             focusOn(hit);
             onOpenFile(kind, id);
@@ -1869,7 +2102,10 @@ export default function Graph({
           const px = e.clientX - rect.left - rect.width / 2;
           const py = e.clientY - rect.top - rect.height / 2;
           const v = viewRef.current;
-          const scale = Math.min(4, Math.max(0.15, v.scale * Math.exp(-e.deltaY * 0.0015)));
+          const scale = Math.min(
+            MAX_ZOOM,
+            Math.max(MIN_ZOOM, v.scale * Math.exp(-e.deltaY * 0.0015)),
+          );
           // Pulling back is a way of saying you are done with what you were
           // looking at, the same as clicking away from it. Zooming further in
           // is not — that is still looking. Neither is pulling back while a
@@ -1891,26 +2127,53 @@ export default function Graph({
           // was pointed at. Zooming moves the node and left the highlight
           // behind, sitting over empty map — so it goes, the same way it does
           // when the map is dragged.
-          hoverRef.current = null;
-          keepAliveRef.current = null;
-          setHovered(null);
-          setHoverAt(null);
+          dropHover();
         }}
       />
 
+      {/* The map's own zoom, as icons, in the corner opposite the arrangement
+          panel. "Fit" used to be a bare text button pinned to the top left —
+          which is exactly where the arrangement chip sits, so the one control
+          that gets you back to seeing everything was underneath the one that
+          changes how it is drawn, invisible and unclickable. It was also the
+          only button in the app wearing none of the app's own clothes. */}
       {!empty && (
-        <button
-          className="graph-reset"
-          onClick={() => {
-            cancelTravel();
-            focusNodeRef.current = null;
-            revealRef.current = new Set();
-            fitToView();
-            simRef.current?.alpha(0.4).restart();
-          }}
-        >
-          Fit
-        </button>
+        <div className="graph-zoom">
+          <button
+            type="button"
+            className="icon-btn"
+            data-tip="Closer"
+            aria-label="Zoom in"
+            onClick={() => zoomBy(ZOOM_STEP)}
+          >
+            <IconZoomIn />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            data-tip="Further back"
+            aria-label="Zoom out"
+            onClick={() => zoomBy(1 / ZOOM_STEP)}
+          >
+            <IconZoomOut />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            data-tip="Frame everything"
+            aria-label="Frame everything"
+            onClick={() => {
+              cancelTravel();
+              focusNodeRef.current = null;
+              revealRef.current = new Set();
+              dropHover();
+              fitToView();
+              simRef.current?.alpha(0.4).restart();
+            }}
+          >
+            <IconFit />
+          </button>
+        </div>
       )}
 
       {!empty && (
@@ -1977,7 +2240,27 @@ export default function Graph({
         </p>
       )}
 
-      {hovered && hoverAt && <Nudges node={hovered} at={hoverAt} />}
+      {hovered && hoverAt && (
+        <Nudges
+          node={hovered}
+          at={hoverAt}
+          onAnswer={
+            hovered.kind === "idea" && hovered.idea_id !== null
+              ? (challenge) => {
+                  const id = hovered.idea_id!;
+                  cancelTravel();
+                  dropHover();
+                  // The file opens on that exact doubt, with the box already
+                  // waiting. Opening it at the top and leaving them to find
+                  // the note again is how the click stops being worth making.
+                  setAnswering(challenge);
+                  if (onOpenFile) onOpenFile("idea", id);
+                  else setPanel({ kind: "idea", id });
+                }
+              : undefined
+          }
+        />
+      )}
 
       {hovered && (
         <div
@@ -1988,9 +2271,11 @@ export default function Graph({
           <span className="muted">
             {hovered.kind === "conversation"
               ? `Conversation · ${hovered.weight} idea${hovered.weight === 1 ? "" : "s"}`
-              : hovered.category
-                ? hovered.category
-                : "Idea"}
+              : hovered.kind === "moon"
+                ? `Your answer${hovered.category ? ` · ${hovered.category}` : ""}`
+                : hovered.category
+                  ? hovered.category
+                  : "Idea"}
             {hovered.shared && ` · returned to in ${hovered.weight} conversations`}
           </span>
           <div className="graph-tip-label">{hovered.label}</div>
@@ -2120,12 +2405,17 @@ export default function Graph({
           {panel.kind === "idea" ? (
             <IdeaFile
               ideaId={panel.id}
-              onOpenConversation={(id) => openConversation.current(id)}
-              onClose={() => setPanel(null)}
+              openChallenge={answering}
+              onOpenConversation={(id, ideaId) => openConversation.current(id, ideaId)}
+              onClose={() => {
+                setAnswering(null);
+                setPanel(null);
+              }}
             />
           ) : (
             <ConversationFile
               sessionId={panel.id}
+              highlightIdea={panel.flash}
               onTrace={(id) => {
                 tracedRef.current = id;
               }}
@@ -2148,9 +2438,14 @@ export default function Graph({
 function Nudges({
   node,
   at,
+  onAnswer,
 }: {
   node: GraphNode;
   at: { x: number; y: number; r: number; color: string; below: boolean };
+  /** Answer one of the doubts, from here. Absent where there is no idea for
+   *  the answer to belong to — a conversation's notes are about the whole
+   *  session, and have no single claim to hang a moon from. */
+  onAnswer?: (challenge: string) => void;
 }) {
   const points = [
     ...node.strong.map((text) => ({ text, kind: "strong" as const })),
@@ -2178,22 +2473,39 @@ function Nudges({
       />
       {points.map((p, i) => {
         const angle = (i / points.length) * Math.PI * 2 - Math.PI / 2;
-        return (
-          <span
+        // A doubt can be answered from here, without first opening the file
+        // and finding it again. The map is where you are when you notice the
+        // red mark, and making you go somewhere else to reply to it is how a
+        // reply stops being worth making.
+        const answerable = p.kind === "weak" && onAnswer !== undefined;
+        const style = {
+          left: at.x,
+          top: at.y,
+          "--dx": `${Math.cos(angle) * radius}px`,
+          "--dy": `${Math.sin(angle) * radius}px`,
+          animationDelay: `${i * 45}ms`,
+        } as React.CSSProperties;
+        const body = (
+          <span className="ai-text">
+            {p.text}
+            {answerable && <span className="ai-answer">Answer this dispute →</span>}
+          </span>
+        );
+        return answerable ? (
+          <button
+            type="button"
             key={i}
-            className={`ai-nudge ${p.kind}${at.below ? " up" : ""}`}
-            style={
-              {
-                left: at.x,
-                top: at.y,
-                "--dx": `${Math.cos(angle) * radius}px`,
-                "--dy": `${Math.sin(angle) * radius}px`,
-                animationDelay: `${i * 45}ms`,
-              } as React.CSSProperties
-            }
+            className={`ai-nudge ${p.kind} answerable${at.below ? " up" : ""}`}
+            style={style}
+            onClick={() => onAnswer(p.text)}
           >
             AI
-            <span className="ai-text">{p.text}</span>
+            {body}
+          </button>
+        ) : (
+          <span key={i} className={`ai-nudge ${p.kind}${at.below ? " up" : ""}`} style={style}>
+            AI
+            {body}
           </span>
         );
       })}

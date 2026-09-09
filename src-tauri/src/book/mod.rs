@@ -24,8 +24,8 @@ use crate::store::BookRow;
 /// what carries Polish and Spanish through with their diacritics intact.
 /// A character the font has no glyph for is dropped silently by the PDF
 /// writer, so the coverage is the guarantee — see `LICENSE.md` beside them.
-const REGULAR: &[u8] = include_bytes!("../../assets/fonts/NotoSerif-Regular.ttf");
-const BOLD: &[u8] = include_bytes!("../../assets/fonts/NotoSerif-Bold.ttf");
+pub(crate) const REGULAR: &[u8] = include_bytes!("../../assets/fonts/NotoSerif-Regular.ttf");
+pub(crate) const BOLD: &[u8] = include_bytes!("../../assets/fonts/NotoSerif-Bold.ttf");
 
 // A5. A book rather than a report: at this size the measure below lands near
 // sixty-five characters, which is where prose is easiest to read, and two of
@@ -50,7 +50,7 @@ const QUOTE_INDENT: f32 = 7.0;
 const SMALL_PT: f32 = 8.0;
 const CHAPTER_PT: f32 = 19.0;
 
-const MM_PER_PT: f32 = 25.4 / 72.0;
+pub(crate) const MM_PER_PT: f32 = 25.4 / 72.0;
 
 fn ink() -> Color {
     Color::Rgb(Rgb::new(0.09, 0.09, 0.10, None))
@@ -259,13 +259,18 @@ fn on_day(rfc3339: &str) -> String {
 /// The PDF writer will happily set a line that runs off the page — nothing in
 /// it measures text — so wrapping is ours to do, and doing it needs the same
 /// font the page is set in.
-struct Metrics {
+/// Measuring text in a font, which is what makes wrapping possible.
+///
+/// Shared with `crate::export`: a document and a book are set differently,
+/// but "how wide is this at this size" is the same question and the fiddly
+/// part of answering it is the same code.
+pub(crate) struct Metrics {
     face: ttf_parser::Face<'static>,
     upem: f32,
 }
 
 impl Metrics {
-    fn new(data: &'static [u8]) -> Result<Self, BookError> {
+    pub(crate) fn new(data: &'static [u8]) -> Result<Self, BookError> {
         let face =
             ttf_parser::Face::parse(data, 0).map_err(|e| BookError::Font(format!("{e:?}")))?;
         let upem = f32::from(face.units_per_em());
@@ -273,7 +278,7 @@ impl Metrics {
     }
 
     /// Width of `text` at `pt`, in millimetres.
-    fn width(&self, text: &str, pt: f32) -> f32 {
+    pub(crate) fn width(&self, text: &str, pt: f32) -> f32 {
         let em: f32 = text
             .chars()
             .map(|c| {
@@ -289,7 +294,7 @@ impl Metrics {
     }
 
     /// Break `text` into lines that fit `width`.
-    fn wrap(&self, text: &str, pt: f32, width: f32) -> Vec<String> {
+    pub(crate) fn wrap(&self, text: &str, pt: f32, width: f32) -> Vec<String> {
         let mut lines: Vec<String> = Vec::new();
         let mut line = String::new();
 

@@ -231,11 +231,29 @@ pub struct IdeaView {
     pub weak: Vec<String>,
     pub evidence: Vec<IdeaEvidence>,
     pub revisions: Vec<IdeaRevision>,
+    /// Replies to the AI's notes on this idea — the moons it has grown.
+    pub answers: Vec<DisputeAnswer>,
     /// What this idea is recorded as contradicting, and has not been settled.
     /// The map has drawn these since reconciliation started recording them;
     /// the idea's own file has never mentioned them, which is the one place
     /// somebody reading the idea would want to know.
     pub contradictions: Vec<Contradiction>,
+}
+
+/// An answer to one of the AI's notes, and what it was read back as.
+#[derive(Debug, Clone, Serialize)]
+pub struct DisputeAnswer {
+    pub id: i64,
+    /// The note this replies to, verbatim, so it stays attached to its
+    /// challenge even after the conversation is re-read and the notes change.
+    pub challenge: String,
+    /// What was actually written or spoken.
+    pub answer: String,
+    /// The answer in one line, once it has been read back. Empty until then,
+    /// which is also what "not yet a moon on the map" means.
+    pub claim: String,
+    pub title: String,
+    pub created_at: String,
 }
 
 /// Another idea that cannot be true at the same time as this one.
@@ -259,6 +277,87 @@ pub struct IdeaEvidence {
     pub quote: String,
     pub reasoning: String,
     pub normalized: bool,
+    /// The conversation this was said in, by name. A citation needs to say
+    /// which piece of thinking it came out of, and a date cannot.
+    pub session_title: String,
+    /// The words either side of the quote in the turn it was taken from,
+    /// already trimmed to whole words and marked with an ellipsis where they
+    /// were cut. Empty at the start or end of a turn.
+    ///
+    /// A quote on its own is the one sentence the model chose, which is
+    /// exactly the sentence you cannot check it against — whether it means
+    /// what the claim says depends on what surrounded it. Cut here rather
+    /// than in the UI: these are byte offsets into UTF-8, and JavaScript
+    /// indexes UTF-16, so slicing on the other side of the boundary works
+    /// until somebody types an accent.
+    pub before: String,
+    pub after: String,
+}
+
+/// How much of the turn either side of a quote comes back with it.
+///
+/// Enough to see what the sentence was answering and where it went next;
+/// not so much that the citation becomes the transcript, which is a click
+/// away on the quote itself.
+const CONTEXT_BYTES: usize = 220;
+
+/// The words either side of a span, cut to whole words and to char
+/// boundaries, with an ellipsis where they were cut.
+fn context_around(text: &str, start: usize, end: usize) -> (String, String) {
+    if start > text.len() || end > text.len() || !text.is_char_boundary(start)
+        || !text.is_char_boundary(end)
+    {
+        // Offsets that do not land on this text describe some other text.
+        // Nothing here is load-bearing enough to be worth a guess.
+        return (String::new(), String::new());
+    }
+
+    let mut from = start.saturating_sub(CONTEXT_BYTES);
+    while from < start && !text.is_char_boundary(from) {
+        from += 1;
+    }
+    let mut before = &text[from..start];
+    let cut_start = from > 0;
+    if cut_start {
+        // Whatever word the window landed inside belongs to the part that was
+        // cut off, not to the context.
+        if let Some(space) = before.find(char::is_whitespace) {
+            before = &before[space..];
+        }
+    }
+
+    let mut to = (end + CONTEXT_BYTES).min(text.len());
+    while to > end && !text.is_char_boundary(to) {
+        to -= 1;
+    }
+    let mut after = &text[end..to];
+    let cut_end = to < text.len();
+    if cut_end {
+        if let Some(space) = after.rfind(char::is_whitespace) {
+            after = &after[..space];
+        }
+    }
+
+    // Trimmed on both sides: the turn's own spacing around the quote is
+    // whitespace this is about to supply itself.
+    let before = before.trim();
+    let after = after.trim();
+    (
+        if before.is_empty() {
+            String::new()
+        } else if cut_start {
+            format!("…{before} ")
+        } else {
+            format!("{before} ")
+        },
+        if after.is_empty() {
+            String::new()
+        } else if cut_end {
+            format!(" {after}…")
+        } else {
+            format!(" {after}")
+        },
+    )
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -287,6 +386,9 @@ pub struct GraphNode {
     pub weight: i64,
     pub session_id: Option<i64>,
     pub idea_id: Option<i64>,
+    /// Moons only: the answer this node is. The idea it hangs from is in
+    /// `idea_id`, so opening a moon opens the file that holds its dispute.
+    pub answer_id: Option<i64>,
     /// What the idea is about. Empty for conversations.
     pub category: String,
     /// When a conversation happened. Empty for ideas.
@@ -1066,13 +1168,22 @@ impl Store {
         )?;
         let title = if title.is_empty() { claim.clone() } else { title };
 
+        // The turn's own text comes along so the quote can be shown with what
+        // surrounded it. `evidence` offsets are relative to `turns.text`,
+        // which is exactly the frame needed.
         let mut ev = self.conn.prepare(
-            "SELECT e.id, e.session_id, e.turn_id, s.started_at, e.quote, e.reasoning, e.normalized
-             FROM evidence e JOIN sessions s ON s.id = e.session_id
+            "SELECT e.id, e.session_id, e.turn_id, s.started_at, e.quote, e.reasoning,
+                    e.normalized, t.text, e.start_byte, e.end_byte, COALESCE(s.title, '')
+             FROM evidence e
+             JOIN sessions s ON s.id = e.session_id
+             JOIN turns t ON t.id = e.turn_id
              WHERE e.idea_id = ?1 ORDER BY s.started_at",
         )?;
         let evidence = ev
             .query_map([idea_id], |r| {
+                let turn_text: String = r.get(7)?;
+                let (start, end) = (r.get::<_, i64>(8)? as usize, r.get::<_, i64>(9)? as usize);
+                let (before, after) = context_around(&turn_text, start, end);
                 Ok(IdeaEvidence {
                     id: r.get(0)?,
                     session_id: r.get(1)?,
@@ -1081,6 +1192,9 @@ impl Store {
                     quote: r.get(4)?,
                     reasoning: r.get(5)?,
                     normalized: r.get::<_, i64>(6)? != 0,
+                    session_title: r.get(10)?,
+                    before,
+                    after,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1142,8 +1256,90 @@ impl Store {
             weak,
             evidence,
             revisions,
+            answers: self.dispute_answers(idea_id)?,
             contradictions,
         })
+    }
+
+    /// Which conversation an idea was first drawn from.
+    ///
+    /// An idea can be supported from several, so this is the earliest — which
+    /// is the one whose transcript already carries it, and therefore the one
+    /// worth checking against before packing the idea a second time.
+    pub fn idea_session(&self, idea_id: i64) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT session_id FROM evidence WHERE idea_id = ?1 ORDER BY id LIMIT 1",
+                [idea_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Every reply recorded against one idea's notes, oldest first.
+    pub fn dispute_answers(&self, idea_id: i64) -> Result<Vec<DisputeAnswer>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, challenge, answer, claim, title, created_at
+             FROM dispute_answers WHERE idea_id = ?1 ORDER BY created_at, id",
+        )?;
+        let rows = stmt
+            .query_map([idea_id], |r| {
+                Ok(DisputeAnswer {
+                    id: r.get(0)?,
+                    challenge: r.get(1)?,
+                    answer: r.get(2)?,
+                    claim: r.get(3)?,
+                    title: r.get(4)?,
+                    created_at: r.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Record a reply to one of the AI's notes. Returns the new row's id.
+    ///
+    /// Saved before anything is asked of a model. Reading it back is a second
+    /// step that can fail, be slow, or be turned off — and an answer that was
+    /// lost because a local model was busy would be the worst thing this
+    /// feature could do.
+    pub fn add_dispute_answer(
+        &self,
+        idea_id: i64,
+        challenge: &str,
+        answer: &str,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO dispute_answers (idea_id, challenge, answer, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![idea_id, challenge, answer, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// What one answer said, and which idea it hangs from.
+    pub fn dispute_answer(&self, answer_id: i64) -> Result<(i64, String, String)> {
+        Ok(self.conn.query_row(
+            "SELECT idea_id, challenge, answer FROM dispute_answers WHERE id = ?1",
+            [answer_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?)
+    }
+
+    /// Write back what an answer was read as. This is what turns it into a
+    /// moon: nothing is drawn for an answer with no claim.
+    pub fn digest_dispute_answer(&self, answer_id: i64, claim: &str, title: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE dispute_answers SET claim = ?2, title = ?3, digested_at = ?4 WHERE id = ?1",
+            rusqlite::params![answer_id, claim, title, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_dispute_answer(&self, answer_id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM dispute_answers WHERE id = ?1", [answer_id])?;
+        Ok(())
     }
 
     /// Conversations that were read and could not be, with what went wrong.
@@ -1385,6 +1581,7 @@ impl Store {
                 weight: r.get(3)?,
                 session_id: Some(id),
                 idea_id: None,
+                answer_id: None,
                 category: String::new(),
                 date: started.get(..10).unwrap_or(&started).to_string(),
                 just_revised: false,
@@ -1422,6 +1619,7 @@ impl Store {
                 weight: sessions,
                 session_id: None,
                 idea_id: Some(id),
+                answer_id: None,
                 category: r.get(3)?,
                 date: String::new(),
                 just_revised: r.get::<_, i64>(4)? != 0,
@@ -1431,6 +1629,63 @@ impl Store {
             })
         })? {
             g.nodes.push(row?);
+        }
+
+        // Which ideas actually made this map, so a moon is only drawn where
+        // the thing it orbits is there to orbit.
+        let on_map: std::collections::HashSet<i64> =
+            g.nodes.iter().filter_map(|n| n.idea_id).collect();
+
+        // Moons: answers to the AI's notes, hanging from the idea they answer.
+        // Only the ones that have been read back — an answer with no claim has
+        // no name to draw, and an unnamed dot beside a node is furniture.
+        let mut moons = self.conn.prepare(
+            "SELECT id, idea_id, claim, title FROM dispute_answers
+             WHERE claim <> '' ORDER BY id",
+        )?;
+        let mut moon_rows = Vec::new();
+        for row in moons.query_map([], |r| {
+            let (id, idea_id): (i64, i64) = (r.get(0)?, r.get(1)?);
+            let claim: String = r.get(2)?;
+            let title: String = r.get(3)?;
+            Ok((id, idea_id, if title.is_empty() { claim } else { title }))
+        })? {
+            moon_rows.push(row?);
+        }
+        // The category comes from the idea being answered, so a moon is
+        // coloured by the subject it belongs to rather than becoming a subject
+        // of its own in the key.
+        let categories: std::collections::HashMap<i64, String> =
+            g.nodes.iter().filter_map(|n| n.idea_id.map(|i| (i, n.category.clone()))).collect();
+        for (id, idea_id, label) in moon_rows {
+            if !on_map.contains(&idea_id) {
+                continue;
+            }
+            g.nodes.push(GraphNode {
+                id: format!("a{id}"),
+                kind: "moon",
+                label,
+                weight: 1,
+                session_id: None,
+                // The idea it hangs from, not a node of its own: clicking a
+                // moon opens the file where its dispute lives.
+                idea_id: Some(idea_id),
+                answer_id: Some(id),
+                category: categories.get(&idea_id).cloned().unwrap_or_default(),
+                date: String::new(),
+                just_revised: false,
+                shared: false,
+                strong: Vec::new(),
+                weak: Vec::new(),
+            });
+            g.edges.push(GraphEdge {
+                source: format!("i{idea_id}"),
+                target: format!("a{id}"),
+                id: None,
+                kind: "answers".into(),
+                weight: 1.0,
+                reasoning: None,
+            });
         }
 
         // A conversation links to every idea it produced. An idea supported by
@@ -2209,6 +2464,47 @@ mod tests {
             Message { role: Role::Assistant, content: "say more".into() },
             Message { role: Role::User, content: "caf\u{e9} \u{1F600} it compounds".into() },
         ]
+    }
+
+    #[test]
+    fn a_quote_in_the_middle_of_a_turn_comes_back_with_both_sides() {
+        let text = "I said one thing. The deployment story blocks us. Then I said another.";
+        let start = text.find("The deployment").unwrap();
+        let end = start + "The deployment story blocks us.".len();
+        let (before, after) = context_around(text, start, end);
+        assert_eq!(before, "I said one thing. ");
+        assert_eq!(after, " Then I said another.");
+    }
+
+    #[test]
+    fn a_quote_at_the_edges_of_a_turn_has_nothing_beside_it() {
+        let text = "The whole turn is the quote.";
+        let (before, after) = context_around(text, 0, text.len());
+        assert_eq!(before, "");
+        assert_eq!(after, "");
+    }
+
+    #[test]
+    fn context_is_cut_at_whole_words_and_says_so() {
+        let long = "word ".repeat(200);
+        let text = format!("{long}QUOTE{long}");
+        let start = long.len();
+        let (before, after) = context_around(&text, start, start + 5);
+        assert!(before.starts_with('…'), "{before}");
+        assert!(after.ends_with('…'), "{after}");
+        // Whole words only: the window landed inside "word", and half of one
+        // reads as a typo rather than as context.
+        assert!(!before.contains("…ord"), "{before}");
+        assert!(before.len() < CONTEXT_BYTES + 8, "{}", before.len());
+    }
+
+    #[test]
+    fn offsets_that_do_not_fit_the_text_produce_no_context() {
+        // Rather than a panic on a byte index that is not a char boundary,
+        // or a slice of some unrelated turn.
+        let text = "caf\u{e9} au lait";
+        assert_eq!(context_around(text, 3, 4), (String::new(), String::new()));
+        assert_eq!(context_around(text, 0, 999), (String::new(), String::new()));
     }
 
     #[test]

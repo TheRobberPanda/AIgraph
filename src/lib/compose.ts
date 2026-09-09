@@ -78,7 +78,24 @@ export function stopGeneration(): Promise<void> {
   return invoke("stop_generation");
 }
 
-/** Write an answer out. Whatever it is, it is text. */
+/** Write an answer out as plain text. */
 export function saveText(path: string, text: string): Promise<string> {
   return invoke<string>("save_text", { path, text });
+}
+
+/**
+ * Write an answer out in the shape it was asked for.
+ *
+ * The model wrote markdown either way — that is the one thing every model
+ * does well. Turning it into a typeset page, a Word document or a deck
+ * happens here, from the same text, rather than by asking a language model to
+ * emit a binary format it has only ever seen described.
+ */
+export function saveDocument(
+  path: string,
+  text: string,
+  format: string,
+  title: string,
+): Promise<string> {
+  return invoke<string>("save_document", { path, text, format, title });
 }

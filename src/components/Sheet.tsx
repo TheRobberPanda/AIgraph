@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import { onEscapeLayer } from "../lib/escape";
 
 /**
@@ -27,7 +28,16 @@ export default function Sheet({
 }) {
   useEffect(() => onEscapeLayer(onClose), [onClose]);
 
-  return (
+  // Rendered at the top of the document rather than where it was written.
+  //
+  // A stacked sheet is written inside the sheet below it, and that one is
+  // `overflow: hidden` — while the wash under it carries a `backdrop-filter`,
+  // which makes it the containing block for `position: fixed` descendants. So
+  // the inner sheet was being clipped to the outer one's box: it opened
+  // centred on the window, had its lower half cut off at the outer sheet's
+  // edge, and read as a panel sitting too high. A portal takes it out from
+  // under both.
+  return createPortal(
     <div
       // The wash is only painted by the bottom layer. Stacked, each one
       // darkened the last and the whole window silted up.
@@ -47,6 +57,7 @@ export default function Sheet({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

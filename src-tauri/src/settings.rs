@@ -138,12 +138,38 @@ pub struct Preset {
     pub id: String,
     pub name: String,
     pub prompt: String,
+    /// What pressing it is meant to produce. Defaulted rather than required:
+    /// every preset written before formats existed is in somebody's settings
+    /// file already, and a missing field must not throw their wording away.
+    #[serde(default)]
+    pub format: OutputFormat,
 }
 
 impl Preset {
-    fn new(id: &str, name: &str, prompt: &str) -> Self {
-        Self { id: id.into(), name: name.into(), prompt: prompt.trim().into() }
+    fn new(id: &str, name: &str, prompt: &str, format: OutputFormat) -> Self {
+        Self { id: id.into(), name: name.into(), prompt: prompt.trim().into(), format }
     }
+}
+
+/// What an instruction is asking the model to make.
+///
+/// Not a save-time choice, a write-time one. A deck and an essay are not the
+/// same text in two wrappers — one is a sequence of slides with a title and
+/// four short lines, the other is prose under headings — so the format has to
+/// reach the model as well as the file writer.
+///
+/// Markdown is the default and the interchange: the model writes markdown
+/// whatever is chosen, and `crate::export` turns it into the rest. Asking a
+/// language model to emit a zip archive it has only ever read about is not a
+/// feature, it is a bug with a progress bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormat {
+    #[default]
+    Markdown,
+    Pdf,
+    Docx,
+    Pptx,
 }
 
 /// What the buttons say out of the box.
@@ -163,6 +189,7 @@ pub fn default_presets() -> Vec<Preset> {
          and close with what it amounts to and what is still open. Keep the voice of \
          the transcripts — the phrasing, the bluntness, the way points get made. \
          Quote directly where the original wording is better than a paraphrase.",
+        OutputFormat::Pdf,
     )]
 }
 

@@ -43,6 +43,29 @@ export interface IdeaEvidence {
   quote: string;
   reasoning: string;
   normalized: boolean;
+  /** The conversation this was said in, by name. A date alone does not tell
+   *  you which piece of thinking a quote came out of. */
+  session_title: string;
+  /** The words either side of the quote in the turn it came from, already
+   *  cut to whole words and marked with an ellipsis where they were cut.
+   *  Empty at the start or end of a turn. Sliced in Rust: these are byte
+   *  offsets into UTF-8 and JavaScript indexes UTF-16. */
+  before: string;
+  after: string;
+}
+
+/** A reply to one of the AI's notes on an idea. */
+export interface DisputeAnswer {
+  id: number;
+  /** The note being answered, verbatim. */
+  challenge: string;
+  /** What was written or spoken. */
+  answer: string;
+  /** The answer read back as one claim. Empty until it has been — which is
+   *  also what "not yet a moon on the map" means. */
+  claim: string;
+  title: string;
+  created_at: string;
 }
 
 export interface IdeaRevision {
@@ -63,6 +86,8 @@ export interface IdeaView {
   weak: string[];
   evidence: IdeaEvidence[];
   revisions: IdeaRevision[];
+  /** Replies to the AI's notes on this idea — the moons it has grown. */
+  answers: DisputeAnswer[];
   /** What this idea is recorded as contradicting, and has not been settled. */
   contradictions: Contradiction[];
 }
@@ -94,6 +119,35 @@ export function revertRevision(revisionId: number): Promise<void> {
  * Generated on first open and cached — it costs a model call, so it is not
  * produced for every idea at extraction time.
  */
-export function ideaDeepDive(ideaId: number, regenerate = false): Promise<string> {
-  return invoke<string>("idea_deep_dive", { ideaId, regenerate });
+export function ideaDeepDive(
+  ideaId: number,
+  regenerate = false,
+  cachedOnly = false,
+): Promise<string> {
+  return invoke<string>("idea_deep_dive", { ideaId, regenerate, cachedOnly });
+}
+
+/**
+ * Record a reply to one of the AI's notes. Returns the new answer's id.
+ *
+ * Two calls rather than one, deliberately: this saves, `digestDisputeAnswer`
+ * reads back. Reading back costs a model call — tens of seconds on a local
+ * model — and an answer lost because the machine was busy would be the worst
+ * thing this could do to somebody who had just written one.
+ */
+export function answerDispute(
+  ideaId: number,
+  challenge: string,
+  answer: string,
+): Promise<number> {
+  return invoke<number>("answer_dispute", { ideaId, challenge, answer });
+}
+
+/** Read a saved answer back as one claim, which is what puts it on the map. */
+export function digestDisputeAnswer(answerId: number): Promise<string> {
+  return invoke<string>("digest_dispute_answer", { answerId });
+}
+
+export function deleteDisputeAnswer(answerId: number): Promise<void> {
+  return invoke("delete_dispute_answer", { answerId });
 }

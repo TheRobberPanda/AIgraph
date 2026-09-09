@@ -244,3 +244,49 @@ export function IconPlay(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+/** A magnifier with a plus in it — zoom in. */
+export function IconZoomIn(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <circle cx="10.5" cy="10.5" r="6.5" />
+      <path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6" />
+    </Base>
+  );
+}
+
+/** The same magnifier with a minus — zoom out. */
+export function IconZoomOut(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <circle cx="10.5" cy="10.5" r="6.5" />
+      <path d="M15.5 15.5 21 21M7.5 10.5h6" />
+    </Base>
+  );
+}
+
+/**
+ * Four corners closing on what is inside them — frame the whole map.
+ *
+ * Not a magnifier: this is not another step of zoom, it is the one control
+ * that throws away wherever you wandered to and puts everything back on
+ * screen at once.
+ */
+export function IconFit(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M3 8V4a1 1 0 0 1 1-1h4M16 3h4a1 1 0 0 1 1 1v4M21 16v4a1 1 0 0 1-1 1h-4M8 21H4a1 1 0 0 1-1-1v-4" />
+      <rect x="8.5" y="8.5" width="7" height="7" rx="1" />
+    </Base>
+  );
+}
+
+/** A small microphone. */
+export function IconMic(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" />
+    </Base>
+  );
+}

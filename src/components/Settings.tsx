@@ -23,9 +23,11 @@ import {
   type Settings as S,
   type Theme,
   MAP_STYLES,
+  OUTPUT_FORMATS,
 } from "../lib/settings";
 import Confirm from "./Confirm";
-import Hint from "./Hint";
+import { IconTrash } from "./Icons";
+import Hint, { Section } from "./Hint";
 
 import {
   downloadSpeechModel,
@@ -151,7 +153,7 @@ export default function Settings() {
         s.chat_stance === "challenge"
           ? "pushes back"
           : s.chat_stance === "organize"
-            ? "organizes"
+            ? "lays it out"
             : "default",
     },
     { id: "voice", title: "Voice & dictation", summary: voiceLabel },
@@ -184,7 +186,18 @@ export default function Settings() {
 
         {category === "appearance" && (
           <>
-            <h3 className="section">Explanations</h3>
+            <Section
+              hint={
+                <>
+                  The app used to explain itself in a paragraph beside almost
+                  every control. Read once, those stop being help and become
+                  furniture. They are all still here — this puts them back on
+                  the page instead of under the mark you just hovered.
+                </>
+              }
+            >
+              Explanations
+            </Section>
             <div className="row">
               <button
                 className={s.show_explanations ? "btn on" : "btn"}
@@ -192,15 +205,9 @@ export default function Settings() {
               >
                 {s.show_explanations ? "On the page" : "Under a hint"}
               </button>
-              <Hint>
-                The app used to explain itself in a paragraph beside almost
-                every control. Read once, those stop being help and become
-                furniture. They are all still here — this puts them back on the
-                page instead of under the mark you just hovered.
-              </Hint>
             </div>
 
-            <h3 className="section">Theme</h3>
+            <Section>Theme</Section>
             <div className="row">
               {THEMES.map((t) => (
                 <button
@@ -213,8 +220,9 @@ export default function Settings() {
               ))}
             </div>
 
-            <h3 className="section">Accent</h3>
-            <Hint>The colour of links, highlights and the chosen model.</Hint>
+            <Section hint="The colour of links, highlights and the chosen model.">
+              Accent
+            </Section>
             <div className="row accent-row">
               {ACCENTS.map((a) => (
                 <button
@@ -228,11 +236,16 @@ export default function Settings() {
               ))}
             </div>
 
-            <h3 className="section">The map</h3>
-            <Hint>
-              Three ways of standing the same material up. None of them hides
-              anything.
-            </Hint>
+            <Section
+              hint={
+                <>
+                  Three ways of standing the same material up. None of them
+                  hides anything.
+                </>
+              }
+            >
+              The map
+            </Section>
             <div className="row">
               {MAP_STYLES.map((m) => (
                 <button
@@ -246,7 +259,7 @@ export default function Settings() {
               ))}
             </div>
 
-            <h3 className="section">Interface size</h3>
+            <Section>Interface size</Section>
             <div className="row scale-row">
               <input
                 ref={scaleRef}
@@ -280,11 +293,16 @@ export default function Settings() {
               )}
             </div>
 
-            <h3 className="section">Advanced layout sides</h3>
-            <Hint>
-              In the advanced layout: which side the conversations sit on. Make takes
-              the other side; the thinking stays in the middle.
-            </Hint>
+            <Section
+              hint={
+                <>
+                  In the advanced layout: which side the conversations sit on.
+                  Make takes the other side; the thinking stays in the middle.
+                </>
+              }
+            >
+              Advanced layout sides
+            </Section>
             <div className="row">
               <button
                 className={!s.advanced_swap ? "btn on" : "btn"}
@@ -300,8 +318,9 @@ export default function Settings() {
               </button>
             </div>
 
-            <h3 className="section">Language</h3>
-            <Hint>What the model answers in, and what your notes and ideas are written in.</Hint>
+            <Section hint="What the model answers in, and what your notes and ideas are written in.">
+              Language
+            </Section>
             <div className="row">
               {LANGUAGES.map((l) => (
                 <button
@@ -327,7 +346,18 @@ export default function Settings() {
 
         {category === "conversation" && (
           <>
-            <h3 className="section">How it responds</h3>
+            <Section
+              hint={
+                <>
+                  Pushing back tests a thought; laying it out sorts it without
+                  arguing. This also decides what the margin notes on an idea
+                  say: pushing back keeps the doubts, laying out keeps the
+                  summary, and the default keeps both.
+                </>
+              }
+            >
+              How it responds
+            </Section>
             <div className="row">
               <button
                 className={s.chat_stance === "neutral" ? "btn on" : "btn"}
@@ -341,18 +371,28 @@ export default function Settings() {
               >
                 Push back
               </button>
+              {/* Renamed in the interface only. The stored value stays
+                  "organize" — it is in everyone's settings file already, and
+                  a rename that reaches the disk costs a migration to buy
+                  nothing. */}
               <button
                 className={s.chat_stance === "organize" ? "btn on" : "btn"}
                 onClick={() => void update({ chat_stance: "organize" })}
               >
-                Just organize
+                Lay it out
               </button>
             </div>
-            <Hint>
-              Pushing back tests a thought; organizing lays it out without arguing.
-            </Hint>
-
-            <h3 className="section">Thinking before answering</h3>
+            <Section
+              hint={
+                <>
+                  Reasoning models can deliberate at length first. None of it is
+                  shown or recorded here — on a local model it is most of the
+                  wait.
+                </>
+              }
+            >
+              Thinking before answering
+            </Section>
             <div className="row">
               <button
                 className={s.reasoning ? "btn on" : "btn"}
@@ -361,12 +401,17 @@ export default function Settings() {
                 {s.reasoning ? "On" : "Off"}
               </button>
             </div>
-            <Hint>
-              Reasoning models can deliberate at length first. None of it is shown or
-              recorded here — on a local model it is most of the wait.
-            </Hint>
-
-            <h3 className="section">Recall</h3>
+            <Section
+              hint={
+                <>
+                  Hands the conversation the titles of ideas already recorded in
+                  this folder. Titles only — never claims, quotes, or
+                  transcripts.
+                </>
+              }
+            >
+              Recall
+            </Section>
             <div className="row">
               <button
                 className={s.recall ? "btn on" : "btn"}
@@ -375,12 +420,16 @@ export default function Settings() {
                 {s.recall ? "Connecting to earlier ideas" : "Each turn on its own"}
               </button>
             </div>
-            <Hint>
-              Hands the conversation the titles of ideas already recorded in this
-              folder. Titles only — never claims, quotes, or transcripts.
-            </Hint>
-
-            <h3 className="section">Ending a session</h3>
+            <Section
+              hint={
+                <>
+                  A conversation files when you press Done. It can also file
+                  itself after a stretch of quiet.
+                </>
+              }
+            >
+              Ending a session
+            </Section>
             <div className="row">
               <button
                 className={s.auto_file ? "btn" : "btn on"}
@@ -398,16 +447,22 @@ export default function Settings() {
                 </button>
               ))}
             </div>
-            <Hint>
-              A conversation files when you press Done. It can also file itself after
-              a stretch of quiet.
-            </Hint>
           </>
         )}
 
         {category === "voice" && (
           <>
-            <h3 className="section">Reading replies aloud</h3>
+            <Section
+              hint={
+                <>
+                  Call mode keeps answers to a few sentences and reads them out.
+                  Reading aloud is off unless you ask; a call turns it on for
+                  its length and hanging up leaves this where you left it.
+                </>
+              }
+            >
+              Reading replies aloud
+            </Section>
             <div className="row">
               <button
                 className={s.call_mode ? "btn on" : "btn"}
@@ -429,12 +484,6 @@ export default function Settings() {
                 Downloaded voice
               </button>
             </div>
-            <Hint>
-              Call mode keeps answers to a few sentences and reads them out. Reading
-              aloud is off unless you ask; a call turns it on for its length and
-              hanging up leaves this where you left it.
-            </Hint>
-
             <div className="knobs">
               <div className="knob">
                 <label className="knob-name">Pause before sending</label>
@@ -458,16 +507,16 @@ export default function Settings() {
               </div>
             </div>
 
-            <h3 className="section">Dictation</h3>
+            <Section>Dictation</Section>
             {speech?.installed ? (
-              <Hint>Installed, runs on the CPU.</Hint>
+              <p className="blurb">Installed, runs on the CPU.</p>
             ) : downloading ? (
-              <Hint>
+              <p className="blurb">
                 Downloading… {Math.round((downloading.received / (downloading.total || 1)) * 100)}%
-              </Hint>
+              </p>
             ) : (
               <>
-                <Hint>About {speech?.mb ?? 488}MB, once, offline.</Hint>
+                <p className="blurb">About {speech?.mb ?? 488}MB, once, offline.</p>
                 <button className="btn" onClick={() => void downloadSpeechModel()}>
                   Download the speech model
                 </button>
@@ -476,10 +525,10 @@ export default function Settings() {
 
             {!voice?.installed &&
               (fetching?.what === "voice" ? (
-                <Hint>
+                <p className="blurb">
                   Downloading the voice…{" "}
                   {Math.round((fetching.received / (fetching.total || 1)) * 100)}%
-                </Hint>
+                </p>
               ) : (
                 <div className="row" style={{ marginTop: "0.6rem" }}>
                   <button
@@ -506,26 +555,41 @@ export default function Settings() {
 
         {category === "engine" && (
           <>
-            <h3 className="section">The engine</h3>
-            <Hint>
-              What runs a model the app holds itself. The CPU build works everywhere;
-              the GPU build is several times faster where there is a graphics card.
-              Models themselves are picked from the chip at the top of the
-              conversation.
-            </Hint>
+            <Section
+              hint={
+                <>
+                  What runs a model the app holds itself. The CPU build works
+                  everywhere; the GPU build is several times faster where there
+                  is a graphics card. Models themselves are picked from the chip
+                  at the top of the conversation.
+                </>
+              }
+            >
+              The engine
+            </Section>
             <Engine onChanged={() => void embeddedStatus().then(setServer).catch(() => {})} />
           </>
         )}
 
         {category === "prompts" && (
           <>
-            <h3 className="section">What the Make buttons ask for</h3>
-            <Hint>
-              Each button sends the wording below, with the folder in front of the
-              model.
-            </Hint>
+            <Section
+              hint={
+                <>
+                  Each button sends the wording below, with the folder in front
+                  of the model.
+                </>
+              }
+            >
+              What the Make buttons ask for
+            </Section>
             {s.presets.map((preset, i) => (
               <div key={preset.id} className="preset">
+                {/* The name and its way out on one line. "Remove" was a
+                    full-width button under the wording, the same size and
+                    weight as everything else on the page — the largest thing
+                    in the block was the one that destroys it. */}
+                <div className="preset-top">
                 <input
                   className="field preset-name"
                   value={preset.name}
@@ -536,6 +600,34 @@ export default function Settings() {
                   }}
                   onBlur={() => void update({ presets: s.presets })}
                 />
+                {/* Still two presses, like everything else here that destroys
+                    something: an instruction somebody wrote out is not worth
+                    losing to a stray click. The first press names what is
+                    about to go, which an icon on its own cannot. */}
+                {removing === preset.id ? (
+                  <button
+                    className="btn armed"
+                    onMouseLeave={() => setRemoving(null)}
+                    onClick={() => {
+                      setRemoving(null);
+                      const presets = s.presets.filter((x) => x.id !== preset.id);
+                      setS({ ...s, presets });
+                      void update({ presets });
+                    }}
+                  >
+                    Delete “{preset.name}”
+                  </button>
+                ) : (
+                  <button
+                    className="icon-btn preset-remove"
+                    data-tip={`Remove “${preset.name}”`}
+                    aria-label={`Remove ${preset.name}`}
+                    onClick={() => setRemoving(preset.id)}
+                  >
+                    <IconTrash />
+                  </button>
+                )}
+                </div>
                 <textarea
                   className="field preset-prompt"
                   rows={4}
@@ -550,28 +642,26 @@ export default function Settings() {
                   // character would fight the person typing.
                   onBlur={() => void update({ presets: s.presets })}
                 />
-                {/* Two clicks, like everything else here that destroys
-                    something: an instruction someone wrote out is not worth
-                    losing to a stray press. */}
-                <div className="row">
-                  {removing === preset.id ? (
+                {/* What it is asking to be made, beside the wording that asks
+                    for it. The shape reaches the model — a deck and an essay
+                    are not the same text in two wrappers — so it belongs with
+                    the instruction rather than on the Save button. */}
+                <div className="row preset-formats">
+                  {OUTPUT_FORMATS.map((f) => (
                     <button
-                      className="btn armed"
-                      onMouseLeave={() => setRemoving(null)}
+                      key={f.value}
+                      className={(preset.format ?? "markdown") === f.value ? "btn on" : "btn"}
+                      data-tip={f.blurb}
                       onClick={() => {
-                        setRemoving(null);
-                        const presets = s.presets.filter((x) => x.id !== preset.id);
+                        const presets = [...s.presets];
+                        presets[i] = { ...preset, format: f.value };
                         setS({ ...s, presets });
                         void update({ presets });
                       }}
                     >
-                      Delete “{preset.name}”
+                      {f.label}
                     </button>
-                  ) : (
-                    <button className="btn" onClick={() => setRemoving(preset.id)}>
-                      Remove
-                    </button>
-                  )}
+                  ))}
                 </div>
               </div>
             ))}
@@ -582,12 +672,22 @@ export default function Settings() {
               >
                 Put them all back
               </button>
+              <Hint>
+                Restores the instructions the app ships with. Anything you
+                wrote yourself is kept — this adds the originals back beside
+                it, and undoes edits to the ones that came with the app.
+              </Hint>
             </div>
-            <h3 className="section">Transcripts</h3>
-            <Hint>
-              Every conversation is also written out as Markdown, so the record
-              outlives this app.
-            </Hint>
+            <Section
+              hint={
+                <>
+                  Every conversation is also written out as Markdown, so the
+                  record outlives this app.
+                </>
+              }
+            >
+              Transcripts
+            </Section>
             <p className="path">{dir}</p>
             {dirError && <p className="blurb warn">{dirError}</p>}
             <div className="row">
@@ -618,8 +718,8 @@ export default function Settings() {
           </>
         )}
 
-        {redigesting && <Hint>Reading everything again…</Hint>}
-        {redigestNote && <Hint>{redigestNote}</Hint>}
+        {redigesting && <p className="blurb">Reading everything again…</p>}
+        {redigestNote && <p className="blurb">{redigestNote}</p>}
       </div>
 
       {offerRedigest && (
