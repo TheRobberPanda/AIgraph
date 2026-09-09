@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.3.0
+
+### The margin notes can be answered
+
+An idea's notes were a verdict: the model said "no measurement is offered"
+and there was nothing to do about it. Every doubt now carries a box with a
+microphone beside it, and so does the question in your own voice underneath
+them — "why would this be so" was the one thing on the page addressed to
+the reader with nowhere to reply.
+
+An answer is not filed as an idea. Every idea in this app owes its existence
+to words it can quote from a transcript, and a paragraph typed into a box has
+none, so it becomes a **moon** instead: a smaller node held by the claim it
+defends, which is held by the conversation that produced it. Answering works
+from the map as well as from the idea's own file — clicking a doubt on the
+map opens the file with that box already waiting.
+
+### Make can ask for a shape
+
+An instruction on the Make tab now carries a format — Markdown, PDF, Word or
+slides — chosen beside its wording in Settings and shown on the button that
+sends it. The format reaches the model, not just the file writer: a deck and
+an essay are not the same text in two wrappers, and asking for one and
+wrapping the other gets you an essay cut into slides.
+
+Pressing an instruction opens its wording first, editable, before anything is
+sent. What a button asks for is the thing most worth arguing with, and the
+only way to read it used to be opening Settings in another tab.
+
+### Also
+
+- An idea's file leads with the words it rests on, shown with the sentences
+  either side of them, and says which conversation they were said in. Clicking
+  a quote goes there and pulses it rather than opening a transcript at the top.
+- Which notes an idea shows follows the stance the chat is set to: pushing back
+  keeps the doubts, laying it out keeps the summary, and the default keeps both.
+  "Just organize" is now "Lay it out".
+- Opening an idea no longer spends a model call. "Read it back" generated a
+  reading whenever none was cached, including on every open.
+- A conversation's file scrolls in two columns, so pointing at an extracted
+  idea moves the transcript without moving the list you are pointing at.
+- The map's Fit button was underneath the arrangement chip, invisible and
+  unclickable. It is an icon now, with zoom in and out beside it, down the
+  right edge.
+- A hovered node's title is set wide enough to read instead of being wrapped
+  into four short lines and then cut off.
+- Pulled back past the zoom where anything is legible, hovering stops raising
+  cards about nodes you cannot see. Clicking still works.
+- The `[[open:…]]` marker that lets a reply open a tab no longer appears on
+  screen while an answer streams, and no longer reaches the stored transcript.
+- Ticking a conversation on the Make tab now shows its ideas as ticked, which
+  they always were. Deselecting everything says so instead of claiming the
+  whole folder.
+- Explanations in Settings sit in the heading they explain rather than under
+  the group of controls below it.
+
 ## 0.2.0
 
 The first release with a Linux download. There was never one before: the
