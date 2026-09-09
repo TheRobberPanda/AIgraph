@@ -19,6 +19,7 @@ import { categoryColors, UNCATEGORISED } from "../lib/categories";
 import { getSettings, onSettingsChanged, type MapStyle } from "../lib/settings";
 import { ConversationFile, IdeaFile } from "./Deep";
 import FilePanel from "./FilePanel";
+import Resolve from "./Resolve";
 
 /**
  * The map, drawn on a 2D canvas over a live force simulation.
@@ -60,6 +61,8 @@ interface Node extends SimulationNodeDatum {
 }
 
 interface Link extends SimulationLinkDatum<Node> {
+  /** The stored relation, where there is one. Only these can be settled. */
+  id?: number;
   kind: string;
   /** Why these two relate, in the adjudicator's words. */
   reasoning?: string;
@@ -522,6 +525,14 @@ export default function Graph({
     reasoning?: string;
     x: number;
     y: number;
+  } | null>(null);
+  /** A contradiction the person has clicked, to settle it. Hovering explains
+   *  the tension; clicking is where something can be done about it. */
+  const [resolving, setResolving] = useState<{
+    relationId: number;
+    a: { idea_id: number; claim: string };
+    b: { idea_id: number; claim: string };
+    reasoning?: string;
   } | null>(null);
   /** Following a link out of an idea's file to the conversation it came from,
    *  which swaps the panel rather than stacking. */
@@ -1060,6 +1071,7 @@ export default function Graph({
       .map((e) => ({
         source: byId.get(e.source)!,
         target: byId.get(e.target)!,
+        id: e.id,
         kind: e.kind,
         reasoning: e.reasoning,
       }));
@@ -1598,6 +1610,24 @@ export default function Graph({
 
           const hit = nodeAt(e.clientX, e.clientY);
           if (!hit) {
+            // A contradiction is the one edge worth clicking: it is the only
+            // thing on the map that asks the person a question. Checked before
+            // the map is cleared, or the click would only ever dismiss labels.
+            const edge = edgeAt(e.clientX, e.clientY);
+            if (edge && edge.kind === "contradicts" && edge.id !== undefined) {
+              const a = (edge.source as Node).data;
+              const b = (edge.target as Node).data;
+              if (a.idea_id !== null && b.idea_id !== null) {
+                setEdgeHover(null);
+                setResolving({
+                  relationId: edge.id,
+                  a: { idea_id: a.idea_id, claim: a.label },
+                  b: { idea_id: b.idea_id, claim: b.label },
+                  reasoning: edge.reasoning,
+                });
+                return;
+              }
+            }
             // Clicking the bare map puts the titles away again.
             focusNodeRef.current = null;
             revealRef.current = new Set();
@@ -1800,7 +1830,23 @@ export default function Graph({
               only moment anything knew. Absent on the older links, and on the
               ones drawn from a similarity score alone. */}
           {edgeHover.reasoning && <div className="relation-why">{edgeHover.reasoning}</div>}
+          {/* Otherwise the line is only ever a complaint. Said here because
+              this is the moment somebody is looking at it. */}
+          {edgeHover.kind === "contradicts" && (
+            <div className="relation-do">Click to settle it</div>
+          )}
         </div>
+      )}
+
+      {resolving && (
+        <Resolve
+          a={resolving.a}
+          b={resolving.b}
+          relationId={resolving.relationId}
+          reasoning={resolving.reasoning}
+          onClose={() => setResolving(null)}
+          onChanged={() => void build()}
+        />
       )}
 
       </div>

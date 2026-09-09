@@ -180,6 +180,21 @@ pub struct ViewTurn {
     pub digest: Option<String>,
 }
 
+/// One idea's quote, located in a turn: where it sits and what it produced.
+///
+/// Internal to building a conversation view — the rendered form is [`Segment`].
+struct Span {
+    turn_id: i64,
+    idea_id: i64,
+    claim: String,
+    title: String,
+    reasoning: String,
+    /// Byte offsets into the turn's own text.
+    start: usize,
+    end: usize,
+    category: String,
+}
+
 /// A run of transcript. Highlighted runs carry the idea they produced.
 #[derive(Debug, Clone, Serialize)]
 pub struct Segment {
@@ -192,6 +207,12 @@ pub struct Segment {
     pub title: Option<String>,
     /// Why the model read these words as carrying that claim.
     pub reasoning: Option<String>,
+    /// The idea's tag, so a highlight can be coloured to match its node on the
+    /// map rather than being one undifferentiated gold.
+    pub category: Option<String>,
+    /// This run opens a paragraph. Derived, never stored in the text — see
+    /// `turn_paragraphs`.
+    pub paragraph_start: bool,
 }
 
 /// An idea's file.
@@ -205,6 +226,23 @@ pub struct IdeaView {
     pub weak: Vec<String>,
     pub evidence: Vec<IdeaEvidence>,
     pub revisions: Vec<IdeaRevision>,
+    /// What this idea is recorded as contradicting, and has not been settled.
+    /// The map has drawn these since reconciliation started recording them;
+    /// the idea's own file has never mentioned them, which is the one place
+    /// somebody reading the idea would want to know.
+    pub contradictions: Vec<Contradiction>,
+}
+
+/// Another idea that cannot be true at the same time as this one.
+#[derive(Debug, Clone, Serialize)]
+pub struct Contradiction {
+    /// The `relations` row, so it can be settled without naming both sides.
+    pub relation_id: i64,
+    pub other_id: i64,
+    pub other_claim: String,
+    pub other_title: String,
+    /// Why the model read the two as incompatible.
+    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,6 +301,11 @@ pub struct GraphNode {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphEdge {
+    /// The `relations` row this came from, where there is one. Structural
+    /// edges — a conversation to its ideas, a subject chain — are computed
+    /// rather than stored, so they have none, and nothing can be done to them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
     pub source: String,
     pub target: String,
     /// `from` (conversation → idea), `related`, or `contradicts`.
@@ -866,70 +909,107 @@ impl Store {
         // Offsets on `evidence` are relative to the turn, which is exactly the
         // frame needed here.
         let mut stmt = self.conn.prepare(
-            "SELECT e.turn_id, e.idea_id, i.claim, i.title, e.reasoning, e.start_byte, e.end_byte
+            "SELECT e.turn_id, e.idea_id, i.claim, i.title, e.reasoning, e.start_byte, e.end_byte, i.category
              FROM evidence e JOIN ideas i ON i.id = e.idea_id
              WHERE e.session_id = ?1
              ORDER BY e.turn_id, e.start_byte",
         )?;
-        let spans: Vec<(i64, i64, String, String, String, usize, usize)> = stmt
+        let spans: Vec<Span> = stmt
             .query_map([session_id], |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get::<_, i64>(5)? as usize,
-                    r.get::<_, i64>(6)? as usize,
-                ))
+                Ok(Span {
+                    turn_id: r.get(0)?,
+                    idea_id: r.get(1)?,
+                    claim: r.get(2)?,
+                    title: r.get(3)?,
+                    reasoning: r.get(4)?,
+                    start: r.get::<_, i64>(5)? as usize,
+                    end: r.get::<_, i64>(6)? as usize,
+                    category: r.get(7)?,
+                })
             })?
             .collect::<rusqlite::Result<_>>()?;
 
         let mut turns = Vec::new();
         for turn in self.turns(session_id)? {
             let text = &turn.text;
-            let mut segments = Vec::new();
-            let mut cursor = 0usize;
 
-            for (_, idea_id, claim, title, reasoning, start, end) in
-                spans.iter().filter(|s| s.0 == turn.id)
-            {
+            // Two independent sets of positions over the same string: where an
+            // idea was taken from, and where a paragraph starts. Both are byte
+            // offsets into this exact text, so they merge by sorting.
+            let mut kept: Vec<&Span> = Vec::new();
+            let mut cursor = 0usize;
+            for span in spans.iter().filter(|s| s.turn_id == turn.id) {
+                let (start, end) = (span.start, span.end);
                 // Skip overlaps and anything that no longer lands on a character
                 // boundary. A mangled highlight is worse than none.
-                if *start < cursor
-                    || *end > text.len()
+                if start < cursor
+                    || end > text.len()
                     || start >= end
-                    || !text.is_char_boundary(*start)
-                    || !text.is_char_boundary(*end)
+                    || !text.is_char_boundary(start)
+                    || !text.is_char_boundary(end)
                 {
                     continue;
                 }
-                if *start > cursor {
-                    segments.push(Segment {
-                        text: text[cursor..*start].to_string(),
+                kept.push(span);
+                cursor = end;
+            }
+
+            let breaks = self.paragraphs_for(turn.id)?;
+
+            // Every position where the run has to end: a highlight starting or
+            // ending, or a paragraph beginning.
+            let mut cuts: Vec<usize> = Vec::with_capacity(kept.len() * 2 + breaks.len() + 2);
+            cuts.push(0);
+            cuts.push(text.len());
+            for span in &kept {
+                cuts.push(span.start);
+                cuts.push(span.end);
+            }
+            for at in &breaks {
+                // A break inside a quote would cut a highlight in half; the
+                // quote is the more important of the two, so it wins.
+                let inside = kept.iter().any(|k| *at > k.start && *at < k.end);
+                if *at <= text.len() && text.is_char_boundary(*at) && !inside {
+                    cuts.push(*at);
+                }
+            }
+            cuts.sort_unstable();
+            cuts.dedup();
+
+            let mut segments = Vec::new();
+            for pair in cuts.windows(2) {
+                let (from, to) = (pair[0], pair[1]);
+                if from >= to {
+                    continue;
+                }
+                let span = kept.iter().find(|k| k.start <= from && to <= k.end);
+                let paragraph_start = breaks.contains(&from);
+                match span {
+                    Some(s) => {
+                        segments.push(Segment {
+                            text: text[from..to].to_string(),
+                            idea_id: Some(s.idea_id),
+                            claim: Some(s.claim.clone()),
+                            title: Some(if s.title.is_empty() {
+                                s.claim.clone()
+                            } else {
+                                s.title.clone()
+                            }),
+                            reasoning: Some(s.reasoning.clone()),
+                            category: Some(s.category.clone()),
+                            paragraph_start,
+                        });
+                    }
+                    None => segments.push(Segment {
+                        text: text[from..to].to_string(),
                         idea_id: None,
                         claim: None,
                         title: None,
                         reasoning: None,
-                    });
+                        category: None,
+                        paragraph_start,
+                    }),
                 }
-                segments.push(Segment {
-                    text: text[*start..*end].to_string(),
-                    idea_id: Some(*idea_id),
-                    claim: Some(claim.clone()),
-                    title: Some(if title.is_empty() { claim.clone() } else { title.clone() }),
-                    reasoning: Some(reasoning.clone()),
-                });
-                cursor = *end;
-            }
-            if cursor < text.len() {
-                segments.push(Segment {
-                    text: text[cursor..].to_string(),
-                    idea_id: None,
-                    claim: None,
-                    title: None,
-                    reasoning: None,
-                });
             }
 
             let digest = self
@@ -990,8 +1070,48 @@ impl Store {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
+        // Either side of the pair may be this idea: `relations` stores the
+        // pair once, ordered by id, so which column holds which is an accident
+        // of when they were coined.
+        let mut con = self.conn.prepare(
+            "SELECT r.id, i.id, i.claim, i.title, r.reasoning
+             FROM relations r
+             JOIN ideas i ON i.id = CASE WHEN r.idea_a = ?1 THEN r.idea_b ELSE r.idea_a END
+             WHERE r.kind = 'contradicts'
+               AND r.resolved_at IS NULL
+               AND (r.idea_a = ?1 OR r.idea_b = ?1)
+             ORDER BY r.created_at",
+        )?;
+        let contradictions = con
+            .query_map([idea_id], |r| {
+                let other_claim: String = r.get(2)?;
+                let other_title: String = r.get(3)?;
+                Ok(Contradiction {
+                    relation_id: r.get(0)?,
+                    other_id: r.get(1)?,
+                    other_title: if other_title.is_empty() {
+                        other_claim.clone()
+                    } else {
+                        other_title
+                    },
+                    other_claim,
+                    reasoning: r.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
         let (strong, weak) = self.nudges_for("nudges", "idea_id", idea_id)?;
-        Ok(IdeaView { id: idea_id, claim, title, revision, strong, weak, evidence, revisions })
+        Ok(IdeaView {
+            id: idea_id,
+            claim,
+            title,
+            revision,
+            strong,
+            weak,
+            evidence,
+            revisions,
+            contradictions,
+        })
     }
 
     /// Conversations that were read and could not be, with what went wrong.
@@ -1291,6 +1411,7 @@ impl Store {
             Ok(GraphEdge {
                 source: format!("s{s}"),
                 target: format!("i{i}"),
+                id: None,
                 kind: "from".into(),
                 weight: 1.0,
                 reasoning: None,
@@ -1299,23 +1420,36 @@ impl Store {
             g.edges.push(row?);
         }
 
+        // Which nodes actually made it onto this map, so an edge can be
+        // checked against them.
+        let here: std::collections::HashSet<String> =
+            g.nodes.iter().map(|n| n.id.clone()).collect();
+
         // Faint links between ideas judged related but not the same. Without
         // these a conservative merge threshold leaves the map with no structure
         // at all; with them it has structure without claiming false identity.
-        let mut rel = self
-            .conn
-            .prepare("SELECT idea_a, idea_b, kind, confidence, reasoning FROM relations")?;
+        let mut rel = self.conn.prepare(
+            "SELECT id, idea_a, idea_b, kind, confidence, reasoning
+             FROM relations WHERE resolved_at IS NULL",
+        )?;
         for row in rel.query_map([], |r| {
-            let (a, b): (i64, i64) = (r.get(0)?, r.get(1)?);
+            let (a, b): (i64, i64) = (r.get(1)?, r.get(2)?);
             Ok(GraphEdge {
+                id: Some(r.get(0)?),
                 source: format!("i{a}"),
                 target: format!("i{b}"),
-                kind: r.get(2)?,
-                weight: r.get(3)?,
-                reasoning: r.get(4)?,
+                kind: r.get(3)?,
+                weight: r.get(4)?,
+                reasoning: r.get(5)?,
             })
         })? {
-            g.edges.push(row?);
+            let edge = row?;
+            // Relations are stored without a folder, so this query alone would
+            // drag in links to ideas that are not on this map — an edge to a
+            // node that was never added, which draws as a line to nowhere.
+            if here.contains(&edge.source) && here.contains(&edge.target) {
+                g.edges.push(edge);
+            }
         }
 
         // Ideas sharing a category are chained together — idea 1 to idea 2,
@@ -1339,6 +1473,7 @@ impl Store {
                     g.edges.push(GraphEdge {
                         source: format!("i{prev_id}"),
                         target: format!("i{id}"),
+                        id: None,
                         kind: "category".into(),
                         weight: 0.3,
                         reasoning: None,
@@ -1399,6 +1534,57 @@ impl Store {
         )?;
         let rows = stmt.query_map([session_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    /// Where this turn's paragraphs start, if anyone has worked it out.
+    ///
+    /// Offsets that no longer land inside the turn are dropped on the way out
+    /// rather than trusted: the text they were computed against is the text
+    /// they are read against, but an offset is cheap to check and a paragraph
+    /// break in the middle of a character is not.
+    pub fn paragraphs_for(&self, turn_id: i64) -> Result<Vec<usize>> {
+        let raw: Option<String> = self
+            .conn
+            .query_row("SELECT offsets FROM turn_paragraphs WHERE turn_id = ?1", [turn_id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        let Some(raw) = raw else { return Ok(Vec::new()) };
+        Ok(serde_json::from_str::<Vec<usize>>(&raw).unwrap_or_default())
+    }
+
+    /// Turns long enough to be worth breaking up, that nobody has yet.
+    ///
+    /// User turns only. Assistant answers get a digest instead, and the two
+    /// are different problems: an answer is too long and gets shortened, a
+    /// person thinking out loud is the right length and just unreadable.
+    pub fn turns_needing_paragraphs(
+        &self,
+        session_id: i64,
+        at_least: usize,
+    ) -> Result<Vec<(i64, i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.ord, t.text FROM turns t
+             WHERE t.session_id = ?1 AND t.role = 'user'
+               AND LENGTH(t.text) >= ?2
+               AND NOT EXISTS (SELECT 1 FROM turn_paragraphs p WHERE p.turn_id = t.id)
+             ORDER BY t.ord",
+        )?;
+        let rows = stmt.query_map(params![session_id, at_least as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    pub fn set_paragraphs(&self, turn_id: i64, offsets: &[usize], model: &str) -> Result<()> {
+        let json = serde_json::to_string(offsets).unwrap_or_else(|_| "[]".into());
+        self.conn.execute(
+            "INSERT INTO turn_paragraphs (turn_id, offsets, model, created_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(turn_id) DO UPDATE SET offsets = ?2, model = ?3, created_at = ?4",
+            params![turn_id, json, model, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
     }
 
     pub fn set_reply_digest(&self, turn_id: i64, content: &str, model: &str) -> Result<()> {
@@ -1636,6 +1822,54 @@ impl Store {
             params![revision_id, now],
         )?;
         // The vector described the claim that has just been undone.
+        tx.execute("DELETE FROM embeddings WHERE idea_id = ?1", [idea_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Settle a contradiction: it stops being drawn and stops being asked about.
+    ///
+    /// Marked rather than deleted. The pair really was judged incompatible,
+    /// and that is part of how the ideas got their present shape; and without
+    /// a record, reconciliation would draw the same link again the next time
+    /// either side is touched, which is how a settled question becomes a
+    /// recurring one.
+    pub fn resolve_relation(&mut self, relation_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE relations SET resolved_at = ?2 WHERE id = ?1 AND resolved_at IS NULL",
+            params![relation_id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// Reword an idea by hand.
+    ///
+    /// Written as a revision, exactly as the model's own rewrites are, so the
+    /// previous wording is kept and `revert_revision` undoes this for free.
+    /// A person editing their own idea should not be a less reversible act
+    /// than a model editing it for them.
+    pub fn set_claim(&mut self, idea_id: i64, claim: &str) -> Result<()> {
+        let claim = claim.trim();
+        if claim.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now().to_rfc3339();
+        let tx = self.conn.transaction()?;
+        let prev: String =
+            tx.query_row("SELECT claim FROM ideas WHERE id = ?1", [idea_id], |r| r.get(0))?;
+        if prev == claim {
+            return Ok(());
+        }
+        tx.execute(
+            "INSERT INTO idea_revisions (idea_id, prev_claim, new_claim, verdict, confidence, created_at)
+             VALUES (?1, ?2, ?3, 'edited', 1.0, ?4)",
+            params![idea_id, prev, claim, now],
+        )?;
+        tx.execute(
+            "UPDATE ideas SET claim = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
+            params![idea_id, claim, now],
+        )?;
+        // The vector described the old wording.
         tx.execute("DELETE FROM embeddings WHERE idea_id = ?1", [idea_id])?;
         tx.commit()?;
         Ok(())
@@ -2395,5 +2629,209 @@ mod tests {
             store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
         store.conn.execute("DELETE FROM sessions WHERE id = ?1", [id]).unwrap();
         assert!(store.turns(id).unwrap().is_empty(), "cascade did not fire");
+    }
+
+    /// Two ideas, each quoting its own turn, in one archived session — the
+    /// minimum that puts a pair of ideas on the map, since an idea with no
+    /// evidence behind it is not drawn at all.
+    #[cfg(test)]
+    fn two_ideas(store: &mut Store) -> (i64, i64) {
+        use crate::extract::verify::{self, Turn};
+        use crate::extract::{Extraction, VerifiedIdea};
+        use crate::llm::types::RawIdea;
+
+        let messages = vec![
+            Message { role: Role::User, content: "working late is worth it".into() },
+            Message { role: Role::Assistant, content: "say more".into() },
+            Message { role: Role::User, content: "working late costs more than it earns".into() },
+        ];
+        let rendered = transcript::render(&messages);
+        let session_id = store.archive_session(&rendered, "m", Utc::now(), None).unwrap();
+        let turns: Vec<Turn> = store.verify_turns(session_id).unwrap();
+
+        let idea = |claim: &str, quote: &str| RawIdea {
+            claim: claim.into(),
+            title: String::new(),
+            quote: quote.into(),
+            reasoning: String::new(),
+            category: "work".into(),
+            notes: vec![],
+        };
+        let ideas: Vec<VerifiedIdea> = [
+            idea("Working late is worth it", "working late is worth it"),
+            idea("Working late costs more than it earns", "working late costs more than it earns"),
+        ]
+        .into_iter()
+        .map(|raw| {
+            let located = verify::verify(&raw, &turns).expect("quote should verify");
+            VerifiedIdea { raw, located }
+        })
+        .collect();
+
+        store
+            .save_extraction(
+                session_id,
+                &Extraction {
+                    ideas,
+                    rejected: vec![],
+                    retried: false,
+                    conversation: Default::default(),
+                    title: String::new(),
+                },
+                "test",
+                "m",
+            )
+            .unwrap();
+
+        let stored = store.ideas(None).unwrap();
+        assert_eq!(stored.len(), 2);
+        (stored[0].id, stored[1].id)
+    }
+
+    /// A contradiction the person has settled must stop being drawn, and stop
+    /// being brought up on either idea's file — but must still be on record,
+    /// or reconciliation redraws it the next time either side is touched.
+    #[test]
+    fn a_settled_contradiction_stops_being_asked_about() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (a, b) = two_ideas(&mut store);
+        store
+            .conn
+            .execute(
+                "INSERT INTO relations (idea_a, idea_b, kind, confidence, reasoning, created_at)
+                 VALUES (?1, ?2, 'contradicts', 0.9, 'both cannot hold', ?3)",
+                params![a.min(b), a.max(b), Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+
+        let drawn = |s: &Store| {
+            s.graph(None).unwrap().edges.into_iter().filter(|e| e.kind == "contradicts").count()
+        };
+        assert_eq!(drawn(&store), 1, "drawn before it is settled");
+        let listed = store.idea_view(a).unwrap().contradictions;
+        assert_eq!(listed.len(), 1, "and named on the idea's own file");
+        assert_eq!(listed[0].other_id, b, "naming the other side, not itself");
+
+        store.resolve_relation(listed[0].relation_id).unwrap();
+
+        assert_eq!(drawn(&store), 0, "settled links are not drawn");
+        assert!(store.idea_view(a).unwrap().contradictions.is_empty());
+        assert!(store.idea_view(b).unwrap().contradictions.is_empty(), "from both sides");
+        let still_there: i64 =
+            store.conn.query_row("SELECT COUNT(*) FROM relations", [], |r| r.get(0)).unwrap();
+        assert_eq!(still_there, 1, "kept on record, not deleted");
+    }
+
+    /// Rewording by hand has to be as reversible as the model rewording it,
+    /// which means going through the same revision trail.
+    #[test]
+    fn rewording_an_idea_by_hand_can_be_undone() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (id, _) = two_ideas(&mut store);
+        let was = store.idea_view(id).unwrap().claim;
+
+        store.set_claim(id, "Working late is rarely worth it").unwrap();
+        let view = store.idea_view(id).unwrap();
+        assert_eq!(view.claim, "Working late is rarely worth it");
+        assert_eq!(view.revisions.len(), 1, "the edit is on the record");
+        assert_eq!(view.revisions[0].prev_claim, was);
+
+        store.revert_revision(view.revisions[0].id).unwrap();
+        assert_eq!(store.idea_view(id).unwrap().claim, was);
+
+        // An edit that changes nothing should not litter the trail.
+        store.set_claim(id, &was).unwrap();
+        store.set_claim(id, "   ").unwrap();
+        assert_eq!(store.idea_view(id).unwrap().revisions.len(), 1);
+    }
+
+    /// The load-bearing test for paragraphing: breaking a turn up must not
+    /// move a highlight by a single byte. Provenance is a byte range into the
+    /// turn's exact text, and this is the change most able to break it
+    /// silently — a highlight on the wrong words looks perfectly fine.
+    #[test]
+    fn paragraph_breaks_do_not_move_a_highlight() {
+        use crate::extract::verify::{self, Turn};
+        use crate::extract::{Extraction, VerifiedIdea};
+        use crate::llm::types::RawIdea;
+
+        let long = format!(
+            "caf\u{e9} \u{1F600} thinking out loud here. {}latency is the real problem. {}",
+            "Filler sentence one to make this long. ".repeat(6),
+            "Filler sentence two to close it off. ".repeat(6),
+        );
+        let mut store = Store::open_in_memory().unwrap();
+        let rendered = transcript::render(&[Message { role: Role::User, content: long.clone() }]);
+        let session_id = store.archive_session(&rendered, "m", Utc::now(), None).unwrap();
+
+        let turns: Vec<Turn> = store.verify_turns(session_id).unwrap();
+        let raw = RawIdea {
+            claim: "Latency is the real problem".into(),
+            title: String::new(),
+            quote: "latency is the real problem".into(),
+            reasoning: String::new(),
+            category: "perf".into(),
+            notes: vec![],
+        };
+        let located = verify::verify(&raw, &turns).expect("quote should verify");
+        store
+            .save_extraction(
+                session_id,
+                &Extraction {
+                    ideas: vec![VerifiedIdea { raw, located }],
+                    rejected: vec![],
+                    retried: false,
+                    conversation: Default::default(),
+                    title: String::new(),
+                },
+                "test",
+                "m",
+            )
+            .unwrap();
+
+        // `save_extraction` is the pre-reconciliation path and does not set a
+        // category — real ideas get theirs from `apply_decision`. Set it here
+        // so the join that carries a tag through to a highlight is exercised.
+        store.conn.execute("UPDATE ideas SET category = 'perf'", []).unwrap();
+
+        let turn_id = turns[0].id;
+        let breaks = crate::extract::paragraphs::locate(
+            &turns[0].text,
+            &["latency is the real problem.".into()],
+        );
+        assert_eq!(breaks.len(), 1, "the fixture should offer exactly one break");
+        store.set_paragraphs(turn_id, &breaks, "test").unwrap();
+
+        let view = store.conversation_view(session_id).unwrap();
+        let segments = &view.turns[0].segments;
+
+        // Nothing was added, removed or reordered.
+        assert_eq!(
+            segments.iter().map(|s| s.text.as_str()).collect::<String>(),
+            turns[0].text,
+            "the text must survive paragraphing character for character"
+        );
+        // The highlight is still on exactly the words it was taken from.
+        let lit: Vec<&Segment> = segments.iter().filter(|s| s.idea_id.is_some()).collect();
+        assert_eq!(lit.len(), 1);
+        assert_eq!(lit[0].text, "latency is the real problem");
+        assert_eq!(lit[0].category.as_deref(), Some("perf"), "and carries its tag's name");
+        // And there are now two paragraphs where there was one.
+        assert_eq!(segments.iter().filter(|s| s.paragraph_start).count(), 1);
+    }
+
+    /// With no breaks recorded, a turn must come back exactly as it always has.
+    #[test]
+    fn a_turn_nobody_has_broken_up_is_unchanged() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (a, _) = two_ideas(&mut store);
+        let session_id = store.idea_view(a).unwrap().evidence[0].session_id;
+        let view = store.conversation_view(session_id).unwrap();
+        for turn in &view.turns {
+            assert!(
+                !turn.segments.iter().any(|s| s.paragraph_start),
+                "no breaks recorded, so nothing opens a paragraph"
+            );
+        }
     }
 }

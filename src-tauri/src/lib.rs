@@ -155,6 +155,8 @@ pub fn run() {
             commands::delete_turn,
             commands::rewind_conversation,
             commands::delete_idea,
+            commands::resolve_relation,
+            commands::edit_idea,
             commands::get_settings,
             commands::save_settings,
             commands::active_models,

@@ -15,6 +15,7 @@ pub mod embedded;
 pub mod meter;
 pub mod ollama;
 pub mod openai_compat;
+pub mod pulse;
 pub mod types;
 
 use async_trait::async_trait;

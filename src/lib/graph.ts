@@ -21,6 +21,10 @@ export interface GraphNode {
 }
 
 export interface GraphEdge {
+  /** The stored link this came from, where there is one. Structural edges —
+   *  a conversation to its ideas, a subject chain — are computed rather than
+   *  stored, so they have none and nothing can be done to them. */
+  id?: number;
   source: string;
   target: string;
   kind: "from" | "related" | "contradicts" | "category";

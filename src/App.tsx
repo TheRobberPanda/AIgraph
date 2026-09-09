@@ -44,6 +44,7 @@ import { thinkingMessage } from "./lib/waiting";
 import {
   extractionProgress,
   extractNow,
+  pace,
   stopDigest,
   onExtractionProgress,
   type ExtractionProgress,
@@ -1007,7 +1008,9 @@ export default function App() {
                         `${digesting.running.index} of ${digesting.running.total} · `}
                       {digesting.stopping
                         ? "stopping after this one"
-                        : PHASE_WORD[digesting.running.phase] ?? digesting.running.phase}
+                        : (pace(digesting.running) ??
+                          PHASE_WORD[digesting.running.phase] ??
+                          digesting.running.phase)}
                     </span>
                     {/* Nothing to press once a stop is already coming, and a
                         button still offering "Stop" after you pressed Stop is

@@ -159,6 +159,12 @@ pub struct RunningExtraction {
     /// A phase name says what is happening; these say how much is left.
     pub index: i64,
     pub total: i64,
+    /// Characters of reply that have come back from the model so far, and how
+    /// long it has been since the last of them arrived. Only a streamed read
+    /// reports these; elsewhere they stay 0 and None, which the screen reads
+    /// as "no word either way" rather than as "nothing is happening".
+    pub received: u64,
+    pub quiet_ms: Option<u64>,
 }
 
 /// A Make-tab conversation in progress.
@@ -656,6 +662,7 @@ pub async fn extract_session_inner(
 
     let started = chrono::Utc::now();
     crate::llm::meter::reset();
+    crate::llm::pulse::reset();
     state
         .store
         .lock()
@@ -673,6 +680,9 @@ pub async fn extract_session_inner(
             // Filled in by `set_running` from the drain's own position.
             index: 0,
             total: 0,
+            // Likewise: `set_running` reads these from the running count.
+            received: 0,
+            quiet_ms: None,
         }),
     )
     .await;
@@ -685,12 +695,28 @@ pub async fn extract_session_inner(
         let handle = app.clone();
         tauri::async_runtime::spawn(async move {
             use tauri::Manager;
-            while let Some(phase) = rx.recv().await {
+            // Phases arrive when they change, which during a long read is
+            // almost never. The tick is what makes the screen move while a
+            // single request is in flight: it re-reads how much has come back
+            // and re-emits, so the difference between working and hung is
+            // visible without waiting for the whole thing to finish.
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                let phase = tokio::select! {
+                    received = rx.recv() => match received {
+                        Some(phase) => Some(phase),
+                        None => break,
+                    },
+                    _ = tick.tick() => None,
+                };
                 let state = handle.state::<AppState>();
                 let mut p = state.progress.lock().await;
-                if let Some(r) = p.running.as_mut() {
+                let Some(r) = p.running.as_mut() else { continue };
+                if let Some(phase) = phase {
                     r.phase = phase;
                 }
+                (r.received, r.quiet_ms) = crate::llm::pulse::read();
                 let snapshot = p.clone();
                 drop(p);
                 let _ = app.emit("extraction:progress", snapshot);
@@ -764,7 +790,11 @@ pub async fn extract_session_inner(
             Ok(kept)
         }
         Err(e) => {
-            let msg = e.to_string();
+            // Which model refused, appended rather than prefixed so the error
+            // kind still leads and can still be matched on. Without this the
+            // stalled list says what went wrong but never who said it, which
+            // is half the answer when several providers are configured.
+            let msg = format!("{e} · {provider_label}/{model}");
             // Back to `pending`, not `failed` — a model that was merely unloaded
             // shouldn't cost the user their session permanently.
             let _ = state.store.lock().await.set_extract_state(session_id, "pending", Some(&msg));
@@ -804,7 +834,8 @@ async fn set_running(app: &tauri::AppHandle, state: &AppState, running: Option<R
     let stopping = *state.stop_drain.lock().await;
     let snapshot = {
         let mut p = state.progress.lock().await;
-        p.running = running.map(|r| RunningExtraction { index, total, ..r });
+        let (received, quiet_ms) = crate::llm::pulse::read();
+        p.running = running.map(|r| RunningExtraction { index, total, received, quiet_ms, ..r });
         p.pending = state.store.lock().await.diagnostics().map(|d| d.sessions_pending).unwrap_or(0);
         p.stopping = stopping;
         p.clone()
@@ -962,9 +993,19 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
                     error = %e,
                     "extraction deferred"
                 );
-                // Usually means no model is reachable, so the rest of the queue
-                // would fail the same way.
-                break;
+                // Only a provider that cannot be reached stops the queue —
+                // there, every remaining conversation would fail the same way
+                // and the backoff is the right place to wait.
+                //
+                // Anything else is about *this* conversation: a quote that
+                // would not verify, output that would not parse, a length
+                // limit. Stopping the whole drain for one of those meant a
+                // single awkward conversation silently blocked every other
+                // one behind it — which reads, from the outside, as reading
+                // being broken altogether.
+                if e.starts_with("provider unavailable") {
+                    break;
+                }
             }
         }
     }
@@ -1227,6 +1268,83 @@ async fn reconcile_and_save(
     state.store.lock().await.save_rejections(session_id, extraction).map_err(|e| e.to_string())?;
 
     condense_replies(state, session_id, adjudicator.as_ref(), model).await;
+    break_paragraphs(state, session_id, adjudicator.as_ref(), model).await;
+    Ok(())
+}
+
+/// Work out where the paragraphs go in a long turn, after the fact.
+///
+/// Best-effort, like condensing: a failure leaves the turn as one block, which
+/// is exactly the state it is in now and which everything already renders.
+///
+/// Nothing here writes to the turn. The model returns quoted openings, they
+/// are located in the text by search, and only offsets survive — so the worst
+/// this can do is lay a turn out badly, never move a highlight off the words
+/// it belongs to.
+async fn break_paragraphs(
+    state: &AppState,
+    session_id: i64,
+    model: &dyn IdeaExtractor,
+    model_name: &str,
+) {
+    let long = match state
+        .store
+        .lock()
+        .await
+        .turns_needing_paragraphs(session_id, crate::extract::paragraphs::WORTH_BREAKING)
+    {
+        Ok(t) if !t.is_empty() => t,
+        _ => return,
+    };
+
+    let input: Vec<(i64, String)> = long.iter().map(|(_, ord, t)| (*ord, t.clone())).collect();
+    let found = match crate::extract::paragraphs::run(model, &input).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not find paragraph breaks; leaving the text as one block");
+            return;
+        }
+    };
+
+    let store = state.store.lock().await;
+    for b in found {
+        let Some((turn_id, _, text)) = long.iter().find(|(_, ord, _)| *ord == b.turn) else {
+            continue;
+        };
+        let offsets = crate::extract::paragraphs::locate(text, &b.breaks);
+        // Written even when empty, so a turn that is genuinely one thought is
+        // not asked about again on every later run.
+        let _ = store.set_paragraphs(*turn_id, &offsets, model_name);
+    }
+}
+
+/// Settle a contradiction the map has drawn.
+///
+/// The person, not the model, decides these. Reconciliation is good at
+/// noticing that two claims cannot both stand and has no way at all to know
+/// which one the person still believes — so the honest thing is to say so and
+/// let them settle it, rather than picking one quietly.
+#[tauri::command]
+pub async fn resolve_relation(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    relation_id: i64,
+) -> Result<(), String> {
+    state.store.lock().await.resolve_relation(relation_id).map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+/// Reword an idea by hand.
+#[tauri::command]
+pub async fn edit_idea(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    idea_id: i64,
+    claim: String,
+) -> Result<(), String> {
+    state.store.lock().await.set_claim(idea_id, &claim).map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
     Ok(())
 }
 

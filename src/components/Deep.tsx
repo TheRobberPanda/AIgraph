@@ -1,16 +1,37 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Markdown from "./Markdown";
 import Sheet from "./Sheet";
+import Resolve from "./Resolve";
 import { IconChevron } from "./Icons";
 import { dateTime, plainDate } from "../lib/format";
+import { categoryColor } from "../lib/categories";
 import {
   conversationView,
   ideaDeepDive,
   ideaView,
   revertRevision,
   type ConversationView,
+  type Segment,
   type IdeaView,
 } from "../lib/views";
+
+/**
+ * Group a turn's runs into paragraphs.
+ *
+ * A long turn was one block with newlines preserved by CSS, which is to say a
+ * wall — and a wall is not reread. The breaks come from the record rather than
+ * from the text, so grouping is the only thing left to do here: everything
+ * that decided *where* they go has already happened, and was verified against
+ * the words themselves.
+ */
+function paragraphs(segments: Segment[]): Segment[][] {
+  const out: Segment[][] = [];
+  for (const seg of segments) {
+    if (out.length === 0 || seg.paragraph_start) out.push([]);
+    out[out.length - 1].push(seg);
+  }
+  return out;
+}
 
 /**
  * Notes taken alongside an idea.
@@ -160,8 +181,10 @@ export function ConversationFile({
           <div className="deep-transcript" ref={transcriptRef}>
             {view.turns.map((turn) =>
               turn.role === "user" ? (
-                <p key={turn.id} className="turn user">
-                  {turn.segments.map((seg, i) =>
+                <div key={turn.id} className="turn user">
+                  {paragraphs(turn.segments).map((para, p) => (
+                  <p key={p} className="turn-para">
+                  {para.map((seg, i) =>
                     seg.idea_id === null ? (
                       <span key={i}>{seg.text}</span>
                     ) : (
@@ -169,6 +192,11 @@ export function ConversationFile({
                         key={i}
                         className={seg.idea_id === trace ? "extracted lit" : "extracted"}
                         data-idea={seg.idea_id ?? undefined}
+                        style={
+                          {
+                            "--tag-color": categoryColor(seg.category ?? ""),
+                          } as CSSProperties
+                        }
                         onClick={() => seg.idea_id && setOpenIdea(seg.idea_id)}
                       >
                         {seg.text}
@@ -180,7 +208,9 @@ export function ConversationFile({
                       </mark>
                     ),
                   )}
-                </p>
+                  </p>
+                  ))}
+                </div>
               ) : (
                 <Reply
                   key={turn.id}
@@ -323,6 +353,13 @@ export function IdeaFile({
   const [error, setError] = useState<string | null>(null);
   const [dive, setDive] = useState<string | null>(null);
   const [diving, setDiving] = useState(false);
+  /** A contradiction being settled, opened over this file. */
+  const [settling, setSettling] = useState<{
+    relationId: number;
+    a: { idea_id: number; claim: string };
+    b: { idea_id: number; claim: string };
+    reasoning?: string;
+  } | null>(null);
 
   const load = () => ideaView(ideaId).then(setView).catch((e) => setError(String(e)));
 
@@ -400,6 +437,32 @@ export function IdeaFile({
             </div>
           )}
 
+          {/* Reconciliation has recorded these since it started judging pairs,
+              and the map has drawn them — but the idea's own file, the one
+              place somebody reads the idea properly, never mentioned them.
+              Here, and actionable, because a tension you cannot act on is
+              just a complaint. */}
+          {view.contradictions.map((c) => (
+            <div key={c.relation_id} className="at-odds">
+              <p className="at-odds-head">This sits badly with</p>
+              <p className="at-odds-claim">{c.other_claim}</p>
+              {c.reasoning && <p className="blurb">{c.reasoning}</p>}
+              <button
+                className="btn subtle"
+                onClick={() =>
+                  setSettling({
+                    relationId: c.relation_id,
+                    a: { idea_id: view.id, claim: view.claim },
+                    b: { idea_id: c.other_id, claim: c.other_claim },
+                    reasoning: c.reasoning ?? undefined,
+                  })
+                }
+              >
+                Settle it
+              </button>
+            </div>
+          ))}
+
           {/* One quiet line. The wording, the date and the confidence were
               three lines of furniture around one fact; what actually has to
               survive is the undo, because rewriting is the only thing here
@@ -434,6 +497,17 @@ export function IdeaFile({
             </button>
           ))}
         </>
+      )}
+
+      {settling && (
+        <Resolve
+          a={settling.a}
+          b={settling.b}
+          relationId={settling.relationId}
+          reasoning={settling.reasoning}
+          onClose={() => setSettling(null)}
+          onChanged={load}
+        />
       )}
     </div>
   );

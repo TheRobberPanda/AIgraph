@@ -1538,21 +1538,26 @@ blockquote {
 }
 .deep-transcript .turn.user { padding-top: 0.1rem; padding-bottom: 0.1rem; }
 
+/* Highlights are tinted with their idea's own subject colour, so a mark in the
+   transcript and its node on the map are recognisably the same thing. The
+   colour arrives as an inline `--tag-color`; the gold below is the fallback
+   for an idea that never got a subject. */
 .extracted {
+  --tag-color: var(--gold);
   position: relative;
-  background: color-mix(in srgb, var(--gold) 22%, transparent);
-  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--gold) 55%, transparent);
+  background: color-mix(in srgb, var(--tag-color) 22%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--tag-color) 55%, transparent);
   border-radius: 2px; padding: 0.03em 0.12em; cursor: pointer;
 }
-.extracted:hover { background: color-mix(in srgb, var(--gold) 38%, transparent); }
+.extracted:hover { background: color-mix(in srgb, var(--tag-color) 38%, transparent); }
 /* Pointed at from the list beside it. Brighter than hover and outlined, so it
    is findable at a glance after the scroll lands rather than needing to be
    hunted among the other highlights. */
 .extracted.lit {
-  background: color-mix(in srgb, var(--gold) 52%, transparent);
+  background: color-mix(in srgb, var(--tag-color) 52%, transparent);
   box-shadow:
-    inset 0 -1px 0 var(--gold),
-    0 0 0 2px color-mix(in srgb, var(--gold) 45%, transparent);
+    inset 0 -1px 0 var(--tag-color),
+    0 0 0 2px color-mix(in srgb, var(--tag-color) 45%, transparent);
   transition: background 120ms ease, box-shadow 120ms ease;
 }
 .why {
@@ -2644,3 +2649,41 @@ blockquote {
   padding: 0.2rem 0.35rem;
   font-size: 0.72rem;
 }
+
+/* ---- Settling a contradiction ---- */
+
+.resolve-sides { list-style: none; margin: 0.8rem 0; padding: 0; display: grid; gap: 0.7rem; }
+/* The two sides are deliberately identical in weight. Making either look like
+   the default answer would be the app taking a side it cannot know. */
+.resolve-side {
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface);
+  display: grid; gap: 0.5rem;
+}
+.resolve-claim { margin: 0; font-size: 0.95rem; line-height: 1.5; }
+.resolve-edit {
+  width: 100%; resize: vertical; font: inherit; line-height: 1.5;
+  padding: 0.5rem 0.6rem;
+  color: var(--fg); background: var(--surface-lift);
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.resolve-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.relation-do { margin-top: 0.35rem; font-size: 0.72rem; color: var(--muted); }
+
+/* An idea at odds with another, on its own file. */
+.at-odds {
+  margin: 0.7rem 0; padding: 0.6rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  border-radius: 10px; background: var(--surface);
+  display: grid; gap: 0.4rem; justify-items: start;
+}
+.at-odds-head {
+  margin: 0; font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--danger);
+}
+.at-odds-claim { margin: 0; font-size: 0.9rem; line-height: 1.5; }
+/* Paragraphs inside one turn. The turn is still one block visually — these
+   only give the eye somewhere to rest inside it. */
+.turn.user .turn-para { margin: 0 0 0.7rem; }
+.turn.user .turn-para:last-child { margin-bottom: 0; }

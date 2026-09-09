@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS relations (
     -- worse than none.
     reasoning  TEXT,
     created_at TEXT NOT NULL,
+    -- Set once the person has dealt with this link; see `migrate`.
+    resolved_at TEXT,
     UNIQUE (idea_a, idea_b, kind)
 );
 
@@ -134,6 +136,17 @@ CREATE TABLE IF NOT EXISTS nudges (
 -- so they are filtered on read rather than silently mixed.
 -- A short version of one answer, made after the fact. The answer itself is
 -- never altered — this sits beside it in `turns`.
+-- Where a long turn's paragraphs start: byte offsets into `turns.text`, as a
+-- JSON array. Beside the turn rather than in it, deliberately — every idea's
+-- provenance is a byte range into that exact text, so nothing here is allowed
+-- to be able to edit it. The worst this table can do is lay a turn out badly.
+CREATE TABLE IF NOT EXISTS turn_paragraphs (
+    turn_id    INTEGER PRIMARY KEY REFERENCES turns(id) ON DELETE CASCADE,
+    offsets    TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS reply_digests (
     turn_id    INTEGER PRIMARY KEY REFERENCES turns(id) ON DELETE CASCADE,
     content    TEXT NOT NULL,
@@ -232,6 +245,13 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // anything was asked why, and an empty string would be indistinguishable
         // from a reason the model declined to give.
         conn.execute_batch("ALTER TABLE relations ADD COLUMN reasoning TEXT;")?;
+    }
+    if !relation_cols.iter().any(|c| c == "resolved_at") {
+        // A contradiction the person has dealt with — by rewording one side,
+        // deleting one, or deciding both can stand. Kept rather than deleted:
+        // the pair is still true history, and reconciliation would otherwise
+        // draw the same link again the next time either idea is touched.
+        conn.execute_batch("ALTER TABLE relations ADD COLUMN resolved_at TEXT;")?;
     }
 
     let session_cols: Vec<String> = conn

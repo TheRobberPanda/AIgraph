@@ -64,6 +64,10 @@ export interface RunningExtraction {
   /** Which of the queued conversations this is, and how many there were. */
   index: number;
   total: number;
+  /** Characters of reply back from the model so far, and how long since the
+   *  last of them arrived. Only a streamed read reports these. */
+  received: number;
+  quiet_ms: number | null;
 }
 
 export interface LastExtraction {
@@ -147,6 +151,21 @@ export function stopDigest(): Promise<void> {
 }
 
 
+/**
+ * Settle a contradiction: it stops being drawn and stops being brought up.
+ *
+ * Kept on record rather than deleted — the pair really was judged
+ * incompatible, and without the record it would simply be drawn again.
+ */
+export function resolveRelation(relationId: number): Promise<void> {
+  return invoke("resolve_relation", { relationId });
+}
+
+/** Reword an idea by hand. Kept as a revision, so it can be reverted. */
+export function editIdea(ideaId: number, claim: string): Promise<void> {
+  return invoke("edit_idea", { ideaId, claim });
+}
+
 /** Remove one recorded idea and everything supporting it. */
 export function deleteIdea(ideaId: number): Promise<void> {
   return invoke("delete_idea", { ideaId });
@@ -197,4 +216,23 @@ export interface Stalled {
  */
 export function extractionTrouble(): Promise<Stalled[]> {
   return invoke<Stalled[]>("extraction_trouble");
+}
+
+/**
+ * How a read in flight is going, in a few words.
+ *
+ * Elapsed time alone cannot tell a working read from a hung one — it counts up
+ * at the same rate either way. What has actually come back can, so that is
+ * what this says when there is anything to say.
+ */
+export function pace(r: RunningExtraction): string | null {
+  if (r.received === 0) return null;
+  const back =
+    r.received < 1000 ? `${r.received} back` : `${(r.received / 1000).toFixed(1)}k back`;
+  // Several seconds of nothing after something is worth naming. Below that it
+  // is just the gap between frames, and saying so every time would be noise.
+  if (r.quiet_ms !== null && r.quiet_ms > 4000) {
+    return `${back}, quiet ${Math.round(r.quiet_ms / 1000)}s`;
+  }
+  return back;
 }

@@ -2,6 +2,7 @@
 
 pub mod closing;
 pub mod deepen;
+pub mod paragraphs;
 pub mod prompt;
 pub mod replies;
 pub mod style;

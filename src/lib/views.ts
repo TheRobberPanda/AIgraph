@@ -7,6 +7,10 @@ export interface Segment {
   claim: string | null;
   title: string | null;
   reasoning: string | null;
+  category: string | null;
+  /** This run opens a paragraph. Derived from stored offsets — the text itself
+   *  is never edited, so highlights cannot drift. */
+  paragraph_start: boolean;
 }
 
 export interface ViewTurn {
@@ -55,6 +59,17 @@ export interface IdeaView {
   weak: string[];
   evidence: IdeaEvidence[];
   revisions: IdeaRevision[];
+  /** What this idea is recorded as contradicting, and has not been settled. */
+  contradictions: Contradiction[];
+}
+
+/** Another idea that cannot be true at the same time as this one. */
+export interface Contradiction {
+  relation_id: number;
+  other_id: number;
+  other_claim: string;
+  other_title: string;
+  reasoning: string | null;
 }
 
 export function conversationView(sessionId: number): Promise<ConversationView> {

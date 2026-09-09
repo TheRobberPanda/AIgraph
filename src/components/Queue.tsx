@@ -3,6 +3,8 @@ import { deleteSession, type SessionSummary } from "../lib/chat";
 import {
   extractionProgress,
   extractionTrouble,
+  onExtractionProgress,
+  pace,
   pendingSessions,
   type ExtractionProgress,
   type Stalled,
@@ -30,6 +32,8 @@ export default function Queue({ onClose, onChanged }: { onClose: () => void; onC
   /** What went wrong, and what is still going. */
   const [trouble, setTrouble] = useState<Stalled[]>([]);
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
+  /** Which reason was just copied, so the button can say so briefly. */
+  const [copied, setCopied] = useState<number | null>(null);
 
   const refresh = () => {
     pendingSessions()
@@ -41,6 +45,19 @@ export default function Queue({ onClose, onChanged }: { onClose: () => void; onC
 
   useEffect(() => {
     void refresh();
+    // Live, not a snapshot. This panel opened, read the state once and then
+    // sat there — so a conversation that failed while it was open never
+    // appeared, and the one reason worth reading was the one it could not
+    // show. Every progress event is also the moment something may have
+    // changed here.
+    const stop = onExtractionProgress((p) => {
+      setProgress(p);
+      void extractionTrouble().then(setTrouble).catch(() => {});
+      void pendingSessions().then(setRows).catch(() => {});
+    });
+    return () => {
+      void stop.then((off) => off());
+    };
   }, []);
 
   return (
@@ -68,6 +85,7 @@ export default function Queue({ onClose, onChanged }: { onClose: () => void; onC
               {progress.running.total > 1 &&
                 `${progress.running.index} of ${progress.running.total} — `}
               {progress.running.phase}
+              {pace(progress.running) && ` · ${pace(progress.running)}`}
               {progress.stopping && " · stopping after this one"}
             </p>
           ) : (
@@ -110,6 +128,21 @@ export default function Queue({ onClose, onChanged }: { onClose: () => void; onC
                         place the actual reason is available, and an abridged
                         error is a reason nobody can act on. */}
                     <p className="path">{t.error}</p>
+                    {/* One click to hand the reason to someone who can act on
+                        it. Selecting text out of a panel that redraws whenever
+                        the queue moves is a fight nobody should have. */}
+                    <button
+                      className="btn subtle"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(
+                          `${t.title || `Conversation ${t.session_id}`}: ${t.error}`,
+                        );
+                        setCopied(t.session_id);
+                        window.setTimeout(() => setCopied(null), 1400);
+                      }}
+                    >
+                      {copied === t.session_id ? "Copied" : "Copy the reason"}
+                    </button>
                   </li>
                 ))}
               </ul>

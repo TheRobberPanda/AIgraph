@@ -177,6 +177,8 @@ struct StreamChunk {
 struct StreamChoice {
     #[serde(default)]
     delta: Delta,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -187,6 +189,112 @@ struct Delta {
     /// stream chain-of-thought here, separately from `content`.
     #[serde(default)]
     reasoning_content: Option<String>,
+}
+
+/// What came back over a streamed response.
+struct Streamed {
+    content: String,
+    finish_reason: Option<String>,
+    /// The person pressed Stop. Distinct from finishing, and from failing.
+    cancelled: bool,
+}
+
+/// Consume a server-sent-event body, handing every fragment to `on_chunk`.
+///
+/// Lifted out of `chat_stream` so extraction can stream too. The two want
+/// different things from the result — chat wants the text as it arrives,
+/// extraction wants to know it is still alive — but the framing is identical,
+/// and two copies of a hand-rolled SSE parser is one more than anybody should
+/// have to keep correct.
+async fn drain_sse(
+    resp: reqwest::Response,
+    on_chunk: &(dyn for<'a> Fn(ChunkKind, &'a str) + Send + Sync),
+) -> Result<Streamed, LlmError> {
+    // Buffer across chunks — an event can split anywhere, including inside a
+    // multibyte character, so decode only whole lines.
+    let mut full = String::new();
+    let mut finish_reason = None;
+    let mut buf = Vec::<u8>::new();
+    let mut stream = resp.bytes_stream();
+    let ticket = crate::llm::cancel::start();
+
+    while let Some(chunk) = stream.next().await {
+        // Stopped. Returning drops the body, which closes the connection,
+        // which is what actually makes the server stop working — a flag that
+        // only stopped this end reading would leave it filling a slot nobody
+        // is listening to. What arrived before the stop is kept: the person
+        // ended it, they did not hit an error.
+        if ticket.cancelled() {
+            return Ok(Streamed { content: full, finish_reason, cancelled: true });
+        }
+        buf.extend_from_slice(&chunk.map_err(|e| LlmError::Transport(e.to_string()))?);
+
+        while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
+            let line = String::from_utf8_lossy(&line_bytes);
+            let line = line.trim();
+
+            let Some(payload) = line.strip_prefix("data:") else {
+                continue; // comments, blank separators, other SSE fields
+            };
+            let payload = payload.trim();
+
+            if payload == "[DONE]" {
+                return Ok(Streamed { content: full, finish_reason, cancelled: false });
+            }
+            if payload.is_empty() {
+                continue;
+            }
+
+            // A failure can arrive mid-stream as a frame rather than a status,
+            // the same way OpenRouter answers 200 with the error in the body.
+            // Caught here so it reaches the retry ladder as a rejection rather
+            // than as an unparseable frame nobody looks at.
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+                if let Some(err) = v.get("error") {
+                    return Err(LlmError::Transport(error_text(err)));
+                }
+            }
+
+            // A malformed frame mid-stream should not throw away the reply
+            // the user is already reading. Skip it and keep going.
+            let Ok(parsed) = serde_json::from_str::<StreamChunk>(payload) else {
+                tracing::debug!(frame = %payload, "skipping unparseable SSE frame");
+                continue;
+            };
+
+            for choice in parsed.choices {
+                if let Some(reason) = choice.finish_reason {
+                    finish_reason = Some(reason);
+                }
+                // Shown, but deliberately not accumulated into `full`.
+                if let Some(text) = choice.delta.reasoning_content {
+                    if !text.is_empty() {
+                        on_chunk(ChunkKind::Reasoning, &text);
+                    }
+                }
+                if let Some(text) = choice.delta.content {
+                    if !text.is_empty() {
+                        on_chunk(ChunkKind::Content, &text);
+                        full.push_str(&text);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Streamed { content: full, finish_reason, cancelled: false })
+}
+
+/// The readable part of a provider's error object.
+fn error_text(err: &serde_json::Value) -> String {
+    let said = err
+        .get("message")
+        .and_then(|m| m.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| err.to_string());
+    let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(400);
+    format!("{code}: {said}")
 }
 
 #[async_trait]
@@ -244,67 +352,7 @@ impl ChatProvider for OpenAiCompat {
             return Err(LlmError::Transport(format!("{status}: {detail}")));
         }
 
-        // Server-sent events: `data: {...}` lines, terminated by `data: [DONE]`.
-        // Buffer across chunks — an event can split anywhere, including inside a
-        // multibyte character, so decode only whole lines.
-        let mut full = String::new();
-        let mut buf = Vec::<u8>::new();
-        let mut stream = resp.bytes_stream();
-        let ticket = crate::llm::cancel::start();
-
-        while let Some(chunk) = stream.next().await {
-            // Stopped. Returning drops the body, which closes the connection,
-            // which is what actually makes the server stop working — a flag
-            // that only stopped this end reading would leave it filling a slot
-            // nobody is listening to. What arrived before the stop is kept:
-            // the person ended it, they did not hit an error.
-            if ticket.cancelled() {
-                return Ok(full);
-            }
-            buf.extend_from_slice(&chunk.map_err(|e| LlmError::Transport(e.to_string()))?);
-
-            while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
-                let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
-                let line = String::from_utf8_lossy(&line_bytes);
-                let line = line.trim();
-
-                let Some(payload) = line.strip_prefix("data:") else {
-                    continue; // comments, blank separators, other SSE fields
-                };
-                let payload = payload.trim();
-
-                if payload == "[DONE]" {
-                    return Ok(full);
-                }
-                if payload.is_empty() {
-                    continue;
-                }
-
-                // A malformed frame mid-stream should not throw away the reply
-                // the user is already reading. Skip it and keep going.
-                let Ok(parsed) = serde_json::from_str::<StreamChunk>(payload) else {
-                    tracing::debug!(frame = %payload, "skipping unparseable SSE frame");
-                    continue;
-                };
-
-                for choice in parsed.choices {
-                    // Shown, but deliberately not accumulated into `full`.
-                    if let Some(text) = choice.delta.reasoning_content {
-                        if !text.is_empty() {
-                            on_chunk(ChunkKind::Reasoning, &text);
-                        }
-                    }
-                    if let Some(text) = choice.delta.content {
-                        if !text.is_empty() {
-                            on_chunk(ChunkKind::Content, &text);
-                            full.push_str(&text);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(full)
+        Ok(drain_sse(resp, on_chunk).await?.content)
     }
 
     fn model_id(&self) -> String {
@@ -388,21 +436,35 @@ impl OpenAiCompat {
     /// difference between "this provider does not work" and "this provider
     /// needs asking more simply".
     async fn attempt(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError> {
-        let first = self.structured(prompt, schema.clone(), true, true).await;
+        // Streamed only where the wait is long enough to be worth reporting on
+        // and the server is known to stream structured output. A local model
+        // answers from the same machine and already reports its own timings,
+        // so it stays on the path that has been working.
+        let stream = self.streams_extraction();
+
+        let first = self.structured(prompt, schema.clone(), true, true, stream).await;
         let Err(LlmError::Transport(msg)) = &first else { return first };
         if !looks_like_a_rejected_parameter(msg) {
             return first;
         }
 
+        // If streaming itself was the objection, the rungs below drop it along
+        // with everything else — so a server that will not stream a schema is
+        // asked again the old way rather than treated as broken.
         tracing::debug!(error = %msg, "retrying without the reasoning switches");
-        let second = self.structured(prompt, schema.clone(), false, true).await;
+        let second = self.structured(prompt, schema.clone(), false, true, false).await;
         let Err(LlmError::Transport(msg)) = &second else { return second };
         if !looks_like_a_rejected_parameter(msg) {
             return second;
         }
 
         tracing::debug!(error = %msg, "retrying without a response schema");
-        self.structured(prompt, schema, false, false).await
+        self.structured(prompt, schema, false, false, false).await
+    }
+
+    /// Whether extraction is worth streaming on this provider.
+    fn streams_extraction(&self) -> bool {
+        self.label == "openrouter"
     }
 }
 
@@ -432,13 +494,14 @@ impl OpenAiCompat {
         schema: serde_json::Value,
         disable_reasoning: bool,
         structured_output: bool,
+        stream: bool,
     ) -> Result<String, LlmError> {
         let messages = vec![Message { role: Role::User, content: prompt.to_string() }];
 
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
-            "stream": false,
+            "stream": stream,
             "temperature": 0.0,
             "max_tokens": EXTRACT_MAX_TOKENS,
             "response_format": {
@@ -467,6 +530,41 @@ impl OpenAiCompat {
             return Err(LlmError::Transport(format!("{status}: {detail}")));
         }
 
+        // Streamed, so there is something to report while it runs. A single
+        // non-streamed request to a cloud model is minutes of silence, and
+        // elapsed time counts up at the same rate whether or not anything is
+        // coming back — which makes a working read and a hung one look
+        // identical. Every frame here says both how much has arrived and that
+        // it arrived just now.
+        if stream {
+            let streamed = drain_sse(resp, &|kind, text| {
+                if kind == ChunkKind::Content {
+                    crate::llm::pulse::bump(text.chars().count());
+                }
+            })
+            .await?;
+
+            if streamed.cancelled {
+                return Err(LlmError::Transport("the read was stopped".into()));
+            }
+            if streamed.content.trim().is_empty() {
+                return Err(LlmError::BadOutput(
+                    if streamed.finish_reason.as_deref() == Some("length") {
+                        format!("reply hit the {EXTRACT_MAX_TOKENS}-token limit before completing")
+                    } else {
+                        "the model returned an empty reply".to_string()
+                    },
+                ));
+            }
+            if streamed.finish_reason.as_deref() == Some("length") {
+                tracing::warn!(
+                    limit = EXTRACT_MAX_TOKENS,
+                    "extraction reply was truncated; salvaging whatever completed"
+                );
+            }
+            return Ok(streamed.content);
+        }
+
         // OpenRouter answers 200 with the failure in the body rather than in
         // the status. Read once and look, or a rejected request arrives as
         // "missing field `choices`" — which reads as the model misbehaving and
@@ -474,13 +572,7 @@ impl OpenAiCompat {
         let raw = resp.text().await.map_err(|e| LlmError::Transport(e.to_string()))?;
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
             if let Some(err) = v.get("error") {
-                let said = err
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| err.to_string());
-                let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(400);
-                return Err(LlmError::Transport(format!("{code}: {said}")));
+                return Err(LlmError::Transport(error_text(err)));
             }
         }
         let completion: Completion =
@@ -666,5 +758,42 @@ mod tests {
         for msg in ["500 Internal Server Error", "connection refused", "503: overloaded"] {
             assert!(!looks_like_a_rejected_parameter(msg), "should not retry: {msg}");
         }
+    }
+
+    /// Streaming exists to make a long cloud read reportable. A local server
+    /// answers from the same machine and already reports its own timings, so
+    /// it stays on the path that has been working — the point of the split is
+    /// that adding progress to one provider cannot regress the others.
+    #[test]
+    fn only_the_cloud_read_is_streamed() {
+        assert!(OpenAiCompat::new("https://openrouter.ai/api/v1", "m", None, "openrouter")
+            .streams_extraction());
+        for local in ["embedded", "lmstudio"] {
+            assert!(
+                !OpenAiCompat::new("http://127.0.0.1:8127", "m", None, local).streams_extraction(),
+                "{local} should be asked exactly as it is today"
+            );
+        }
+    }
+
+    /// A provider answering 200 with the failure in the body is the shape that
+    /// cost three rounds of fixes. Streamed, it arrives as a frame instead —
+    /// and has to come out reading like a rejection, or the ladder never
+    /// retries and it surfaces as an unparseable frame nobody looks at.
+    #[test]
+    fn an_error_frame_reads_as_a_refusal() {
+        let err =
+            serde_json::json!({ "code": 400, "message": "model does not support response_format" });
+        let text = error_text(&err);
+        assert_eq!(text, "400: model does not support response_format");
+        assert!(looks_like_a_rejected_parameter(&text), "must reach the simpler retry");
+    }
+
+    /// An error object with nothing readable in it still has to say something.
+    #[test]
+    fn an_error_without_a_message_still_says_something() {
+        let text = error_text(&serde_json::json!({ "kind": "overloaded" }));
+        assert!(text.starts_with("400: "), "a code to lead with: {text}");
+        assert!(text.contains("overloaded"), "and whatever was actually there: {text}");
     }
 }
