@@ -50,8 +50,16 @@ export default function Queue({ onClose, onChanged }: { onClose: () => void; onC
     // appeared, and the one reason worth reading was the one it could not
     // show. Every progress event is also the moment something may have
     // changed here.
+    // The progress event now ticks while a single read is in flight, so
+    // refetching the lists on every one of them would put four queries a
+    // second behind a panel that is only being looked at. The lists can only
+    // change when the read moves on, so that is when they are re-read.
+    let reading: number | null = null;
     const stop = onExtractionProgress((p) => {
       setProgress(p);
+      const at = p.running?.session_id ?? null;
+      if (at === reading) return;
+      reading = at;
       void extractionTrouble().then(setTrouble).catch(() => {});
       void pendingSessions().then(setRows).catch(() => {});
     });

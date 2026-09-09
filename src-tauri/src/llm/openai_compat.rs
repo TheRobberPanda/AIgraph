@@ -251,8 +251,8 @@ async fn drain_sse(
             // Caught here so it reaches the retry ladder as a rejection rather
             // than as an unparseable frame nobody looks at.
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
-                if let Some(err) = v.get("error") {
-                    return Err(LlmError::Transport(error_text(err)));
+                if let Some(said) = error_in(&v) {
+                    return Err(LlmError::Transport(said));
                 }
             }
 
@@ -284,6 +284,20 @@ async fn drain_sse(
     }
 
     Ok(Streamed { content: full, finish_reason, cancelled: false })
+}
+
+/// The failure in a response body or a stream frame, if there is one.
+///
+/// The key being *present* is not the question. Several OpenAI-compatible
+/// servers put `"error": null` in every ordinary chunk, so testing for the key
+/// alone reads a perfectly good reply as a refusal — and a refusal is answered
+/// by retrying more simply, which is how one wrong `is_some()` turned into
+/// asking a reasoning model to extract with its reasoning left on.
+fn error_in(v: &serde_json::Value) -> Option<String> {
+    match v.get("error") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(err) => Some(error_text(err)),
+    }
 }
 
 /// The readable part of a provider's error object.
@@ -448,9 +462,22 @@ impl OpenAiCompat {
             return first;
         }
 
-        // If streaming itself was the objection, the rungs below drop it along
-        // with everything else — so a server that will not stream a schema is
-        // asked again the old way rather than treated as broken.
+        // Streaming goes first, and alone, because it is the concession that
+        // costs nothing: without it the read is silent, and that is all. The
+        // rung below gives up the reasoning switches, which is the expensive
+        // one — a reasoning model asked to extract with its reasoning left on
+        // spends its whole budget thinking and answers with nothing. Bundling
+        // the two meant any objection at all, however unrelated, cost the
+        // switches as well.
+        if stream {
+            tracing::debug!(error = %msg, "retrying without streaming");
+            let unstreamed = self.structured(prompt, schema.clone(), true, true, false).await;
+            let Err(LlmError::Transport(msg)) = &unstreamed else { return unstreamed };
+            if !looks_like_a_rejected_parameter(msg) {
+                return unstreamed;
+            }
+        }
+
         tracing::debug!(error = %msg, "retrying without the reasoning switches");
         let second = self.structured(prompt, schema.clone(), false, true, false).await;
         let Err(LlmError::Transport(msg)) = &second else { return second };
@@ -571,8 +598,8 @@ impl OpenAiCompat {
         // never reaches the retry that would have asked more simply.
         let raw = resp.text().await.map_err(|e| LlmError::Transport(e.to_string()))?;
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(err) = v.get("error") {
-                return Err(LlmError::Transport(error_text(err)));
+            if let Some(said) = error_in(&v) {
+                return Err(LlmError::Transport(said));
             }
         }
         let completion: Completion =
@@ -795,5 +822,48 @@ mod tests {
         let text = error_text(&serde_json::json!({ "kind": "overloaded" }));
         assert!(text.starts_with("400: "), "a code to lead with: {text}");
         assert!(text.contains("overloaded"), "and whatever was actually there: {text}");
+    }
+
+    /// The regression that broke every streamed read the day it shipped.
+    ///
+    /// An ordinary chunk carrying `"error": null` was read as a refusal, which
+    /// killed the stream, which looked like a rejected parameter, which pushed
+    /// extraction onto the rung that stops disabling reasoning — and a
+    /// reasoning model then spent its whole budget thinking. One `is_some()`,
+    /// four steps, and the digest stops working.
+    #[test]
+    fn a_null_error_is_not_an_error() {
+        let ordinary: serde_json::Value = serde_json::from_str(
+            r#"{"id":"gen-1","choices":[{"delta":{"content":"{"}}],"error":null}"#,
+        )
+        .unwrap();
+        assert_eq!(error_in(&ordinary), None, "a null error field is not a failure");
+
+        let plain: serde_json::Value =
+            serde_json::from_str(r#"{"choices":[{"delta":{"content":"x"}}]}"#).unwrap();
+        assert_eq!(error_in(&plain), None);
+
+        let real: serde_json::Value =
+            serde_json::from_str(r#"{"error":{"code":429,"message":"rate limited"}}"#).unwrap();
+        assert_eq!(error_in(&real), Some("429: rate limited".into()));
+    }
+
+    /// Giving up the reasoning switches is the expensive concession, so it
+    /// must not be spent answering an objection to streaming. Streaming is
+    /// dropped on its own first; only then does anything else go.
+    #[test]
+    fn streaming_is_given_up_before_the_reasoning_switches() {
+        // Rung one and rung two must differ only in whether they stream, so
+        // that a server refusing to stream still gets a quiet request.
+        let openrouter = OpenAiCompat::new("https://openrouter.ai/api/v1", "m", None, "openrouter");
+        assert!(openrouter.streams_extraction());
+
+        let mut streamed_quiet = body();
+        openrouter.quieten_reasoning(&mut streamed_quiet);
+        assert_eq!(
+            streamed_quiet["reasoning"],
+            serde_json::json!({ "enabled": false }),
+            "the unstreamed retry still asks for reasoning to be off"
+        );
     }
 }
