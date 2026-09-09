@@ -2473,7 +2473,16 @@ blockquote {
 /* On a full page the picker belongs at the right edge, clear of the column the
    answers are read in. In the narrow advanced panel there is no right edge
    worth the name, so it stays stacked with everything else. */
-.make.roomy .make-picker { align-self: flex-end; width: min(30rem, 100%); }
+/* Right-aligned means the *label* sits at the right edge, not a 30rem box
+   whose contents happen to start well short of it. The picker shrink-wraps
+   its head and takes its width from the list only once that is open. */
+.make.roomy .make-picker {
+  align-self: flex-end;
+  align-items: flex-end;
+  width: auto;
+  max-width: min(30rem, 100%);
+}
+.make.roomy .make-picker-body { width: min(30rem, 100%); }
 .make-picker { display: flex; flex-direction: column; margin-bottom: 0.7rem; }
 .make-picker-head {
   display: flex; align-items: center; gap: 0.4rem;

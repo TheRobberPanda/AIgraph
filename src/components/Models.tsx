@@ -38,6 +38,18 @@ type Role = "chat" | "extraction";
  */
 type Source = "local" | "lmstudio" | "ollama" | "cloud";
 
+/**
+ * Whether using this sends transcripts off the machine.
+ *
+ * Module scope, not the component body. It was declared below its first use —
+ * `here`, which is built before it — and `const` bindings are in the temporal
+ * dead zone until their line runs. Only the cloud branch of that ternary calls
+ * it, so the Cloud API tab, and nothing else, threw
+ * "Cannot access 'isRemote' before initialization" on every render.
+ */
+const isRemote = (kind: string) =>
+  kind === "anthropic" || kind === "claudecli" || kind === "openrouter";
+
 const SOURCES: { id: Source; label: string }[] = [
   { id: "local", label: "Local" },
   { id: "lmstudio", label: "LM Studio" },
@@ -248,9 +260,6 @@ export default function Models() {
       claudecli: "Claude CLI (subscription)",
     })[kind] ?? kind;
 
-  const isRemote = (kind: string) =>
-    kind === "anthropic" || kind === "claudecli" || kind === "openrouter";
-
   /** Key-gated providers, detected only once usable — the cloud pickers. */
   const remote = servers.filter((s) => isRemote(s.kind) && chatModels(s).length > 0);
 
@@ -400,7 +409,14 @@ export default function Models() {
                                 disabled={busy !== null}
                                 onClick={() => void pick(role, s, m)}
                               >
-                                <span className="model-name">{modelName(m.id)}</span>
+                                {/* The whole id, not `modelName`. That strips
+                                    everything before a slash, which is right
+                                    for a local model's file path and wrong
+                                    here: on OpenRouter the prefix is the
+                                    vendor, so stripping it turns
+                                    "anthropic/claude-sonnet-4.5" into a name
+                                    that "google/claude-…" could also produce. */}
+                                <span className="model-name">{m.id}</span>
                                 {isChosen && <span className="tag ready">in use</span>}
                               </button>
                             </li>

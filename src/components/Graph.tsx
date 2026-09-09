@@ -761,7 +761,7 @@ export default function Graph({
           // radius grows with how many ideas share that hub, so each one still
           // gets enough arc length for its label.
           .distance((l) => {
-            const rules = ruleset(canvasRef.current?.clientWidth ?? 900);
+            const rules = ruleset(planWidth());
             if (l.kind !== "from") return rules.related;
             const n = orbitCount.get((l.source as Node).data.id) ?? 1;
             return rules.orbit + Math.max(0, n - 4) * rules.orbitGrowth;
@@ -772,7 +772,7 @@ export default function Graph({
       .force(
         "charge",
         forceManyBody<Node>().strength((n) => {
-          const rules = ruleset(canvasRef.current?.clientWidth ?? 900);
+          const rules = ruleset(planWidth());
           return rules.charge - n.r * rules.chargeByRadius;
         }),
       )
@@ -783,7 +783,7 @@ export default function Graph({
       .force(
         "collide",
         forceCollide<Node>().radius((n) => {
-          const rules = ruleset(canvasRef.current?.clientWidth ?? 900);
+          const rules = ruleset(planWidth());
           // Labels are not drawn in a panel, so reserving room for them there
           // only pushes everything apart for nothing.
           return n.r + rules.padding + n.labelHalf * rules.labelShare;
@@ -883,14 +883,43 @@ export default function Graph({
       // forces read them once when they are set — so nudge the simulation
       // hard enough to settle into the new spacing.
       settle = window.setTimeout(() => {
-        // d3 caches each force's initialisation, so re-seeding the links
-        // makes the distance accessor read the new rules.
+        // d3 precomputes every force's per-node values once, in `initialize`,
+        // so an accessor that reads the rules is only consulted then. Re-seeding
+        // the links made the *distance* accessor read the new rules — and left
+        // collision radii and charge strengths at whatever was computed the
+        // first time, which for a panel still hidden was the cramped set. That
+        // is what packed the full-page map together: padding of six and no room
+        // reserved for labels at all.
+        //
+        // Re-setting an accessor is how you ask d3 to initialise again; the
+        // functions are the same ones, they just have to be handed back.
         const sim = simRef.current;
         if (sim) {
           const link = sim.force("link") as
             | { links: (l: Link[]) => unknown; initialize?: unknown }
             | undefined;
           if (link && typeof link.links === "function") link.links(linksRef.current);
+
+          const collide = sim.force("collide") as
+            | { radius: (f: (n: Node) => number) => unknown }
+            | undefined;
+          if (collide && typeof collide.radius === "function") {
+            collide.radius((n: Node) => {
+              const rules = ruleset(planWidth());
+              return n.r + rules.padding + n.labelHalf * rules.labelShare;
+            });
+          }
+
+          const charge = sim.force("charge") as
+            | { strength: (f: (n: Node) => number) => unknown }
+            | undefined;
+          if (charge && typeof charge.strength === "function") {
+            charge.strength((n: Node) => {
+              const rules = ruleset(planWidth());
+              return rules.charge - n.r * rules.chargeByRadius;
+            });
+          }
+
           sim.alpha(0.8).restart();
           // Tick the restart out to its own minimum before fitting — the same
           // discipline the first build runs. Leaving the simulation to drift
@@ -986,6 +1015,22 @@ export default function Graph({
       toY: n.fy,
       t0: performance.now(),
     };
+  }
+
+  /**
+   * The width to plan the layout against.
+   *
+   * `clientWidth` is 0 whenever the panel is hidden — which in the simple
+   * layout is most of the time, since only one place is on screen at once.
+   * Zero is not a narrow panel, it is no measurement at all, and the forces
+   * read `width < 560` as "cramped side panel": orbits of 56 instead of 150,
+   * six pixels of padding instead of twenty-six. Ideas usually arrive while
+   * you are still on Think, so the full-page map was routinely laid out with
+   * the spacing meant for a column, and everything sat on top of everything.
+   */
+  function planWidth(): number {
+    const w = canvasRef.current?.clientWidth ?? 0;
+    return w > 0 ? w : 900;
   }
 
   function nodeAt(clientX: number, clientY: number): Node | null {
