@@ -213,8 +213,9 @@ export default function Settings() {
 
             <h3 className="section">The map</h3>
             <p className="blurb">
-              How the map draws itself. Node size and line weight only — never
-              what is on it.
+              How the map arranges itself — three ways of standing the same
+              material up, not three coats of paint. Nothing is ever hidden by
+              one: the map's job is to show everything you have thought.
             </p>
             <div className="row">
               {MAP_STYLES.map((m) => (

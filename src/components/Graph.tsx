@@ -183,14 +183,181 @@ function drawnRadius(base: number, scale: number, width: number, style: MapStyle
   return base * Math.max(0.35, Math.min(scale, 2)) * ruleset(width, style).nodeScale;
 }
 
-/** What each named look multiplies a node by. See `settings::MapStyle`. */
+/** What each arrangement multiplies a node's drawn radius by. */
 const STYLE_SCALE: Record<MapStyle, number> = {
-  constellation: 0.72,
-  bubbles: 1,
-  minimal: 0.5,
+  nodes: 0.72,
+  forest: 0.8,
+  galaxy: 0.72,
 };
 
-function ruleset(width: number, style: MapStyle = "constellation") {
+// ---------------------------------------------------------------- placed
+
+/** Where a galaxy's ideas sit, so the draw loop can turn them. */
+interface Orbiting {
+  node: Node;
+  hub: Node;
+  /** Distance from the hub it goes round. */
+  radius: number;
+  /** Where it started, in radians. */
+  angle: number;
+}
+
+/** Everything an arranged style needs beyond the node positions themselves. */
+interface Placed {
+  /** Rings to draw, as hub and radius. Galaxy only. */
+  rings: { hub: Node; radius: number }[];
+  orbits: Orbiting[];
+  /** Trunk feet, in world space. Forest only. */
+  trunks: { hub: Node; x: number; groundY: number }[];
+}
+
+const NOTHING_PLACED: Placed = { rings: [], orbits: [], trunks: [] };
+
+/** The conversation each idea came from, and the ideas each conversation has. */
+function hubsAndTheirIdeas(nodes: Node[], links: Link[]) {
+  const ideasOf = new Map<Node, Node[]>();
+  const hubs = nodes.filter((n) => n.data.kind === "conversation");
+  for (const h of hubs) ideasOf.set(h, []);
+  const loose: Node[] = [];
+  const claimed = new Set<Node>();
+  for (const l of links) {
+    if (l.kind !== "from") continue;
+    const hub = l.source as Node;
+    const idea = l.target as Node;
+    if (!ideasOf.has(hub)) continue;
+    ideasOf.get(hub)!.push(idea);
+    claimed.add(idea);
+  }
+  // An idea whose conversation was deleted still has to go somewhere: the map
+  // shows everything, and a node with nowhere to be is a node that vanishes.
+  for (const n of nodes) {
+    if (n.data.kind !== "conversation" && !claimed.has(n)) loose.push(n);
+  }
+  return { hubs, ideasOf, loose };
+}
+
+/**
+ * Ideas that link to one another, grouped.
+ *
+ * A galaxy's rings are these groups: a ring is a set of thoughts that belong
+ * together, so two ideas joined by a relation share an orbit rather than
+ * sitting at unrelated distances from the same centre.
+ */
+function ringsOf(ideas: Node[], links: Link[]): Node[][] {
+  const index = new Map(ideas.map((n, i) => [n, i]));
+  const parent = ideas.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (const l of links) {
+    if (l.kind === "from") continue;
+    const a = index.get(l.source as Node);
+    const b = index.get(l.target as Node);
+    if (a === undefined || b === undefined) continue;
+    parent[find(a)] = find(b);
+  }
+  const groups = new Map<number, Node[]>();
+  ideas.forEach((n, i) => {
+    const key = find(i);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(n);
+  });
+  // Ideas that belong together get a ring of their own; everything unlinked
+  // shares the outer ones. Giving each lone idea its own ring put six ideas on
+  // six radii at almost the same angle — a spiral arm, not a galaxy.
+  const together = [...groups.values()].filter((g) => g.length > 1).sort((a, b) => b.length - a.length);
+  const alone = [...groups.values()].filter((g) => g.length === 1).flat();
+
+  const rings = [...together];
+  // Split the loose ones when there are more than a ring can hold without
+  // their labels running into each other.
+  const PER_RING = 9;
+  for (let i = 0; i < alone.length; i += PER_RING) {
+    rings.push(alone.slice(i, i + PER_RING));
+  }
+  return rings;
+}
+
+/** Ideas in orbit around the conversation they came from. */
+function arrangeGalaxy(nodes: Node[], links: Link[]): Placed {
+  const { hubs, ideasOf, loose } = hubsAndTheirIdeas(nodes, links);
+  const placed: Placed = { rings: [], orbits: [], trunks: [] };
+
+  hubs.forEach((hub, i) => {
+    // A golden-angle spiral: galaxies do not sit on a grid, and this spaces
+    // them without any two landing at the same distance and angle. The first
+    // sits at the centre rather than a step out along the arm, so a folder
+    // with one or two conversations is not framed around an empty middle.
+    const away = i === 0 ? 0 : 430 * Math.sqrt(i);
+    const around = i * 2.399963;
+    hub.x = Math.cos(around) * away;
+    hub.y = Math.sin(around) * away;
+    hub.fx = hub.x;
+    hub.fy = hub.y;
+
+    ringsOf(ideasOf.get(hub) ?? [], links).forEach((ring, r) => {
+      const radius = 96 + r * 62;
+      placed.rings.push({ hub, radius });
+      ring.forEach((idea, k) => {
+        // Offset per ring so neighbouring orbits do not line their nodes up
+        // into spokes.
+        const angle = (k / ring.length) * Math.PI * 2 + r * 1.1;
+        placed.orbits.push({ node: idea, hub, radius, angle });
+      });
+    });
+  });
+
+  loose.forEach((n, i) => {
+    const away = 260 + i * 40;
+    n.x = Math.cos(i * 2.399963) * away;
+    n.y = Math.sin(i * 2.399963) * away;
+    n.fx = n.x;
+    n.fy = n.y;
+  });
+  return placed;
+}
+
+/** A tree per conversation, its ideas the roots beneath it. */
+function arrangeForest(nodes: Node[], links: Link[]): Placed {
+  const { hubs, ideasOf, loose } = hubsAndTheirIdeas(nodes, links);
+  const placed: Placed = { rings: [], orbits: [], trunks: [] };
+  const GROUND = 0;
+  const TRUNK = 150;
+  const SPACING = 340;
+
+  hubs.forEach((hub, i) => {
+    const x = (i - (hubs.length - 1) / 2) * SPACING;
+    hub.x = x;
+    hub.y = GROUND - TRUNK;
+    hub.fx = hub.x;
+    hub.fy = hub.y;
+    placed.trunks.push({ hub, x, groundY: GROUND });
+
+    // Roots: each level fans wider and sits deeper, so the whole thing reads
+    // downward from the trunk rather than as a second crown.
+    const ideas = ideasOf.get(hub) ?? [];
+    const perLevel = 3;
+    ideas.forEach((idea, k) => {
+      const level = Math.floor(k / perLevel) + 1;
+      const inLevel = ideas.length - level * perLevel >= 0 ? perLevel : ideas.length % perLevel;
+      const slot = k % perLevel;
+      const width = 46 + level * 34;
+      const across = inLevel === 1 ? 0 : (slot / Math.max(1, inLevel - 1) - 0.5) * 2 * width;
+      idea.x = x + across;
+      idea.y = GROUND + level * 76;
+      idea.fx = idea.x;
+      idea.fy = idea.y;
+    });
+  });
+
+  loose.forEach((n, i) => {
+    n.x = (i - (loose.length - 1) / 2) * 120;
+    n.y = GROUND + 320;
+    n.fx = n.x;
+    n.fy = n.y;
+  });
+  return placed;
+}
+
+function ruleset(width: number, style: MapStyle = "nodes") {
   const tight = width < 560;
   return {
     tight,
@@ -287,17 +454,30 @@ export default function Graph({
   const [legend, setLegend] = useState<[string, string][]>([]);
   /** Held in a ref rather than state: the draw loop and the hit test both read
    *  it every frame, and a re-render per frame is not the way to tell them. */
-  const styleRef = useRef<MapStyle>("constellation");
+  const styleRef = useRef<MapStyle>("nodes");
+  /** What an arranged style worked out: rings to draw, orbits to turn,
+   *  trunks to stand. Empty under `nodes`, which is laid out by force. */
+  const placedRef = useRef<Placed>(NOTHING_PLACED);
   const [, restyle] = useState(0);
+  // Held in a ref rather than state because the draw loop and the hit test
+  // read it every frame; the counter is only to get one render out of a
+  // change. `buildRef` because rebuilding is what a style change means — the
+  // three are different arrangements, not different paint.
+  const buildRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
     const apply = (m: MapStyle) => {
-      if (!alive) return;
+      if (!alive || m === styleRef.current) return;
       styleRef.current = m;
-      // One render so the simulation's spacing picks the new sizes up too.
       restyle((n) => n + 1);
+      buildRef.current();
     };
-    void getSettings().then((st) => apply(st.map_style));
+    // The first read is not a change, so it sets the ref and rebuilds once —
+    // the initial build may already have run under the default.
+    void getSettings().then((st) => {
+      if (!alive) return;
+      if (st.map_style !== styleRef.current) apply(st.map_style);
+    });
     const un = onSettingsChanged((st) => apply(st.map_style));
     return () => {
       alive = false;
@@ -417,6 +597,71 @@ export default function Graph({
     // the whole map at once.
     const focus =
       legendPinRef.current || legendHoverRef.current || hover?.data.category || null;
+    // A galaxy turns. Inner rings go round faster than outer ones, which is
+    // what a galaxy actually does and what keeps the rings legible as rings
+    // rather than as a wheel of spokes.
+    const placed = placedRef.current;
+    if (styleRef.current === "galaxy" && placed.orbits.length) {
+      const t = performance.now() / 1000;
+      for (const o of placed.orbits) {
+        const angle = o.angle + (t * 26) / o.radius;
+        o.node.x = (o.hub.x ?? 0) + Math.cos(angle) * o.radius;
+        o.node.y = (o.hub.y ?? 0) + Math.sin(angle) * o.radius;
+        o.node.fx = o.node.x;
+        o.node.fy = o.node.y;
+      }
+    }
+
+    // The rings themselves, faint, so a shared orbit reads as one thing.
+    if (styleRef.current === "galaxy") {
+      ctx.strokeStyle = C.related;
+      ctx.globalAlpha = 0.14;
+      ctx.lineWidth = 1;
+      for (const ring of placed.rings) {
+        const centre = toScreen(ring.hub, w, h);
+        const r = ring.radius * viewRef.current.scale * spreadOf(viewRef.current.scale);
+        if (r < 2 || r > 4000) continue;
+        ctx.beginPath();
+        ctx.arc(centre.x, centre.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Ground and trunks. Drawn before the branches so the roots below it read
+    // as going into the ground rather than sitting on top of a line.
+    if (styleRef.current === "forest" && placed.trunks.length) {
+      const k = viewRef.current.scale * spreadOf(viewRef.current.scale);
+      const ground = toScreen({ x: 0, y: 0 }, w, h).y;
+      ctx.strokeStyle = C.related;
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, ground);
+      ctx.lineTo(w, ground);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      for (const trunk of placed.trunks) {
+        const crown = toScreen(trunk.hub, w, h);
+        const foot = toScreen({ x: trunk.x, y: trunk.groundY }, w, h);
+        // Tapered: wide at the ground, narrow at the crown, the same shape the
+        // branches use so a tree is one drawing rather than two.
+        const wide = Math.max(1.2, 7 * k);
+        const thin = Math.max(0.8, 2.6 * k);
+        ctx.fillStyle = trunk.hub.color;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.moveTo(foot.x - wide, foot.y);
+        ctx.lineTo(foot.x + wide, foot.y);
+        ctx.lineTo(crown.x + thin, crown.y);
+        ctx.lineTo(crown.x - thin, crown.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+
     const traced = tracedRef.current;
     const isTraced = (n: Node) => traced !== null && n.data.idea_id === traced;
     const inFocus = (n: Node) =>
@@ -425,7 +670,13 @@ export default function Graph({
     for (const link of linksRef.current) {
       const a = link.source as Node;
       const b = link.target as Node;
-      const sa = toScreen(a, w, h);
+      // In a forest a root leaves the foot of the trunk, not the crown. Drawn
+      // from the node itself, every root ran the length of the trunk and out
+      // through the top of the tree.
+      const sa =
+        styleRef.current === "forest" && link.kind === "from"
+          ? toScreen({ x: a.x, y: 0 }, w, h)
+          : toScreen(a, w, h);
       const sb = toScreen(b, w, h);
       const lit = !focus || inFocus(a) || inFocus(b);
       ctx.globalAlpha = lit ? 1 : 0.18;
@@ -751,6 +1002,24 @@ export default function Graph({
     }
 
     simRef.current?.stop();
+
+    // Forest and Galaxy are arrangements, not forces: where a node goes is
+    // decided outright, so there is nothing for a simulation to settle. Pinned
+    // rather than merely positioned, so dragging one puts it back rather than
+    // leaving a tree with a branch wandering off.
+    if (styleRef.current !== "nodes") {
+      placedRef.current =
+        styleRef.current === "forest" ? arrangeForest(nodes, links) : arrangeGalaxy(nodes, links);
+      simRef.current = null;
+      fitToView();
+      return;
+    }
+    placedRef.current = NOTHING_PLACED;
+    for (const n of nodes) {
+      n.fx = null;
+      n.fy = null;
+    }
+
     const sim = forceSimulation<Node, Link>(nodes)
       .force(
         "link",
@@ -823,6 +1092,10 @@ export default function Graph({
     // Rebuilds when the folder changes: a folder is a separate tree, so the
     // map has to be a different map, not the same one filtered on screen.
   }, [fitToView, folder]);
+
+  useEffect(() => {
+    buildRef.current = () => void build();
+  }, [build]);
 
   useEffect(() => {
     void build();

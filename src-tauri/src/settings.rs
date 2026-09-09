@@ -105,7 +105,7 @@ pub struct Settings {
     /// Whether the map, ideas and conversations sit around the conversation
     /// or are visited one at a time.
     pub layout: Layout,
-    /// How the map draws itself.
+    /// How the map arranges itself.
     pub map_style: MapStyle,
     /// Advanced layout order: conversations on the left and Make on the
     /// right, instead of the default Make left / conversations right.
@@ -155,36 +155,28 @@ pub fn default_presets() -> Vec<Preset> {
     )]
 }
 
-/// How the map draws itself.
+/// How the map arranges itself.
 ///
-/// Only ever node size and line weight — never what is on the map. A style
-/// that hid nodes would be a filter wearing an appearance setting's clothes,
-/// and the map's job is to show you everything you have thought.
-///
-/// `Constellation` is the default because the roomy full-page map drew nodes
-/// at the size tuned for a narrow panel scaled up, which on a wide canvas is a
-/// field of circles with the links lost between them.
+/// Three arrangements of the same material, not three skins: each decides
+/// where nodes go, and each says something different about what a folder is.
+/// Nothing is ever hidden by a style — the map's job is to show you everything
+/// you have thought, and a style that dropped nodes would be a filter wearing
+/// an appearance setting's clothes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MapStyle {
-    /// Small nodes, fine lines. Reads as a structure rather than a diagram.
+    /// A force-directed graph: everything is a peer, and the shape comes from
+    /// what is connected to what. The plainest reading, and the default.
     #[default]
-    Constellation,
-    /// Larger, fuller nodes. Easier to hit, heavier to look at.
-    Bubbles,
-    /// Dots and hairlines. For a folder with a great many ideas in it.
-    Minimal,
-}
-
-impl MapStyle {
-    /// What to multiply a node's drawn radius by.
-    pub fn node_scale(self) -> f32 {
-        match self {
-            MapStyle::Constellation => 0.72,
-            MapStyle::Bubbles => 1.0,
-            MapStyle::Minimal => 0.5,
-        }
-    }
+    Nodes,
+    /// A tree per conversation, side by side, its ideas the roots beneath it.
+    /// Says that ideas grew from somewhere, and that separate conversations
+    /// are separate growths.
+    Forest,
+    /// Ideas in orbit around the conversation they came from, turning slowly.
+    /// Ideas linked to each other share an orbit, so a ring is a set of
+    /// thoughts that belong together.
+    Galaxy,
 }
 
 /// How much of the app is on screen at once.

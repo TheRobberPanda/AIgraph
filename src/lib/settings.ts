@@ -69,16 +69,32 @@ export interface Preset {
 /** One place at a time, or everything around the conversation at once. */
 export type Layout = "simple" | "advanced";
 
-/** How the map draws itself. Node size and line weight only, never what is
- *  on it — a style that hid nodes would be a filter in disguise. */
-export type MapStyle = "constellation" | "bubbles" | "minimal";
+/**
+ * How the map arranges itself.
+ *
+ * Three arrangements of the same material, not three skins: each decides
+ * where nodes go. Nothing is ever hidden by one — a style that dropped nodes
+ * would be a filter wearing an appearance setting's clothes.
+ */
+export type MapStyle = "nodes" | "forest" | "galaxy";
 
 export const MAP_STYLES: { value: MapStyle; label: string; blurb: string }[] = [
-  { value: "constellation", label: "Constellation", blurb: "Small nodes, fine lines." },
-  { value: "bubbles", label: "Bubbles", blurb: "Larger and fuller. Easier to hit." },
-  { value: "minimal", label: "Minimal", blurb: "Dots and hairlines, for a crowded folder." },
+  {
+    value: "nodes",
+    label: "Nodes",
+    blurb: "A force-directed graph. Everything is a peer; the shape comes from what connects to what.",
+  },
+  {
+    value: "forest",
+    label: "Forest",
+    blurb: "A tree per conversation, side by side, with its ideas as the roots beneath it.",
+  },
+  {
+    value: "galaxy",
+    label: "Galaxy",
+    blurb: "Ideas orbit the conversation they came from. Ideas linked to each other share a ring.",
+  },
 ];
-
 export type Voice = "off" | "system" | "neural";
 
 /** Argue the substance, or just help lay it out. */

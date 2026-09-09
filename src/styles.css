@@ -1077,7 +1077,11 @@ input, textarea {
 }
 
 .section {
-  margin: 0 0 0.5rem;
+  /* Space above as well as below. With none, two settings groups in a column
+     ran together — the heading of the second sat on the last control of the
+     first, and both read as one. The first heading in a pane keeps its
+     original flush top, since there is nothing above it to be clear of. */
+  margin: 1.5rem 0 0.5rem;
   font-family: var(--mono);
   font-size: 0.6rem;
   text-transform: uppercase;
@@ -1085,6 +1089,10 @@ input, textarea {
   color: var(--faint);
 }
 .section:not(:first-child) { margin-top: 1.6rem; }
+
+.section:first-child,
+.pane-inner > .section:first-of-type,
+.sheet-body > *:first-child > .section:first-of-type { margin-top: 0; }
 
 .blurb {
   margin: 0 0 0.7rem;
@@ -1969,7 +1977,9 @@ blockquote {
   background: var(--surface);
 }
 
-.digest-group { gap: 0.25rem; align-items: center; }
+/* Two buttons that read as one control, but not so close they touch — the
+   second says a word now rather than three dots. */
+.digest-group { gap: 0.35rem; align-items: center; }
 /* Running, the button is also the way to stop: same control, either side of
    the decision. The fill is how far through the queue it is. */
 .digest-btn.running { position: relative; overflow: hidden; }
@@ -2440,7 +2450,7 @@ blockquote {
   max-height: 14rem;
   overflow-y: auto;
 }
-.make-presets { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; }
+.make-presets { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.2rem 0 0.9rem; }
 
 .make-thread { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1.4rem; }
 .make-turn { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; }
@@ -2463,7 +2473,15 @@ blockquote {
 .make-box .bar { display: flex; justify-content: flex-end; gap: 0.4rem; padding-bottom: 0.3rem; }
 
 /* One editable instruction in Settings. */
-.preset { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.9rem; }
+.preset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1.3rem;
+  padding-bottom: 1.1rem;
+  border-bottom: 1px solid var(--line);
+}
+.preset:last-of-type { border-bottom: none; }
 .preset-name { font-weight: 600; }
 .preset-prompt { line-height: 1.5; resize: vertical; font: inherit; font-size: 0.82rem; }
 
@@ -2473,16 +2491,39 @@ blockquote {
 /* On a full page the picker belongs at the right edge, clear of the column the
    answers are read in. In the narrow advanced panel there is no right edge
    worth the name, so it stays stacked with everything else. */
-/* Right-aligned means the *label* sits at the right edge, not a 30rem box
-   whose contents happen to start well short of it. The picker shrink-wraps
-   its head and takes its width from the list only once that is open. */
-.make.roomy .make-picker {
-  align-self: flex-end;
-  align-items: flex-end;
-  width: auto;
-  max-width: min(30rem, 100%);
+/* Where there is room, the material stands in its own column beside what is
+   being made from it — rather than behind a dropdown that hid it until asked
+   and covered the answers when opened. */
+.make.roomy { flex-direction: row; gap: 1.4rem; align-items: stretch; }
+.make.roomy .make-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
-.make.roomy .make-picker-body { width: min(30rem, 100%); }
+.make.roomy .make-side {
+  flex: none;
+  width: 21rem;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-left: 1.2rem;
+  border-left: 1px solid var(--line);
+}
+.make.roomy .make-picker { flex: 1; min-height: 0; margin-bottom: 0; }
+.make.roomy .make-picker-body {
+  flex: 1;
+  max-height: none;
+  border: none;
+  background: transparent;
+  padding: 0.3rem 0 0;
+}
+.make.roomy .make-picker-head { cursor: default; }
+.make.roomy .make-picker-head:hover { color: var(--muted); }
+/* Compact keeps the single column it always had. */
+.make .make-main { display: contents; }
+.make.roomy .make-main { display: flex; }
 .make-picker { display: flex; flex-direction: column; margin-bottom: 0.7rem; }
 .make-picker-head {
   display: flex; align-items: center; gap: 0.4rem;

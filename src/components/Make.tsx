@@ -221,112 +221,17 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     // edge and out of the reading column; the narrow advanced panel has no
     // right edge to speak of and keeps everything stacked.
     <div className={compact ? "pane-inner make" : "pane-inner make roomy"}>
+      {/* Two columns where there is room: what is being made on the left,
+          what it is being made from on the right, standing open. It used to
+          be a dropdown over the answers — which meant the material was
+          invisible unless you went looking, and covered the thing you were
+          reading when you did. */}
+      <div className="make-main">
       <div className="make-head">
         <span className="row-main">
           Making something out of <strong>{here}</strong>
         </span>
       </div>
-
-      {/* What the model will actually be reading. A count alone asks to be
-          trusted; this says which, and lets any of it be dropped. Ticking a
-          conversation takes it whole; ticking one idea takes that idea's own
-          material and leaves the rest of the transcript behind. */}
-      {tree.length > 0 && (
-        <div className="make-picker">
-          <button className="make-picker-head" onClick={() => setPicking((v) => !v)}>
-            <IconChevron className={picking ? "flip" : undefined} />
-            {everything ? (
-              <>
-                Everything in {here}
-                {packed && ` — ${packed.conversations} ${packed.conversations === 1 ? "conversation" : "conversations"}`}
-              </>
-            ) : (
-              <>
-                {pickedSessions.size} {pickedSessions.size === 1 ? "conversation" : "conversations"}
-                {pickedIdeas.size > 0 && `, ${pickedIdeas.size} ideas`} chosen
-              </>
-            )}
-            {packed && packed.dropped > 0 && (
-              <span className="muted"> · {packed.dropped} too old to fit</span>
-            )}
-          </button>
-
-          {picking && (
-            <div className="make-picker-body">
-              {!everything && (
-                <button
-                  className="link"
-                  onClick={() => {
-                    setPickedSessions(new Set());
-                    setPickedIdeas(new Set());
-                    void apply(new Set(), new Set());
-                  }}
-                >
-                  Use everything again
-                </button>
-              )}
-              <ul className="pick-tree">
-                {tree.map((c) => {
-                  const open = expanded.has(c.session_id);
-                  const on = pickedSessions.has(c.session_id);
-                  const some = c.ideas.some((i) => pickedIdeas.has(i.idea_id));
-                  return (
-                    <li key={c.session_id}>
-                      <div className="pick-row">
-                        <button
-                          className={on ? "tick on" : some ? "tick part" : "tick"}
-                          aria-pressed={on}
-                          onClick={() => toggleSession(c)}
-                        >
-                          {on ? "✓" : some ? "–" : ""}
-                        </button>
-                        <button
-                          className="pick-name"
-                          disabled={c.ideas.length === 0}
-                          onClick={() =>
-                            setExpanded((prev) => {
-                              const next = new Set(prev);
-                              if (!next.delete(c.session_id)) next.add(c.session_id);
-                              return next;
-                            })
-                          }
-                        >
-                          {c.ideas.length > 0 && (
-                            <IconChevron className={open ? "flip" : undefined} />
-                          )}
-                          <span className="row-main">
-                            {c.title || `Conversation ${c.session_id}`}
-                          </span>
-                          <span className="row-meta">
-                            {c.ideas.length} {c.ideas.length === 1 ? "idea" : "ideas"}
-                          </span>
-                        </button>
-                      </div>
-
-                      {open && (
-                        <ul className="pick-ideas">
-                          {c.ideas.map((i) => (
-                            <li key={i.idea_id} className="pick-row">
-                              <button
-                                className={pickedIdeas.has(i.idea_id) ? "tick on" : "tick"}
-                                aria-pressed={pickedIdeas.has(i.idea_id)}
-                                onClick={() => toggleIdea(c, i.idea_id)}
-                              >
-                                {pickedIdeas.has(i.idea_id) ? "✓" : ""}
-                              </button>
-                              <span className="pick-idea-name">{i.title}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* The instructions, as buttons. Pressing one fills the box below with
           its wording and sends it — nothing happens that you cannot see. */}
@@ -464,6 +369,117 @@ export default function Make({ folder, compact = false }: { folder: number | nul
           )}
         </div>
       </div>
+      </div>
+
+      <aside className="make-side">
+      {/* What the model will actually be reading. A count alone asks to be
+          trusted; this says which, and lets any of it be dropped. Ticking a
+          conversation takes it whole; ticking one idea takes that idea's own
+          material and leaves the rest of the transcript behind. */}
+      {tree.length > 0 && (
+        <div className="make-picker">
+          {/* Standing open in its own column, so the header is a heading. The
+              narrow advanced panel has no room for that and keeps the toggle. */}
+          <button
+            className="make-picker-head"
+            disabled={!compact}
+            onClick={() => setPicking((v) => !v)}
+          >
+            {compact && <IconChevron className={picking ? "flip" : undefined} />}
+            {everything ? (
+              <>
+                Everything in {here}
+                {packed && ` — ${packed.conversations} ${packed.conversations === 1 ? "conversation" : "conversations"}`}
+              </>
+            ) : (
+              <>
+                {pickedSessions.size} {pickedSessions.size === 1 ? "conversation" : "conversations"}
+                {pickedIdeas.size > 0 && `, ${pickedIdeas.size} ideas`} chosen
+              </>
+            )}
+            {packed && packed.dropped > 0 && (
+              <span className="muted"> · {packed.dropped} too old to fit</span>
+            )}
+          </button>
+
+          {(picking || !compact) && (
+            <div className="make-picker-body">
+              {!everything && (
+                <button
+                  className="link"
+                  onClick={() => {
+                    setPickedSessions(new Set());
+                    setPickedIdeas(new Set());
+                    void apply(new Set(), new Set());
+                  }}
+                >
+                  Use everything again
+                </button>
+              )}
+              <ul className="pick-tree">
+                {tree.map((c) => {
+                  const open = expanded.has(c.session_id);
+                  const on = pickedSessions.has(c.session_id);
+                  const some = c.ideas.some((i) => pickedIdeas.has(i.idea_id));
+                  return (
+                    <li key={c.session_id}>
+                      <div className="pick-row">
+                        <button
+                          className={on ? "tick on" : some ? "tick part" : "tick"}
+                          aria-pressed={on}
+                          onClick={() => toggleSession(c)}
+                        >
+                          {on ? "✓" : some ? "–" : ""}
+                        </button>
+                        <button
+                          className="pick-name"
+                          disabled={c.ideas.length === 0}
+                          onClick={() =>
+                            setExpanded((prev) => {
+                              const next = new Set(prev);
+                              if (!next.delete(c.session_id)) next.add(c.session_id);
+                              return next;
+                            })
+                          }
+                        >
+                          {c.ideas.length > 0 && (
+                            <IconChevron className={open ? "flip" : undefined} />
+                          )}
+                          <span className="row-main">
+                            {c.title || `Conversation ${c.session_id}`}
+                          </span>
+                          <span className="row-meta">
+                            {c.ideas.length} {c.ideas.length === 1 ? "idea" : "ideas"}
+                          </span>
+                        </button>
+                      </div>
+
+                      {open && (
+                        <ul className="pick-ideas">
+                          {c.ideas.map((i) => (
+                            <li key={i.idea_id} className="pick-row">
+                              <button
+                                className={pickedIdeas.has(i.idea_id) ? "tick on" : "tick"}
+                                aria-pressed={pickedIdeas.has(i.idea_id)}
+                                onClick={() => toggleIdea(c, i.idea_id)}
+                              >
+                                {pickedIdeas.has(i.idea_id) ? "✓" : ""}
+                              </button>
+                              <span className="pick-idea-name">{i.title}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      </aside>
     </div>
   );
 }
