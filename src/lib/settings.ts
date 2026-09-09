@@ -258,6 +258,9 @@ export interface EmbeddedStatus {
   server_build?: string | null;
   /** Whether a vendor-neutral GPU build exists for this platform. */
   vulkan_available?: boolean;
+  /** Whether a prebuilt CUDA llama-server exists for this platform. Windows
+   *  only — llama.cpp publishes no CUDA archive for Linux. */
+  cuda_available?: boolean;
   model_ready: boolean;
   server_ready: boolean;
   server_path: string | null;

@@ -104,7 +104,28 @@ export default function Engine({ onChanged }: { onChanged?: () => void }) {
         {status?.server_ready ? "Reinstall · GPU" : "Install · GPU (Vulkan)"}
         </button>
       )}
+      {status?.cuda_available && (
+        <button
+          className={busy === "cuda" ? "btn busy" : "btn"}
+          disabled={busy !== null}
+          data-tip="Fastest on an Nvidia card. Downloads the CUDA runtime with it."
+          onClick={() => install("cuda")}
+        >
+          {busy === "cuda" && <span className="spinner" aria-hidden="true" />}
+          {status?.server_ready ? "Reinstall · CUDA" : "Install · GPU (CUDA)"}
+        </button>
+      )}
     </div>
+    {!status?.cuda_available && status?.vulkan_available && (
+      <p className="blurb">
+        Vulkan is the GPU build here, and works on AMD, Nvidia and Intel alike.
+        CUDA is about twenty per cent faster on an Nvidia card, but llama.cpp
+        publishes no prebuilt CUDA archive for this platform — only Windows
+        gets one. Building <code>llama-server</code> with CUDA yourself and
+        putting it on your PATH is enough: one found there is used ahead of
+        anything installed here.
+      </p>
+    )}
     <p className="blurb">
       Always the current build, resolved when you press it rather than fixed
       when this was written — quantisations move faster than releases, and a

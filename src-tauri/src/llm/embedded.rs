@@ -142,6 +142,8 @@ pub struct EmbeddedStatus {
     pub server_build: Option<String>,
     /// Whether a vendor-neutral GPU build exists for this platform.
     pub vulkan_available: bool,
+    /// Whether a prebuilt CUDA `llama-server` exists for this platform.
+    pub cuda_available: bool,
     /// It is running now and answering.
     pub running: bool,
     /// Every GGUF already on disk, so one of several can be chosen.
@@ -259,6 +261,30 @@ impl Embedded {
         // came in moves up together — picking out files by extension missed
         // `libllama-common.so.0`, and the server would not start.
         flatten(&dir)?;
+
+        // CUDA on Windows needs its runtime DLLs, which ship as their own
+        // archive. Unpacked into the same directory, beside the binary that
+        // loads them.
+        if flavour == "cuda" {
+            if let Some(runtime) = cuda_runtime_asset() {
+                let rt = dir.join(&runtime);
+                crate::stt::model::download_to(
+                    &format!(
+                        "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/{runtime}"
+                    ),
+                    &rt,
+                    "the CUDA runtime",
+                    SERVER_APPROX_BYTES,
+                    on_progress,
+                )
+                .map_err(|e| e.to_string())?;
+                let out = unpack(&rt, &dir);
+                let _ = std::fs::remove_file(&rt);
+                out?;
+                flatten(&dir)?;
+            }
+        }
+
         let bin = dir.join(server_name());
         if !bin.is_file() {
             return Err("the archive did not contain a llama-server".into());
@@ -304,6 +330,7 @@ impl Embedded {
             server_path: server.map(|p| p.display().to_string()),
             server_build: self.server_build(),
             vulkan_available: vulkan_available(),
+            cuda_available: cuda_available(),
             running: self.is_running(),
             downloaded: self.downloaded(),
             download_gb: APPROX_BYTES as f32 / 1e9,
@@ -602,8 +629,46 @@ pub fn vulkan_available() -> bool {
 ///
 /// Linux and macOS ship `.tar.gz`, Windows `.zip` — upstream's choice, not
 /// ours, and [`unpack`] reads both.
+/// Which CUDA build to fetch on Windows.
+///
+/// 12.4 rather than the newest. The newer archives want a newer driver, and a
+/// download that installs and then refuses to start is worse than one that is
+/// half a version behind — anyone who wants the newest can build it and put
+/// it on PATH, which is preferred over ours anyway.
+const WIN_CUDA: &str = "12.4";
+
+/// The CUDA runtime, shipped separately from the build that needs it.
+///
+/// llama.cpp's Windows CUDA archive contains the binary and nothing else; the
+/// DLLs it links against are in a second archive. Fetching only the first
+/// gives a `llama-server.exe` that dies on launch for a missing DLL, which
+/// looks like a broken install rather than a missing dependency.
+pub fn cuda_runtime_asset() -> Option<String> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => Some(format!("cudart-llama-bin-win-cuda-{WIN_CUDA}-x64.zip")),
+        _ => None,
+    }
+}
+
+/// Whether a CUDA build exists for this platform at all.
+///
+/// Windows only, and not because of a choice made here: llama.cpp publishes
+/// `win-cuda` and, for Linux, cpu, vulkan, rocm, sycl and openvino — no CUDA.
+/// Offering it on Linux would mean building llama.cpp from source with the
+/// toolchain that implies. Vulkan gets most of the way there on every vendor,
+/// and a self-built CUDA `llama-server` on PATH is used ahead of ours.
+pub fn cuda_available() -> bool {
+    server_asset("b0", "cuda").is_some()
+}
+
 fn server_asset(tag: &str, flavour: &str) -> Option<String> {
     let arch = std::env::consts::ARCH;
+    if flavour == "cuda" {
+        return match (std::env::consts::OS, arch) {
+            ("windows", "x86_64") => Some(format!("llama-{tag}-bin-win-cuda-{WIN_CUDA}-x64.zip")),
+            _ => None,
+        };
+    }
     let gpu = flavour == "vulkan";
     Some(match (std::env::consts::OS, arch, gpu) {
         ("linux", "x86_64", false) => format!("llama-{tag}-bin-ubuntu-x64.tar.gz"),
