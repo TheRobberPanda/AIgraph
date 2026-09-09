@@ -86,7 +86,14 @@ export default function Make({ folder, compact = false }: { folder: number | nul
       .then(setPacked)
       .catch((e) => setError(String(e)));
     composeSelectable(folder)
-      .then(setTree)
+      .then((t) => {
+        setTree(t);
+        // Ticked on arrival, because everything is what gets used. The rows
+        // used to sit empty under a label saying "Everything in Root", which
+        // reads as nothing chosen and invites ticking things that were
+        // already included.
+        setPickedSessions(new Set(t.map((c) => c.session_id)));
+      })
       .catch(() => setTree([]));
   }, [folder]);
 
@@ -200,7 +207,12 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     }
   }
 
+  // Everything is what an empty selection has always meant. It just never
+  // looked like it: the rows sat unticked while the label said "Everything",
+  // so the ticks read as "nothing chosen yet" rather than as the state they
+  // describe. They are ticked now, and clearing them is one press.
   const everything = pickedSessions.size === 0 && pickedIdeas.size === 0;
+  const allOn = everything || pickedSessions.size === tree.length;
 
   async function keep(answer: string) {
     const path = await save({
@@ -404,18 +416,40 @@ export default function Make({ folder, compact = false }: { folder: number | nul
 
           {(picking || !compact) && (
             <div className="make-picker-body">
-              {!everything && (
+              <div className="row pick-all">
                 <button
                   className="link"
                   onClick={() => {
-                    setPickedSessions(new Set());
+                    if (allOn) {
+                      // Deselecting everything means choosing nothing, which
+                      // is a real state — not the same as "use everything".
+                      const none = new Set<number>();
+                      setPickedSessions(none);
+                      setPickedIdeas(none);
+                      void apply(none, none);
+                      return;
+                    }
+                    const all = new Set(tree.map((c) => c.session_id));
+                    setPickedSessions(all);
                     setPickedIdeas(new Set());
-                    void apply(new Set(), new Set());
+                    void apply(all, new Set());
                   }}
                 >
-                  Use everything again
+                  {allOn ? "Deselect all" : "Select all"}
                 </button>
-              )}
+                {!everything && (
+                  <button
+                    className="link"
+                    onClick={() => {
+                      setPickedSessions(new Set());
+                      setPickedIdeas(new Set());
+                        void apply(new Set(), new Set());
+                    }}
+                  >
+                    Use everything again
+                  </button>
+                )}
+              </div>
               <ul className="pick-tree">
                 {tree.map((c) => {
                   const open = expanded.has(c.session_id);

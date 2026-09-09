@@ -49,6 +49,10 @@ export interface Settings {
   mic_timeout_seconds: number;
   runtime: Runtime;
   layout: Layout;
+  /** Whether explanations sit on the page or wait under a hint. */
+  show_explanations: boolean;
+  /** Whether an idea's notes are followed by a question about them. */
+  ask_why: boolean;
   map_style: MapStyle;
   /** How hard the map's nodes push each other apart. */
   map_spread: MapSpread;
@@ -102,7 +106,10 @@ export const MAP_STYLES: { value: MapStyle; label: string; blurb: string }[] = [
   },
   {
     value: "nodes",
-    label: "Nodes",
+    // Renamed in the interface only. The stored value stays "nodes" — it is
+    // in everyone's settings file already, and a rename that reaches the disk
+    // costs a migration to buy nothing.
+    label: "Neuron",
     blurb: "A force-directed graph. Everything is a peer; the shape comes from what connects to what.",
   },
   {

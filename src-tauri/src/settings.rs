@@ -105,6 +105,15 @@ pub struct Settings {
     /// Whether the map, ideas and conversations sit around the conversation
     /// or are visited one at a time.
     pub layout: Layout,
+    /// Whether the app's explanations sit on the page or wait under a hint.
+    ///
+    /// Off by default: most of them are read once and then are furniture, and
+    /// a settings page that argues its own case in paragraphs is mostly the
+    /// app talking about itself. They are still there, one hover away, which
+    /// is what makes turning this back on a restoration rather than a repair.
+    pub show_explanations: bool,
+    /// Whether an idea's notes are followed by a question about them.
+    pub ask_why: bool,
     /// How the map arranges itself.
     pub map_style: MapStyle,
     /// How hard the map's nodes push each other apart.
@@ -440,11 +449,16 @@ impl Default for Settings {
             recall: true,
             reasoning: false,
             language: Language::Auto,
-            chat_stance: ChatStance::Challenge,
+            // The plain model, unprompted. A house voice is a preference,
+            // not something anyone asked for on arrival — and "argues with
+            // you" is a strong thing to be by default.
+            chat_stance: ChatStance::Neutral,
             call_silence_seconds: 5,
             mic_timeout_seconds: 0,
             runtime: Runtime::default(),
             layout: Layout::default(),
+            show_explanations: false,
+            ask_why: true,
             map_style: MapStyle::default(),
             map_spread: MapSpread::default(),
             advanced_swap: false,

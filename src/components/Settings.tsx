@@ -25,6 +25,7 @@ import {
   MAP_STYLES,
 } from "../lib/settings";
 import Confirm from "./Confirm";
+import Hint from "./Hint";
 
 import {
   downloadSpeechModel,
@@ -151,7 +152,7 @@ export default function Settings() {
           ? "pushes back"
           : s.chat_stance === "organize"
             ? "organizes"
-            : "nothing added",
+            : "default",
     },
     { id: "voice", title: "Voice & dictation", summary: voiceLabel },
     {
@@ -183,6 +184,22 @@ export default function Settings() {
 
         {category === "appearance" && (
           <>
+            <h3 className="section">Explanations</h3>
+            <div className="row">
+              <button
+                className={s.show_explanations ? "btn on" : "btn"}
+                onClick={() => void update({ show_explanations: !s.show_explanations })}
+              >
+                {s.show_explanations ? "On the page" : "Under a hint"}
+              </button>
+              <Hint>
+                The app used to explain itself in a paragraph beside almost
+                every control. Read once, those stop being help and become
+                furniture. They are all still here — this puts them back on the
+                page instead of under the mark you just hovered.
+              </Hint>
+            </div>
+
             <h3 className="section">Theme</h3>
             <div className="row">
               {THEMES.map((t) => (
@@ -197,7 +214,7 @@ export default function Settings() {
             </div>
 
             <h3 className="section">Accent</h3>
-            <p className="blurb">The colour of links, highlights and the chosen model.</p>
+            <Hint>The colour of links, highlights and the chosen model.</Hint>
             <div className="row accent-row">
               {ACCENTS.map((a) => (
                 <button
@@ -212,10 +229,10 @@ export default function Settings() {
             </div>
 
             <h3 className="section">The map</h3>
-            <p className="blurb">
+            <Hint>
               Three ways of standing the same material up. None of them hides
               anything.
-            </p>
+            </Hint>
             <div className="row">
               {MAP_STYLES.map((m) => (
                 <button
@@ -264,10 +281,10 @@ export default function Settings() {
             </div>
 
             <h3 className="section">Advanced layout sides</h3>
-            <p className="blurb">
+            <Hint>
               In the advanced layout: which side the conversations sit on. Make takes
               the other side; the thinking stays in the middle.
-            </p>
+            </Hint>
             <div className="row">
               <button
                 className={!s.advanced_swap ? "btn on" : "btn"}
@@ -284,7 +301,7 @@ export default function Settings() {
             </div>
 
             <h3 className="section">Language</h3>
-            <p className="blurb">What the model answers in, and what your notes and ideas are written in.</p>
+            <Hint>What the model answers in, and what your notes and ideas are written in.</Hint>
             <div className="row">
               {LANGUAGES.map((l) => (
                 <button
@@ -316,7 +333,7 @@ export default function Settings() {
                 className={s.chat_stance === "neutral" ? "btn on" : "btn"}
                 onClick={() => void update({ chat_stance: "neutral" })}
               >
-                Nothing added
+                Default
               </button>
               <button
                 className={s.chat_stance === "challenge" ? "btn on" : "btn"}
@@ -331,9 +348,9 @@ export default function Settings() {
                 Just organize
               </button>
             </div>
-            <p className="blurb">
+            <Hint>
               Pushing back tests a thought; organizing lays it out without arguing.
-            </p>
+            </Hint>
 
             <h3 className="section">Thinking before answering</h3>
             <div className="row">
@@ -344,10 +361,10 @@ export default function Settings() {
                 {s.reasoning ? "On" : "Off"}
               </button>
             </div>
-            <p className="blurb">
+            <Hint>
               Reasoning models can deliberate at length first. None of it is shown or
               recorded here — on a local model it is most of the wait.
-            </p>
+            </Hint>
 
             <h3 className="section">Recall</h3>
             <div className="row">
@@ -358,10 +375,10 @@ export default function Settings() {
                 {s.recall ? "Connecting to earlier ideas" : "Each turn on its own"}
               </button>
             </div>
-            <p className="blurb">
+            <Hint>
               Hands the conversation the titles of ideas already recorded in this
               folder. Titles only — never claims, quotes, or transcripts.
-            </p>
+            </Hint>
 
             <h3 className="section">Ending a session</h3>
             <div className="row">
@@ -381,10 +398,10 @@ export default function Settings() {
                 </button>
               ))}
             </div>
-            <p className="blurb">
+            <Hint>
               A conversation files when you press Done. It can also file itself after
               a stretch of quiet.
-            </p>
+            </Hint>
           </>
         )}
 
@@ -412,11 +429,11 @@ export default function Settings() {
                 Downloaded voice
               </button>
             </div>
-            <p className="blurb">
+            <Hint>
               Call mode keeps answers to a few sentences and reads them out. Reading
               aloud is off unless you ask; a call turns it on for its length and
               hanging up leaves this where you left it.
-            </p>
+            </Hint>
 
             <div className="knobs">
               <div className="knob">
@@ -443,14 +460,14 @@ export default function Settings() {
 
             <h3 className="section">Dictation</h3>
             {speech?.installed ? (
-              <p className="blurb">Installed, runs on the CPU.</p>
+              <Hint>Installed, runs on the CPU.</Hint>
             ) : downloading ? (
-              <p className="blurb">
+              <Hint>
                 Downloading… {Math.round((downloading.received / (downloading.total || 1)) * 100)}%
-              </p>
+              </Hint>
             ) : (
               <>
-                <p className="blurb">About {speech?.mb ?? 488}MB, once, offline.</p>
+                <Hint>About {speech?.mb ?? 488}MB, once, offline.</Hint>
                 <button className="btn" onClick={() => void downloadSpeechModel()}>
                   Download the speech model
                 </button>
@@ -459,10 +476,10 @@ export default function Settings() {
 
             {!voice?.installed &&
               (fetching?.what === "voice" ? (
-                <p className="blurb">
+                <Hint>
                   Downloading the voice…{" "}
                   {Math.round((fetching.received / (fetching.total || 1)) * 100)}%
-                </p>
+                </Hint>
               ) : (
                 <div className="row" style={{ marginTop: "0.6rem" }}>
                   <button
@@ -490,12 +507,12 @@ export default function Settings() {
         {category === "engine" && (
           <>
             <h3 className="section">The engine</h3>
-            <p className="blurb">
+            <Hint>
               What runs a model the app holds itself. The CPU build works everywhere;
               the GPU build is several times faster where there is a graphics card.
               Models themselves are picked from the chip at the top of the
               conversation.
-            </p>
+            </Hint>
             <Engine onChanged={() => void embeddedStatus().then(setServer).catch(() => {})} />
           </>
         )}
@@ -503,10 +520,10 @@ export default function Settings() {
         {category === "prompts" && (
           <>
             <h3 className="section">What the Make buttons ask for</h3>
-            <p className="blurb">
+            <Hint>
               Each button sends the wording below, with the folder in front of the
               model.
-            </p>
+            </Hint>
             {s.presets.map((preset, i) => (
               <div key={preset.id} className="preset">
                 <input
@@ -567,10 +584,10 @@ export default function Settings() {
               </button>
             </div>
             <h3 className="section">Transcripts</h3>
-            <p className="blurb">
+            <Hint>
               Every conversation is also written out as Markdown, so the record
               outlives this app.
-            </p>
+            </Hint>
             <p className="path">{dir}</p>
             {dirError && <p className="blurb warn">{dirError}</p>}
             <div className="row">
@@ -601,8 +618,8 @@ export default function Settings() {
           </>
         )}
 
-        {redigesting && <p className="blurb">Reading everything again…</p>}
-        {redigestNote && <p className="blurb">{redigestNote}</p>}
+        {redigesting && <Hint>Reading everything again…</Hint>}
+        {redigestNote && <Hint>{redigestNote}</Hint>}
       </div>
 
       {offerRedigest && (

@@ -337,7 +337,7 @@ function arrangeForest(nodes: Node[], links: Link[]): Placed {
   const { hubs, ideasOf, loose } = hubsAndTheirIdeas(nodes, links);
   const placed: Placed = { rings: [], orbits: [], trunks: [] };
   const GROUND = 0;
-  const TRUNK = 160;
+  const TRUNK = FOREST_TRUNK;
   const PER_LEVEL = 3;
   const ROOT_STEP = 92;
   /** How far a root reaches sideways at the deepest level it goes to. */
@@ -377,7 +377,13 @@ function arrangeForest(nodes: Node[], links: Link[]): Placed {
       const inLevel = Math.min(PER_LEVEL, ideas.length - (level - 1) * PER_LEVEL);
       const slot = k % PER_LEVEL;
       const width = reach(level);
-      const across = inLevel === 1 ? 0 : (slot / (inLevel - 1) - 0.5) * 2 * width;
+      // Never on the taproot. A single idea at a level used to land exactly
+      // on the vertical, so the root it hung from ran straight through it —
+      // which reads as a bead on a string rather than a root branching off.
+      // Odd counts alternate sides instead of putting one in the middle.
+      const spread = inLevel === 1 ? 0.55 : slot / (inLevel - 1) - 0.5;
+      const side = inLevel === 1 ? (k % 2 === 0 ? 1 : -1) : 1;
+      const across = spread * 2 * width * side;
       idea.x = x + across;
       idea.y = GROUND + level * ROOT_STEP;
       idea.fx = idea.x;
@@ -441,6 +447,35 @@ function treeShape(apex: { x: number; y: number }, groundY: number) {
   return { height, halfWidth, trunkH, trunkW, apex, groundY };
 }
 
+/** Draw the fir. `grow` scales it about its own foot, for the hover glow. */
+function drawFir(
+  ctx: CanvasRenderingContext2D,
+  apex: { x: number; y: number },
+  t: ReturnType<typeof treeShape>,
+  grow = 1,
+) {
+  const halfWidth = t.halfWidth * grow;
+  const height = t.height * grow;
+  const trunkH = t.trunkH * grow;
+  const trunkW = t.trunkW * grow;
+  const top = t.groundY - height;
+  ctx.fillRect(apex.x - trunkW, t.groundY - trunkH, trunkW * 2, trunkH);
+  const canopyH = height - trunkH;
+  for (let i = 0; i < 3; i++) {
+    // Tiers overlap: each starts lower and ends wider than the one above, so
+    // the silhouette reads as foliage rather than three stacked triangles.
+    const tierTop = top + canopyH * i * 0.3;
+    const tierBottom = top + canopyH * (0.5 + i * 0.25);
+    const half = halfWidth * (0.5 + i * 0.25);
+    ctx.beginPath();
+    ctx.moveTo(apex.x, tierTop);
+    ctx.lineTo(apex.x + half, tierBottom);
+    ctx.lineTo(apex.x - half, tierBottom);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
 /** Whether a point is inside the tree — canopy or trunk. */
 function inTree(t: ReturnType<typeof treeShape>, px: number, py: number): boolean {
   const { apex, groundY, halfWidth, trunkH, trunkW } = t;
@@ -456,6 +491,9 @@ function inTree(t: ReturnType<typeof treeShape>, px: number, py: number): boolea
   }
   return false;
 }
+
+/** How tall a tree stands above the ground, in world units. */
+const FOREST_TRUNK = 160;
 
 /** What each spread multiplies the push between nodes by. */
 const SPREAD_PUSH: Record<MapSpread, number> = {
@@ -755,13 +793,44 @@ export default function Graph({
         // the ground it stands on, and the taproot under it.
         const foot = toScreen({ x: trunk.x, y: trunk.groundY }, w, h);
         const deep = toScreen({ x: trunk.x, y: trunk.deepestY }, w, h);
+        // A root, not a spike. It wanders slightly off the vertical, tapers
+        // as it goes, and frays into two thinner ends — a straight triangle
+        // read as a pin holding the tree down.
         const wide = Math.max(1.2, 5 * k);
+        const drop = deep.y - foot.y;
+        const wander = wide * 1.8;
         ctx.fillStyle = trunk.hub.color;
         ctx.globalAlpha = 0.5;
         ctx.beginPath();
         ctx.moveTo(foot.x - wide, foot.y);
-        ctx.lineTo(foot.x + wide, foot.y);
-        ctx.lineTo(deep.x, deep.y);
+        ctx.bezierCurveTo(
+          foot.x - wide * 0.7, foot.y + drop * 0.4,
+          deep.x - wander - wide, foot.y + drop * 0.75,
+          deep.x - wander, deep.y,
+        );
+        ctx.lineTo(deep.x - wander + wide * 0.35, deep.y - drop * 0.06);
+        ctx.bezierCurveTo(
+          deep.x - wander * 0.4, foot.y + drop * 0.7,
+          foot.x + wide * 0.2, foot.y + drop * 0.45,
+          foot.x + wide, foot.y,
+        );
+        ctx.closePath();
+        ctx.fill();
+        // The second fork, thinner and shorter, leaving the other way.
+        ctx.globalAlpha = 0.34;
+        ctx.beginPath();
+        ctx.moveTo(foot.x + wide * 0.2, foot.y);
+        ctx.bezierCurveTo(
+          foot.x + wide * 1.2, foot.y + drop * 0.35,
+          deep.x + wander, foot.y + drop * 0.6,
+          deep.x + wander * 1.5, foot.y + drop * 0.82,
+        );
+        ctx.lineTo(deep.x + wander * 1.2, foot.y + drop * 0.84);
+        ctx.bezierCurveTo(
+          deep.x + wander * 0.5, foot.y + drop * 0.6,
+          foot.x + wide * 0.6, foot.y + drop * 0.3,
+          foot.x - wide * 0.2, foot.y,
+        );
         ctx.closePath();
         ctx.fill();
         ctx.globalAlpha = 1;
@@ -864,10 +933,18 @@ export default function Graph({
       // The same ring the pointer draws, so running down the list of what was
       // taken from a conversation picks each one out on the map in turn.
       if (hover === n || isTraced(n)) {
-        ctx.beginPath();
-        ctx.arc(s.x, midY, ringR + 6, 0, Math.PI * 2);
-        ctx.fillStyle = C.hoverRing;
-        ctx.fill();
+        // A disc behind a tree reads as a node appearing under it — the one
+        // shape the forest is meant not to have. Pointed at, a tree glows as
+        // a tree: the same silhouette, larger and softer, behind itself.
+        if (tree) {
+          ctx.fillStyle = C.hoverRing;
+          drawFir(ctx, s, tree, 1.22);
+        } else {
+          ctx.beginPath();
+          ctx.arc(s.x, midY, ringR + 6, 0, Math.PI * 2);
+          ctx.fillStyle = C.hoverRing;
+          ctx.fill();
+        }
       }
       if (n.data.shared) {
         ctx.beginPath();
@@ -890,27 +967,8 @@ export default function Graph({
       }
 
       if (tree) {
-        const t = tree;
         ctx.fillStyle = n.color;
-        // Trunk first, so the lowest tier overlaps its top and the two read
-        // as one object rather than a triangle balanced on a stick.
-        ctx.fillRect(s.x - t.trunkW, t.groundY - t.trunkH, t.trunkW * 2, t.trunkH);
-        const canopyH = t.height - t.trunkH;
-        const TIERS = 3;
-        for (let i = 0; i < TIERS; i++) {
-          // Each tier starts higher and ends wider than the one above it, and
-          // they overlap — which is what makes the silhouette read as foliage
-          // rather than as three separate triangles.
-          const top = s.y + (canopyH * i * 0.3);
-          const bottom = s.y + canopyH * (0.5 + i * 0.25);
-          const half = t.halfWidth * (0.5 + i * 0.25);
-          ctx.beginPath();
-          ctx.moveTo(s.x, top);
-          ctx.lineTo(s.x + half, bottom);
-          ctx.lineTo(s.x - half, bottom);
-          ctx.closePath();
-          ctx.fill();
-        }
+        drawFir(ctx, s, tree);
       } else {
         ctx.beginPath();
         ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
@@ -1076,7 +1134,10 @@ export default function Graph({
       // exactly when it is being read — this puts a card behind the one that
       // matters, so it is legible whatever it is over.
       if (hover === l.n) {
-        const pad = Math.max(3, labelPx * 0.42);
+        // Generous relative to the text, not a hairline around it: the card
+        // exists to lift the words off a busy map, and a tight one reads as a
+        // box drawn on the label rather than as something behind it.
+        const pad = Math.max(7, labelPx * 0.85);
         const widest = Math.max(...l.lines.map((line) => ctx.measureText(line).width));
         // The text is drawn from `l.y` downward — `textBaseline` is "top" —
         // so the card is that block plus even padding. It used to start most
@@ -1126,8 +1187,14 @@ export default function Graph({
     // three passes land it. (A single pass in world units clipped the map's
     // top whenever the fit zoom came out above one — the drawn node was
     // bigger than the world-space pad had budgeted.)
+    // A tree is far wider and taller than the node it is drawn from, and the
+    // fit was framing the node. With the arrangement spread out, the outermost
+    // trees and their names ran off the edge of a view that believed it had
+    // included everything.
+    const forest = styleRef.current === "forest";
+    const treeHalf = forest ? FOREST_TRUNK * 0.34 : 0;
     const maxR = Math.max(...nodes.map((n) => n.r));
-    let pad = maxR + 12;
+    let pad = Math.max(maxR, treeHalf) + 12;
     let scale = 1;
     for (let i = 0; i < 3; i++) {
       const spanX = Math.max(1, Math.max(...xs) - Math.min(...xs) + pad * 2);
@@ -1820,6 +1887,14 @@ export default function Graph({
           v.x = px - (px - v.x) * k;
           v.y = py - (py - v.y) * k;
           v.scale = scale;
+          // The overlay is anchored to where the node was on screen when it
+          // was pointed at. Zooming moves the node and left the highlight
+          // behind, sitting over empty map — so it goes, the same way it does
+          // when the map is dragged.
+          hoverRef.current = null;
+          keepAliveRef.current = null;
+          setHovered(null);
+          setHoverAt(null);
         }}
       />
 

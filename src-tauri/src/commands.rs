@@ -523,6 +523,24 @@ pub async fn end_session_inner(
     // into the part that has not moved.
     let resumed = state.continuing.lock().await.take();
 
+    // What the model was told, kept with the conversation. Read back later it
+    // is the difference between an answer that was argued with and one that
+    // was not — and without it, two conversations that read very differently
+    // look like the same thing happening twice.
+    let ai_profile: std::collections::BTreeMap<String, String> = {
+        let settings = state.settings.lock().await;
+        [(
+            "stance".to_string(),
+            serde_json::to_value(settings.chat_stance)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default(),
+        )]
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .collect()
+    };
+
     let session_id = match resumed {
         Some(id) => {
             let mut store = state.store.lock().await;
@@ -534,7 +552,13 @@ pub async fn end_session_inner(
         None => {
             let mut store = state.store.lock().await;
             store
-                .archive_session(&rendered, &model, started_at, Some(&state.md_dir))
+                .archive_session_with(
+                    &rendered,
+                    &model,
+                    started_at,
+                    Some(&state.md_dir),
+                    &ai_profile,
+                )
                 .map_err(|e| e.to_string())?
         }
     };

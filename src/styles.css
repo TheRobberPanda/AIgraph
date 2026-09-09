@@ -2728,3 +2728,107 @@ blockquote {
   color: var(--fg); border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
+.pick-all { gap: 0.9rem; margin-bottom: 0.4rem; }
+
+/* ---- Explanations, folded under a mark ---- */
+
+.hint { position: relative; display: inline-block; vertical-align: middle; margin-left: 0.35rem; }
+.hint-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.05rem; height: 1.05rem; border-radius: 50%;
+  font-size: 0.66rem; line-height: 1; cursor: help;
+  color: var(--muted); border: 1px solid var(--line); background: var(--surface);
+}
+.hint-mark:hover, .hint-mark:focus-visible { color: var(--fg); border-color: var(--accent); }
+.hint-mark:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hint-body {
+  display: none; position: absolute; left: 0; top: calc(100% + 0.35rem); z-index: 30;
+  width: max(16rem, 22vw); padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--surface-lift);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.4);
+  font-size: 0.8rem; line-height: 1.5; color: var(--muted);
+  white-space: normal; text-align: left;
+}
+.hint:hover .hint-body, .hint-mark:focus-visible + .hint-body { display: block; }
+/* Near the right edge it would run off; flip it back inside. */
+.hint:last-child .hint-body { left: auto; right: 0; }
+
+/* ---- Numbered paragraphs in a long turn ---- */
+
+.turn.user .turn-para { position: relative; padding-left: 1.6rem; }
+.para-n {
+  position: absolute; left: 0; top: 0.15em;
+  font-family: var(--mono); font-size: 0.62rem; line-height: 1;
+  color: var(--faint);
+  /* Digits line up in a column down the margin rather than drifting with
+     each paragraph's first word. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Which settings an answer was given under ---- */
+
+.stance-tag {
+  float: right; margin-left: 0.6rem;
+  font-size: 0.62rem; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* ---- The AI's notes, and the question that follows them ---- */
+
+.notes-panel {
+  margin: 1rem 0 0; padding: 0.75rem 0.85rem;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface);
+  /* Bottom-left of the reading column, out of the way of the claim it is
+     about — notes belong beside the work, not on top of it. */
+  align-self: flex-start; max-width: 34rem;
+}
+.notes-panel .section { margin-top: 0; }
+.ask-why {
+  margin: 0.7rem 0 0; padding-top: 0.6rem;
+  border-top: 1px dashed var(--line);
+  font-size: 0.9rem; line-height: 1.5;
+  /* Deliberately unlike the notes above it: this one is addressed to the
+     reader, and dressing it as another observation would be the app putting
+     a question in its own mouth. */
+  font-style: italic; color: var(--fg);
+}
+
+/* ---- The idea window ---- */
+
+.deep-claim {
+  margin: 0 0 0.3rem; font-size: 1.28rem; line-height: 1.32;
+  text-wrap: balance; color: var(--fg);
+}
+.deep-subclaim {
+  margin: 0 0 0.9rem; font-size: 0.94rem; line-height: 1.6;
+  color: var(--muted); max-width: 38rem;
+}
+/* The quote is a link; the card around it is not. Spaced well clear of the
+   idea above so the two do not read as one block. */
+.quote-source {
+  display: grid; gap: 0.3rem; justify-items: start;
+  margin: 1.1rem 0 0; padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line); border-left: 2px solid var(--gold);
+  border-radius: 0 10px 10px 0; background: var(--surface);
+}
+.quote-source blockquote {
+  margin: 0; cursor: pointer; border-radius: 6px;
+  font-size: 0.94rem; line-height: 1.6; color: var(--fg);
+}
+.quote-source blockquote:hover { color: var(--accent); }
+.quote-source blockquote:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.quote-date { font-size: 0.72rem; color: var(--faint); }
+.why-inline {
+  margin: 0.5rem 0 0; font-size: 0.83rem; line-height: 1.55; color: var(--muted);
+  max-width: 38rem;
+}
+/* A hint whose explanation came before its controls would otherwise sit alone
+   on a line, reading as a stray mark. Pulled up onto the heading it belongs
+   to, taking no vertical space of its own. */
+.section + .hint {
+  position: relative;
+  top: -1.35rem;
+  margin-left: 0.45rem;
+  height: 0;
+}

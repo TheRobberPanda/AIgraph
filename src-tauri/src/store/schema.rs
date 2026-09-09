@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- never overwrites their own choice.
     title_locked  INTEGER NOT NULL DEFAULT 0,
     archived      INTEGER NOT NULL DEFAULT 0,
-    folder_id     INTEGER NOT NULL DEFAULT 1 REFERENCES folders(id)
+    folder_id     INTEGER NOT NULL DEFAULT 1 REFERENCES folders(id),
+    -- The AI settings this conversation ran under, as JSON. See `migrate`.
+    ai_profile TEXT
 );
 
 -- `start_byte`/`end_byte` locate this turn's CONTENT inside sessions.transcript.
@@ -252,6 +254,20 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // the pair is still true history, and reconciliation would otherwise
         // draw the same link again the next time either idea is touched.
         conn.execute_batch("ALTER TABLE relations ADD COLUMN resolved_at TEXT;")?;
+    }
+
+    let session_cols_ai: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('sessions')")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !session_cols_ai.iter().any(|c| c == "ai_profile") {
+        // JSON, not a `stance` column, deliberately. What the model was told
+        // is going to grow — a stance today, a temperature or a house prompt
+        // later — and each of those as its own column is a migration and a
+        // struct change for something that is really one thing: the settings
+        // this conversation ran under. Nullable, because every conversation
+        // recorded before now ran under settings nobody wrote down.
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN ai_profile TEXT;")?;
     }
 
     let session_cols: Vec<String> = conn

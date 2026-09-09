@@ -163,6 +163,11 @@ pub struct ConversationView {
     pub turns: Vec<ViewTurn>,
     pub strong: Vec<String>,
     pub weak: Vec<String>,
+    /// The AI settings this conversation ran under, where they were recorded.
+    /// An open map rather than a named field per setting: what the model was
+    /// told is going to grow, and the screen can show whatever is in here
+    /// without another round trip through the schema.
+    pub ai_profile: std::collections::BTreeMap<String, String>,
 }
 
 /// One turn, split around the spans that produced ideas.
@@ -413,6 +418,18 @@ impl Store {
         started_at: DateTime<Utc>,
         md_dir: Option<&Path>,
     ) -> Result<i64> {
+        self.archive_session_with(rendered, model, started_at, md_dir, &Default::default())
+    }
+
+    /// As [`Self::archive_session`], recording the AI settings it ran under.
+    pub fn archive_session_with(
+        &mut self,
+        rendered: &Rendered,
+        model: &str,
+        started_at: DateTime<Utc>,
+        md_dir: Option<&Path>,
+        ai_profile: &std::collections::BTreeMap<String, String>,
+    ) -> Result<i64> {
         let ended_at = Utc::now();
 
         // Written before the transaction so a failing disk doesn't leave a
@@ -424,14 +441,16 @@ impl Store {
 
         let tx = self.conn.transaction()?;
         tx.execute(
-            "INSERT INTO sessions (started_at, ended_at, md_path, transcript, model, extract_state)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'pending')",
+            "INSERT INTO sessions
+               (started_at, ended_at, md_path, transcript, model, extract_state, ai_profile)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
             params![
                 started_at.to_rfc3339(),
                 ended_at.to_rfc3339(),
                 md_path.as_ref().map(|p| p.to_string_lossy().to_string()),
                 rendered.text,
                 model,
+                (!ai_profile.is_empty()).then(|| serde_json::to_string(ai_profile).ok()).flatten(),
             ],
         )?;
         let session_id = tx.last_insert_rowid();
@@ -900,11 +919,15 @@ impl Store {
 
     /// A conversation with every extracted span marked in place.
     pub fn conversation_view(&self, session_id: i64) -> Result<ConversationView> {
-        let (started_at, title, model): (String, String, String) = self.conn.query_row(
-            "SELECT started_at, COALESCE(title, ''), model FROM sessions WHERE id = ?1",
-            [session_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?;
+        let (started_at, title, model, profile): (String, String, String, Option<String>) =
+            self.conn.query_row(
+                "SELECT started_at, COALESCE(title, ''), model, ai_profile
+                 FROM sessions WHERE id = ?1",
+                [session_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+        let ai_profile =
+            profile.as_deref().and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default();
 
         // Offsets on `evidence` are relative to the turn, which is exactly the
         // frame needed here.
@@ -1022,7 +1045,16 @@ impl Store {
         }
 
         let (strong, weak) = self.nudges_for("session_nudges", "session_id", session_id)?;
-        Ok(ConversationView { session_id, started_at, title, model, turns, strong, weak })
+        Ok(ConversationView {
+            session_id,
+            started_at,
+            title,
+            model,
+            turns,
+            strong,
+            weak,
+            ai_profile,
+        })
     }
 
     /// One idea, with everything that supports it and how it has changed.

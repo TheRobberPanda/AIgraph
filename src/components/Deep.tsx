@@ -5,6 +5,7 @@ import Resolve from "./Resolve";
 import { IconChevron } from "./Icons";
 import { dateTime, plainDate } from "../lib/format";
 import { categoryColor } from "../lib/categories";
+import { getSettings, onSettingsChanged } from "../lib/settings";
 import {
   conversationView,
   ideaDeepDive,
@@ -40,10 +41,30 @@ function paragraphs(segments: Segment[]): Segment[][] {
  * an idea with nothing left open is finished, and recording that is the right
  * outcome rather than a gap to fill.
  */
-function Nudges({ strong, weak }: { strong: string[]; weak: string[] }) {
+function Nudges({
+  strong,
+  weak,
+  about,
+}: {
+  strong: string[];
+  weak: string[];
+  /** What the question should be about — the idea's own claim. */
+  about?: string;
+}) {
+  const [askWhy, setAskWhy] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    void getSettings().then((s) => alive && setAskWhy(s.ask_why));
+    const un = onSettingsChanged((s) => alive && setAskWhy(s.ask_why));
+    return () => {
+      alive = false;
+      void un.then((f) => f());
+    };
+  }, []);
+
   if (!strong.length && !weak.length) return null;
   return (
-    <div className="notes">
+    <div className="notes-panel">
       {strong.length > 0 && (
         <section>
           <h3 className="section">Noted alongside</h3>
@@ -69,8 +90,25 @@ function Nudges({ strong, weak }: { strong: string[]; weak: string[] }) {
           </div>
         </section>
       )}
+      {/* A question, not another note — and deliberately not in the AI's
+          voice. The notes above say what the model observed; this asks the
+          one thing an observation cannot answer for you. Styled apart from
+          them because it is addressed to the reader, and switched off in
+          Settings by anyone who finds it presumptuous. */}
+      {askWhy && (strong.length > 0 || weak.length > 0) && (
+        <p className="ask-why">
+          Why would {about ? shortenClaim(about) : "this"} be so?
+        </p>
+      )}
     </div>
   );
+}
+
+/** A claim, cut to something that fits inside a sentence. */
+function shortenClaim(claim: string): string {
+  const one = claim.trim().replace(/\s+/g, " ").replace(/[.!?]+$/, "");
+  const lower = one.charAt(0).toLowerCase() + one.slice(1);
+  return lower.length > 70 ? `${lower.slice(0, 70).trimEnd()}…` : lower;
 }
 
 /**
@@ -182,8 +220,14 @@ export function ConversationFile({
             {view.turns.map((turn) =>
               turn.role === "user" ? (
                 <div key={turn.id} className="turn user">
-                  {paragraphs(turn.segments).map((para, p) => (
+                  {paragraphs(turn.segments).map((para, p, all) => (
                   <p key={p} className="turn-para">
+                    {/* Numbered only where there is more than one: a lone "1"
+                        beside a single paragraph is a label for nothing. They
+                        exist so a long turn can be pointed at — "the third
+                        paragraph" — which is otherwise impossible in a wall
+                        of text with no landmarks. */}
+                    {all.length > 1 && <span className="para-n">{p + 1}</span>}
                   {para.map((seg, i) =>
                     seg.idea_id === null ? (
                       <span key={i}>{seg.text}</span>
@@ -216,6 +260,7 @@ export function ConversationFile({
                   key={turn.id}
                   text={turn.segments.map((s) => s.text).join("")}
                   digest={turn.digest}
+                  stance={STANCE_WORD[view.ai_profile.stance ?? ""]}
                 />
               ),
             )}
@@ -292,13 +337,26 @@ export function ConversationFile({
  * three thousand characters of reply against a sentence of thinking turns the
  * page into somewhere the machine does all the talking.
  */
-function Reply({ text, digest }: { text: string; digest: string | null }) {
+function Reply({
+  text,
+  digest,
+  stance,
+}: {
+  text: string;
+  digest: string | null;
+  stance?: string;
+}) {
   const [full, setFull] = useState(false);
   const long = text.length > 420;
 
   if (digest && !full) {
     return (
       <div className="turn assistant">
+        {/* Which settings this answer was given under. Two conversations
+            that read very differently otherwise look like the same thing
+            happening twice, and by the time you are reading the short
+            version there is nothing left to tell them apart. */}
+        {stance && <span className="stance-tag">{stance}</span>}
         <div className="digest">{digest}</div>
         <button className="icon-btn expand-toggle" data-tip="Read the answer in full" onClick={() => setFull(true)}>
           <IconChevron />
@@ -322,6 +380,20 @@ function Reply({ text, digest }: { text: string; digest: string | null }) {
     </div>
   );
 }
+
+/**
+ * How a recorded AI setting reads on screen.
+ *
+ * Keyed off whatever the profile happens to hold rather than a fixed set, so
+ * a setting added later shows up as soon as it is written — the record is an
+ * open map for exactly that reason. An unknown value is simply not named,
+ * which is better than inventing a label for it.
+ */
+const STANCE_WORD: Record<string, string | undefined> = {
+  neutral: "default",
+  challenge: "pushed back",
+  organize: "organised",
+};
 
 /** An idea's file: everything supporting it, and how it has changed. */
 
@@ -404,7 +476,7 @@ export function IdeaFile({
         <>
           <h2 className="deep-claim">{view.title}</h2>
           {view.title !== view.claim && <p className="deep-subclaim">{view.claim}</p>}
-          <Nudges strong={view.strong} weak={view.weak} />
+          <Nudges strong={view.strong} weak={view.weak} about={view.claim} />
 
           {view.evidence.map((e) => (
             <div key={e.id} className="evidence">
@@ -484,17 +556,27 @@ export function IdeaFile({
               is the whole citation: what was said and when, and opens the
               conversation it was said in, the way a citation would. */}
           {view.evidence.map((e) => (
-            <button
-              key={e.id}
-              className="quote-source"
-              onClick={() => onOpenConversation(e.session_id)}
-            >
-              <blockquote>
+            <div key={e.id} className="quote-source">
+              {/* Only the quote goes anywhere. The whole card used to be one
+                  button, so reading the date — or moving the pointer across
+                  on the way to something else — lit up as though the words
+                  were about to be left behind. */}
+              <blockquote
+                role="link"
+                tabIndex={0}
+                onClick={() => onOpenConversation(e.session_id)}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter" || ev.key === " ") {
+                    ev.preventDefault();
+                    onOpenConversation(e.session_id);
+                  }
+                }}
+              >
                 “{e.quote}”
                 {e.normalized && <span className="tag">loose match</span>}
               </blockquote>
               <span className="quote-date">{plainDate(e.started_at)}</span>
-            </button>
+            </div>
           ))}
         </>
       )}

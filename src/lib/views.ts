@@ -29,6 +29,10 @@ export interface ConversationView {
   turns: ViewTurn[];
   strong: string[];
   weak: string[];
+  /** The AI settings this conversation ran under. An open map on purpose:
+   *  what the model is told will grow, and the screen can show whatever is
+   *  in here without another change to the schema. */
+  ai_profile: Record<string, string | undefined>;
 }
 
 export interface IdeaEvidence {
