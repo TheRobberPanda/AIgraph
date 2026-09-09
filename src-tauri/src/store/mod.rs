@@ -88,6 +88,18 @@ pub struct StoredIdea {
     pub weak: Vec<String>,
 }
 
+/// A conversation that could not be read, and why. See [`Store::stalled`].
+#[derive(Debug, Clone, Serialize)]
+pub struct Stalled {
+    pub session_id: i64,
+    pub title: String,
+    pub error: String,
+    pub state: String,
+    /// How long until it is tried again, when a backoff is running.
+    pub retry_in_minutes: Option<i64>,
+    pub attempts: u32,
+}
+
 /// One conversation and what came out of it. See [`Store::selectable`].
 #[derive(Debug, Clone, Serialize)]
 pub struct Selectable {
@@ -980,6 +992,31 @@ impl Store {
 
         let (strong, weak) = self.nudges_for("nudges", "idea_id", idea_id)?;
         Ok(IdeaView { id: idea_id, claim, title, revision, strong, weak, evidence, revisions })
+    }
+
+    /// Conversations that were read and could not be, with what went wrong.
+    ///
+    /// The failure is already recorded per session; this is how it gets in
+    /// front of anyone. A digest that quietly does nothing is the same picture
+    /// as a digest with nowhere to start, and only the error tells them apart.
+    pub fn stalled(&self) -> Result<Vec<Stalled>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, COALESCE(title, ''), COALESCE(extract_error, ''), extract_state
+             FROM sessions
+             WHERE archived = 0 AND extract_error IS NOT NULL AND extract_error <> ''
+             ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Stalled {
+                session_id: r.get(0)?,
+                title: r.get(1)?,
+                error: r.get(2)?,
+                state: r.get(3)?,
+                retry_in_minutes: None,
+                attempts: 0,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
     }
 
     /// A folder's conversations with the ideas each produced.

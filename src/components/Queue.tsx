@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { deleteSession, type SessionSummary } from "../lib/chat";
-import { pendingSessions } from "../lib/ideas";
+import {
+  extractionProgress,
+  extractionTrouble,
+  pendingSessions,
+  type ExtractionProgress,
+  type Stalled,
+} from "../lib/ideas";
 import { longDate } from "../lib/format";
 import Confirm from "./Confirm";
 import Sheet from "./Sheet";
@@ -21,11 +27,17 @@ export default function Queue({ onClose, onChanged }: { onClose: () => void; onC
   const [rows, setRows] = useState<SessionSummary[] | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** What went wrong, and what is still going. */
+  const [trouble, setTrouble] = useState<Stalled[]>([]);
+  const [progress, setProgress] = useState<ExtractionProgress | null>(null);
 
-  const refresh = () =>
+  const refresh = () => {
     pendingSessions()
       .then(setRows)
       .catch((e) => setError(String(e)));
+    void extractionTrouble().then(setTrouble).catch(() => {});
+    void extractionProgress().then(setProgress).catch(() => {});
+  };
 
   useEffect(() => {
     void refresh();
@@ -44,6 +56,66 @@ export default function Queue({ onClose, onChanged }: { onClose: () => void; onC
         </header>
 
         {error && <p className="error">{error}</p>}
+
+        {/* What is happening, in the place people come to when it looks like
+            nothing is. Reading stops between conversations, backs off after a
+            failure, and both are invisible from the button. */}
+        <div className="state-panel">
+          <h3 className="section">Right now</h3>
+          {progress?.running ? (
+            <p className="blurb">
+              <span className="spinner" aria-hidden="true" /> Reading{" "}
+              {progress.running.total > 1 &&
+                `${progress.running.index} of ${progress.running.total} — `}
+              {progress.running.phase}
+              {progress.stopping && " · stopping after this one"}
+            </p>
+          ) : (
+            <p className="blurb">Not reading anything.</p>
+          )}
+
+          {progress?.last && (
+            <p className="blurb">
+              Last read took {progress.last.seconds}s
+              {progress.last.error ? (
+                <> and failed.</>
+              ) : (
+                <>
+                  {" "}
+                  and found {progress.last.ideas}{" "}
+                  {progress.last.ideas === 1 ? "idea" : "ideas"}
+                  {progress.last.wrote_per_second != null &&
+                    ` · ${Math.round(progress.last.wrote_per_second)} tok/s`}
+                  .
+                </>
+              )}
+            </p>
+          )}
+
+          {trouble.length > 0 && (
+            <>
+              <h3 className="section">Would not read</h3>
+              <ul className="plain-list">
+                {trouble.map((t) => (
+                  <li key={t.session_id}>
+                    <strong>{t.title || `Conversation ${t.session_id}`}</strong>
+                    {t.retry_in_minutes !== null && (
+                      <span className="row-meta">
+                        {" "}
+                        · trying again in {t.retry_in_minutes} min
+                        {t.attempts > 1 && ` (${t.attempts} attempts)`}
+                      </span>
+                    )}
+                    {/* The whole message, not a summary of it. This is the one
+                        place the actual reason is available, and an abridged
+                        error is a reason nobody can act on. */}
+                    <p className="path">{t.error}</p>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
 
         {rows !== null && rows.length === 0 ? (
           <p className="empty">{t("queue_empty")}</p>

@@ -177,3 +177,24 @@ export function exportBook(
 ): Promise<BookWritten> {
   return invoke<BookWritten>("export_book", { folder, path, format });
 }
+
+/** A conversation that could not be read, and why. */
+export interface Stalled {
+  session_id: number;
+  title: string;
+  error: string;
+  state: string;
+  /** How long until it is tried again, when a backoff is running. */
+  retry_in_minutes: number | null;
+  attempts: number;
+}
+
+/**
+ * Why nothing is happening, when nothing appears to be happening.
+ *
+ * A digest that has quietly stopped and a digest with nothing to do look the
+ * same from outside; this is the difference.
+ */
+export function extractionTrouble(): Promise<Stalled[]> {
+  return invoke<Stalled[]>("extraction_trouble");
+}

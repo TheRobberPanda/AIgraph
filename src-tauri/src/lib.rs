@@ -105,6 +105,7 @@ pub fn run() {
             commands::extract_now,
             commands::extraction_progress,
             commands::stop_digest,
+            commands::extraction_trouble,
             commands::pending_sessions,
             commands::pending_sessions,
             commands::source_view,

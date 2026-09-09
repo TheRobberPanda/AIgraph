@@ -861,6 +861,29 @@ pub async fn extract_now(
     Ok(true)
 }
 
+/// Why nothing is happening, when nothing appears to be happening.
+///
+/// A digest that has quietly stopped and a digest with nothing to do look the
+/// same from outside. This is the difference: what failed, what it said, and
+/// how long until it is tried again. The backoff in particular is invisible
+/// otherwise — a conversation that failed twice is not tried for four
+/// minutes, which from the button looks like the button not working.
+#[tauri::command]
+pub async fn extraction_trouble(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::store::Stalled>, String> {
+    let mut stalled = state.store.lock().await.stalled().map_err(|e| e.to_string())?;
+    let backoff = state.retry_after.lock().await;
+    let now = chrono::Utc::now();
+    for row in &mut stalled {
+        if let Some((when, attempts)) = backoff.get(&row.session_id) {
+            row.attempts = *attempts;
+            row.retry_in_minutes = Some((*when - now).num_minutes().max(0));
+        }
+    }
+    Ok(stalled)
+}
+
 /// The conversations waiting to be read, in the order they will be.
 ///
 /// The queue is invisible otherwise: the count in the corner says how many are

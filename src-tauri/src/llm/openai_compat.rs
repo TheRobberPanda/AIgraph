@@ -334,6 +334,30 @@ fn looks_like_a_rejected_parameter(msg: &str) -> bool {
 }
 
 impl OpenAiCompat {
+    /// The `json_schema` block, in a shape this server will accept.
+    ///
+    /// We claimed `strict: true` while sending a schema that is not strict by
+    /// OpenAI's rules — `conversation` is a property but not required, nothing
+    /// declares `additionalProperties: false`, and `maxItems` is not allowed
+    /// in strict mode at all. Providers that actually enforce those rules
+    /// reject the request, which is every extraction against OpenRouter.
+    ///
+    /// So strict is claimed only where the schema has been made strict. Local
+    /// servers keep the loose one on purpose: llama.cpp ignores the flag and
+    /// uses the schema as a grammar, where `maxItems` is what stops a long
+    /// reply — tightening it away turns a ten-minute read into a twenty-minute
+    /// one.
+    fn schema_for(&self, schema: serde_json::Value) -> serde_json::Value {
+        if self.label == "openrouter" {
+            return serde_json::json!({
+                "name": "result",
+                "strict": true,
+                "schema": crate::extract::prompt::strict(&schema),
+            });
+        }
+        serde_json::json!({ "name": "result", "strict": false, "schema": schema })
+    }
+
     /// Ask this particular server not to think first.
     ///
     /// Extraction is a mechanical structured task, and a model that reasons
@@ -419,7 +443,7 @@ impl OpenAiCompat {
             "max_tokens": EXTRACT_MAX_TOKENS,
             "response_format": {
                 "type": "json_schema",
-                "json_schema": { "name": "result", "strict": true, "schema": schema }
+                "json_schema": self.schema_for(schema)
             },
         });
         if disable_reasoning {
@@ -443,8 +467,24 @@ impl OpenAiCompat {
             return Err(LlmError::Transport(format!("{status}: {detail}")));
         }
 
+        // OpenRouter answers 200 with the failure in the body rather than in
+        // the status. Read once and look, or a rejected request arrives as
+        // "missing field `choices`" — which reads as the model misbehaving and
+        // never reaches the retry that would have asked more simply.
+        let raw = resp.text().await.map_err(|e| LlmError::Transport(e.to_string()))?;
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(err) = v.get("error") {
+                let said = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| err.to_string());
+                let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(400);
+                return Err(LlmError::Transport(format!("{code}: {said}")));
+            }
+        }
         let completion: Completion =
-            resp.json().await.map_err(|e| LlmError::BadOutput(e.to_string()))?;
+            serde_json::from_str(&raw).map_err(|e| LlmError::BadOutput(e.to_string()))?;
         // What this call actually cost, straight from the server. Recorded
         // before anything can fail below, so a run that ends badly still
         // accounts for the time it spent.
@@ -595,6 +635,32 @@ mod tests {
     /// A model that ran out of context, or a server that fell over, is not a
     /// parameter problem — retrying the same call more simply would only
     /// spend the time twice.
+    /// Claiming strict about a schema that is not strict is what every
+    /// OpenRouter extraction died of.
+    #[test]
+    fn strict_is_only_claimed_where_the_schema_has_been_made_strict() {
+        let loose = crate::extract::prompt::json_schema();
+        let router = OpenAiCompat::new("https://openrouter.ai/api/v1", "m", None, "openrouter")
+            .schema_for(loose.clone());
+        assert_eq!(router["strict"], serde_json::json!(true));
+        let sent = &router["schema"];
+        assert_eq!(sent["additionalProperties"], serde_json::json!(false));
+        // Every property listed as required, and no keyword strict mode bans.
+        let props = sent["properties"].as_object().unwrap().len();
+        assert_eq!(sent["required"].as_array().unwrap().len(), props);
+        assert!(sent["properties"]["ideas"].get("maxItems").is_none());
+    }
+
+    /// And the local grammar keeps the cap that stops a runaway reply.
+    #[test]
+    fn a_local_server_keeps_the_loose_schema_and_its_cap() {
+        let loose = crate::extract::prompt::json_schema();
+        let local =
+            OpenAiCompat::new("http://127.0.0.1:8127", "m", None, "embedded").schema_for(loose);
+        assert_eq!(local["strict"], serde_json::json!(false));
+        assert_eq!(local["schema"]["properties"]["ideas"]["maxItems"], serde_json::json!(14));
+    }
+
     #[test]
     fn a_real_failure_is_not_mistaken_for_a_refused_parameter() {
         for msg in ["500 Internal Server Error", "connection refused", "503: overloaded"] {

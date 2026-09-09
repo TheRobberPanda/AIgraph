@@ -80,14 +80,14 @@ export type MapStyle = "nodes" | "forest" | "galaxy";
 
 export const MAP_STYLES: { value: MapStyle; label: string; blurb: string }[] = [
   {
-    value: "nodes",
-    label: "Nodes",
-    blurb: "A force-directed graph. Everything is a peer; the shape comes from what connects to what.",
-  },
-  {
     value: "forest",
     label: "Forest",
     blurb: "A tree per conversation, side by side, with its ideas as the roots beneath it.",
+  },
+  {
+    value: "nodes",
+    label: "Nodes",
+    blurb: "A force-directed graph. Everything is a peer; the shape comes from what connects to what.",
   },
   {
     value: "galaxy",

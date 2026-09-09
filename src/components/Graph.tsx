@@ -357,7 +357,7 @@ function arrangeForest(nodes: Node[], links: Link[]): Placed {
   return placed;
 }
 
-function ruleset(width: number, style: MapStyle = "nodes") {
+function ruleset(width: number, style: MapStyle = "forest") {
   const tight = width < 560;
   return {
     tight,
@@ -454,7 +454,7 @@ export default function Graph({
   const [legend, setLegend] = useState<[string, string][]>([]);
   /** Held in a ref rather than state: the draw loop and the hit test both read
    *  it every frame, and a re-render per frame is not the way to tell them. */
-  const styleRef = useRef<MapStyle>("nodes");
+  const styleRef = useRef<MapStyle>("forest");
   /** What an arranged style worked out: rings to draw, orbits to turn,
    *  trunks to stand. Empty under `nodes`, which is laid out by force. */
   const placedRef = useRef<Placed>(NOTHING_PLACED);

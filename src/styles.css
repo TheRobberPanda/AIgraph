@@ -1230,6 +1230,16 @@ button { font-family: inherit; }
 }
 
 .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+/* Text after a row of controls needs air, and a row after text needs a little
+   less. Neither had any: `.row` carries no margin and `.blurb` only a bottom
+   one, so a paragraph explaining the buttons above it began on the line under
+   them, and read as their label. */
+.row + .blurb,
+.row + p,
+.row + .path { margin-top: 1rem; }
+.row + .row { margin-top: 0.55rem; }
+.path + .row,
+.blurb + .row { margin-top: 0.1rem; }
 
 .tag {
   font-family: var(--mono);
