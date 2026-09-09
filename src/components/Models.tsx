@@ -368,14 +368,6 @@ export default function Models() {
               key is missing or was rejected. */}
           {source === "cloud" && remote.length > 0 && (
             <>
-              <div className="row filters">
-                <input
-                  className="field filter-input"
-                  placeholder="Filter models — claude, gpt, llama…"
-                  value={cloudQuery}
-                  onChange={(e) => setCloudQuery(e.target.value)}
-                />
-              </div>
               {remote.map((s) => {
                   const chosen = active?.chat;
                   // The API hands back duplicates; one row per model.
@@ -401,6 +393,17 @@ export default function Models() {
                           "Nothing chosen yet"
                         )}
                       </p>
+                      {/* Directly over the list it filters. Above the section
+                          heading it read as page furniture — with the
+                          provider name and the current choice in between, it
+                          was not obvious it had anything to do with the three
+                          hundred rows below it. */}
+                      <input
+                        className="field filter-input"
+                        placeholder="Filter models — claude, gpt, llama…"
+                        value={cloudQuery}
+                        onChange={(e) => setCloudQuery(e.target.value)}
+                      />
                       <ul className="model-list">
                         {models.map((m) => {
                           const isChosen = chosen?.kind === s.kind && chosen?.model === m.id;

@@ -13,3 +13,4 @@ src-tauri/gen/schemas/
 *.sqlite
 *.sqlite3
 transcripts/
+mock.html

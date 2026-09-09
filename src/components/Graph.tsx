@@ -16,7 +16,15 @@ import { deleteIdea, onIdeasChanged, reextractSession } from "../lib/ideas";
 import { deleteSession, setSessionArchived } from "../lib/chat";
 import ContextMenu from "./ContextMenu";
 import { categoryColors, UNCATEGORISED } from "../lib/categories";
-import { getSettings, onSettingsChanged, type MapStyle } from "../lib/settings";
+import {
+  getSettings,
+  onSettingsChanged,
+  saveSettings,
+  MAP_SPREADS,
+  MAP_STYLES,
+  type MapSpread,
+  type MapStyle,
+} from "../lib/settings";
 import { ConversationFile, IdeaFile } from "./Deep";
 import FilePanel from "./FilePanel";
 import Resolve from "./Resolve";
@@ -217,7 +225,7 @@ interface Placed {
   rings: { hub: Node; radius: number }[];
   orbits: Orbiting[];
   /** Trunk feet, in world space. Forest only. */
-  trunks: { hub: Node; x: number; groundY: number }[];
+  trunks: { hub: Node; x: number; groundY: number; deepestY: number }[];
 }
 
 const NOTHING_PLACED: Placed = { rings: [], orbits: [], trunks: [] };
@@ -350,7 +358,15 @@ function arrangeForest(nodes: Node[], links: Link[]): Placed {
     hub.y = GROUND - TRUNK;
     hub.fx = hub.x;
     hub.fy = hub.y;
-    placed.trunks.push({ hub, x, groundY: GROUND });
+    const mine = ideasOf.get(hub) ?? [];
+    const levels = Math.ceil(mine.length / PER_LEVEL);
+    placed.trunks.push({
+      hub,
+      x,
+      groundY: GROUND,
+      // How far the taproot has to reach: to the deepest idea it feeds.
+      deepestY: GROUND + Math.max(1, levels) * ROOT_STEP,
+    });
 
     // Roots: each level fans wider and sits deeper, so the whole thing reads
     // downward from the trunk rather than as a second crown.
@@ -403,6 +419,50 @@ function ruleset(width: number, style: MapStyle = "forest") {
     chargeByRadius: tight ? 4 : 12,
   };
 }
+
+/**
+ * A conversation's tree, in screen space.
+ *
+ * In a forest a conversation is not a dot with a tree painted around it — it
+ * *is* the tree, the same stacked-triangle fir the app is named by. So one
+ * function owns the shape, and both the drawing and the hit test read it:
+ * anything else and what you can click stops matching what you can see, which
+ * is the bug that made the old crown-circle feel arbitrary to point at.
+ *
+ * `apex` is the node's own position; `groundY` is where the trunk stands.
+ */
+function treeShape(apex: { x: number; y: number }, groundY: number) {
+  const height = Math.max(14, groundY - apex.y);
+  // Taken from the icon: a little wider than half its height, with the trunk
+  // about a sixth of it.
+  const halfWidth = height * 0.34;
+  const trunkH = height * 0.16;
+  const trunkW = Math.max(1.2, halfWidth * 0.14);
+  return { height, halfWidth, trunkH, trunkW, apex, groundY };
+}
+
+/** Whether a point is inside the tree — canopy or trunk. */
+function inTree(t: ReturnType<typeof treeShape>, px: number, py: number): boolean {
+  const { apex, groundY, halfWidth, trunkH, trunkW } = t;
+  const canopyBottom = groundY - trunkH;
+  if (py >= apex.y && py <= canopyBottom) {
+    // The canopy is three overlapping triangles, but they share one outline:
+    // width grows from nothing at the apex to the full span at the base.
+    const down = (py - apex.y) / Math.max(1, canopyBottom - apex.y);
+    return Math.abs(px - apex.x) <= halfWidth * down;
+  }
+  if (py > canopyBottom && py <= groundY) {
+    return Math.abs(px - apex.x) <= trunkW * 1.8;
+  }
+  return false;
+}
+
+/** What each spread multiplies the push between nodes by. */
+const SPREAD_PUSH: Record<MapSpread, number> = {
+  loose: 2.1,
+  balanced: 1,
+  tight: 0.45,
+};
 
 export default function Graph({
   folder,
@@ -484,12 +544,26 @@ export default function Graph({
   // read it every frame; the counter is only to get one render out of a
   // change. `buildRef` because rebuilding is what a style change means — the
   // three are different arrangements, not different paint.
+  const spreadRef = useRef<MapSpread>("balanced");
+  /** Mirrors of the two map settings, so the map's own controls can show
+   *  which is on. The refs above are what the draw loop reads. */
+  const [style, setStyle] = useState<MapStyle>("nodes");
+  const [spread, setSpread] = useState<MapSpread>("balanced");
+  const [showArrange, setShowArrange] = useState(false);
   const buildRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
-    const apply = (m: MapStyle) => {
-      if (!alive || m === styleRef.current) return;
+    const apply = (m: MapStyle, sp: MapSpread) => {
+      if (!alive) return;
+      // The controls always show what is set, whatever the draw loop is
+      // already doing. Skipping this alongside the rebuild left the button
+      // saying "Nodes" over a forest, because the refs were current and the
+      // state had never been told.
+      setStyle(m);
+      setSpread(sp);
+      if (m === styleRef.current && sp === spreadRef.current) return;
       styleRef.current = m;
+      spreadRef.current = sp;
       restyle((n) => n + 1);
       buildRef.current();
     };
@@ -497,9 +571,9 @@ export default function Graph({
     // the initial build may already have run under the default.
     void getSettings().then((st) => {
       if (!alive) return;
-      if (st.map_style !== styleRef.current) apply(st.map_style);
+      apply(st.map_style, st.map_spread ?? "balanced");
     });
-    const un = onSettingsChanged((st) => apply(st.map_style));
+    const un = onSettingsChanged((st) => apply(st.map_style, st.map_spread ?? "balanced"));
     return () => {
       alive = false;
       void un.then((f) => f());
@@ -661,9 +735,11 @@ export default function Graph({
 
     // Ground and trunks. Drawn before the branches so the roots below it read
     // as going into the ground rather than sitting on top of a line.
+    const forestGround =
+      styleRef.current === "forest" ? toScreen({ x: 0, y: 0 }, w, h).y : null;
     if (styleRef.current === "forest" && placed.trunks.length) {
       const k = viewRef.current.scale * spreadOf(viewRef.current.scale);
-      const ground = toScreen({ x: 0, y: 0 }, w, h).y;
+      const ground = forestGround ?? 0;
       ctx.strokeStyle = C.related;
       ctx.globalAlpha = 0.35;
       ctx.lineWidth = 1;
@@ -674,47 +750,18 @@ export default function Graph({
       ctx.globalAlpha = 1;
 
       for (const trunk of placed.trunks) {
-        const crown = toScreen(trunk.hub, w, h);
+        // The tree itself is drawn with the node, further down — it *is* the
+        // node now. What belongs here is only what sits behind everything:
+        // the ground it stands on, and the taproot under it.
         const foot = toScreen({ x: trunk.x, y: trunk.groundY }, w, h);
-
-        // Branches. Without them a tree is a circle on a stick — the roots
-        // below say "tree" and nothing above ground agreed. Drawn from the
-        // conversation's own colour, thinning outward, and fanned upward so
-        // the canopy sits over the trunk rather than beside it.
-        ctx.strokeStyle = trunk.hub.color;
-        ctx.globalAlpha = 0.5;
-        ctx.lineCap = "round";
-        const span = Math.max(10, 74 * k);
-        for (const [lean, rise, weight] of [
-          [-0.85, 0.75, 1],
-          [-0.45, 1.05, 0.8],
-          [0.0, 1.2, 0.9],
-          [0.45, 1.05, 0.8],
-          [0.85, 0.75, 1],
-        ] as [number, number, number][]) {
-          ctx.lineWidth = Math.max(0.7, 2.4 * k * weight);
-          ctx.beginPath();
-          ctx.moveTo(crown.x, crown.y);
-          ctx.quadraticCurveTo(
-            crown.x + lean * span * 0.5,
-            crown.y - rise * span * 0.5,
-            crown.x + lean * span,
-            crown.y - rise * span,
-          );
-          ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
-        // Tapered: wide at the ground, narrow at the crown, the same shape the
-        // branches use so a tree is one drawing rather than two.
-        const wide = Math.max(1.2, 7 * k);
-        const thin = Math.max(0.8, 2.6 * k);
+        const deep = toScreen({ x: trunk.x, y: trunk.deepestY }, w, h);
+        const wide = Math.max(1.2, 5 * k);
         ctx.fillStyle = trunk.hub.color;
-        ctx.globalAlpha = 0.85;
+        ctx.globalAlpha = 0.5;
         ctx.beginPath();
         ctx.moveTo(foot.x - wide, foot.y);
         ctx.lineTo(foot.x + wide, foot.y);
-        ctx.lineTo(crown.x + thin, crown.y);
-        ctx.lineTo(crown.x - thin, crown.y);
+        ctx.lineTo(deep.x, deep.y);
         ctx.closePath();
         ctx.fill();
         ctx.globalAlpha = 1;
@@ -736,9 +783,14 @@ export default function Graph({
       // In a forest a root leaves the foot of the trunk, not the crown. Drawn
       // from the node itself, every root ran the length of the trunk and out
       // through the top of the tree.
+      // In a forest a root leaves the central taproot at its own depth and
+      // goes sideways to the idea. Leaving from the foot instead made every
+      // root a separate spoke fanning out of one point, which reads as a
+      // splayed hand rather than a root system — a real one runs down and
+      // branches off as it goes.
       const sa =
         styleRef.current === "forest" && link.kind === "from"
-          ? toScreen({ x: a.x, y: 0 }, w, h)
+          ? toScreen({ x: a.x, y: (b.y ?? 0) }, w, h)
           : toScreen(a, w, h);
       const sb = toScreen(b, w, h);
       const lit = !focus || inFocus(a) || inFocus(b);
@@ -798,19 +850,28 @@ export default function Graph({
     for (const n of nodesRef.current) {
       const s = toScreen(n, w, h);
       const r = drawnRadius(n.r, viewRef.current.scale, w, styleRef.current);
+      // A tree's node position is its apex — the tip of the top triangle. Every
+      // ring below would otherwise be drawn around a point in the sky above
+      // the thing it is meant to be marking.
+      const tree =
+        styleRef.current === "forest" && n.data.kind === "conversation" && forestGround !== null
+          ? treeShape(s, forestGround)
+          : null;
+      const midY = tree ? s.y + tree.height * 0.5 : s.y;
+      const ringR = tree ? Math.max(tree.halfWidth, tree.height * 0.45) : r;
       ctx.globalAlpha = inFocus(n) ? 1 : 0.22;
 
       // The same ring the pointer draws, so running down the list of what was
       // taken from a conversation picks each one out on the map in turn.
       if (hover === n || isTraced(n)) {
         ctx.beginPath();
-        ctx.arc(s.x, s.y, r + 6, 0, Math.PI * 2);
+        ctx.arc(s.x, midY, ringR + 6, 0, Math.PI * 2);
         ctx.fillStyle = C.hoverRing;
         ctx.fill();
       }
       if (n.data.shared) {
         ctx.beginPath();
-        ctx.arc(s.x, s.y, r + 7, 0, Math.PI * 2);
+        ctx.arc(s.x, midY, ringR + 7, 0, Math.PI * 2);
         ctx.fillStyle = C.halo;
         ctx.fill();
       }
@@ -820,7 +881,7 @@ export default function Graph({
       if (n.data.just_revised) {
         const t = ((performance.now() - startedRef.current) / 1600) % 1;
         ctx.beginPath();
-        ctx.arc(s.x, s.y, r + 6 + t * 16, 0, Math.PI * 2);
+        ctx.arc(s.x, midY, ringR + 6 + t * 16, 0, Math.PI * 2);
         ctx.strokeStyle = C.labelConversation;
         ctx.globalAlpha = (1 - t) * (inFocus(n) ? 0.55 : 0.15);
         ctx.lineWidth = 1.5;
@@ -828,16 +889,40 @@ export default function Graph({
         ctx.globalAlpha = inFocus(n) ? 1 : 0.22;
       }
 
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = n.color;
-      ctx.fill();
+      if (tree) {
+        const t = tree;
+        ctx.fillStyle = n.color;
+        // Trunk first, so the lowest tier overlaps its top and the two read
+        // as one object rather than a triangle balanced on a stick.
+        ctx.fillRect(s.x - t.trunkW, t.groundY - t.trunkH, t.trunkW * 2, t.trunkH);
+        const canopyH = t.height - t.trunkH;
+        const TIERS = 3;
+        for (let i = 0; i < TIERS; i++) {
+          // Each tier starts higher and ends wider than the one above it, and
+          // they overlap — which is what makes the silhouette read as foliage
+          // rather than as three separate triangles.
+          const top = s.y + (canopyH * i * 0.3);
+          const bottom = s.y + canopyH * (0.5 + i * 0.25);
+          const half = t.halfWidth * (0.5 + i * 0.25);
+          ctx.beginPath();
+          ctx.moveTo(s.x, top);
+          ctx.lineTo(s.x + half, bottom);
+          ctx.lineTo(s.x - half, bottom);
+          ctx.closePath();
+          ctx.fill();
+        }
+      } else {
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = n.color;
+        ctx.fill();
+      }
     }
 
     // Labels last so nothing is drawn over them. Every node gets one — the
     // force simulation's collision radius accounts for label size precisely
     // so that spacing, not skipping, is what keeps them apart.
-    ctx.textAlign = "center";
+    ctx.textAlign = "left";
     ctx.textBaseline = "top";
 
     // In a side panel there is no room to name every idea — the labels stack
@@ -876,6 +961,12 @@ export default function Graph({
       box: { x0: number; y0: number; x1: number; y1: number };
       isConversation: boolean;
     };
+    // Pulled back far enough the map stops being a set of things with names
+    // and becomes a shape. Titles there are unreadable at that size and
+    // land on each other whatever the crowding test decides, so they are not
+    // drawn at all — the landmarks and whatever is being pointed at still are.
+    const tooFarOutToRead = viewRef.current.scale < 0.55;
+
     const laid: Placed[] = [];
     for (const n of candidates) {
       const isConversation = n.data.kind === "conversation";
@@ -896,25 +987,33 @@ export default function Graph({
       const lineHeight = labelPx * 1.3;
       const lines = wrapLines(ctx, n.data.label, maxLabelWidth, isConversation ? 5 : 4);
       const widest = Math.max(...lines.map((l) => ctx.measureText(l).width));
+      // Beside the node, not beneath it. Underneath, a label sat on whatever
+      // was below — links, roots, the next node down — and on a dense map the
+      // thing being read was the thing most likely to be covered. To the
+      // right it has the node's own clear space to occupy, and a column of
+      // labels reads down the map rather than colliding across it.
+      const gap = Math.max(4, labelPx * 0.45);
+      // Beside whatever is actually drawn: a circle's edge, or a tree's
+      // widest point at the height of its middle. Anchored to the node's own
+      // position a tree's name floated beside its tip, level with nothing.
+      const tree =
+        styleRef.current === "forest" && isConversation && forestGround !== null
+          ? treeShape(s, forestGround)
+          : null;
+      const textX = s.x + (tree ? tree.halfWidth : r) + gap;
+      const anchorY = tree ? s.y + tree.height * 0.5 : s.y;
+      const textY = anchorY - (lines.length * lineHeight) / 2;
       const box = {
-        x0: s.x - widest / 2 - 3,
-        x1: s.x + widest / 2 + 3,
-        y0: s.y + r + 5,
-        y1: s.y + r + 9 + lines.length * lineHeight,
+        x0: textX - 3,
+        x1: textX + widest + 3,
+        y0: textY - 3,
+        y1: textY + lines.length * lineHeight + 3,
       };
       // Only what is on screen counts, for drawing and for the crowding test
       // below. A title two screens away is not in anyone's way, and letting it
       // vote meant zooming in never uncrowded the map.
       if (box.x1 < 0 || box.x0 > w || box.y1 < 0 || box.y0 > h) continue;
-      laid.push({
-        n,
-        lines,
-        x: s.x,
-        y: s.y + r + 7,
-        lineHeight,
-        isConversation,
-        box,
-      });
+      laid.push({ n, lines, x: textX, y: textY, lineHeight, isConversation, box });
     }
 
     // Zoom out far enough and the titles start landing on top of each other.
@@ -956,6 +1055,7 @@ export default function Graph({
       // Conversations are the map's landmarks and always keep their names, as
       // does whatever is being pointed at directly.
       const mustDraw = hover === l.n || isTraced(l.n) || focusNodeRef.current === l.n;
+      if (!mustDraw && tooFarOutToRead) continue;
       if (!l.isConversation && !mustDraw && clash) continue;
       // Conversations keep their names at full size — they are the map's
       // landmarks, and all-or-nothing there leaves an unlabelled map. In a
@@ -978,10 +1078,14 @@ export default function Graph({
       if (hover === l.n) {
         const pad = Math.max(3, labelPx * 0.42);
         const widest = Math.max(...l.lines.map((line) => ctx.measureText(line).width));
-        const boxH = l.lines.length * l.lineHeight + pad * 1.4;
+        // The text is drawn from `l.y` downward — `textBaseline` is "top" —
+        // so the card is that block plus even padding. It used to start most
+        // of a line higher and stop short of the last line, which put the
+        // card above the words it was meant to be behind.
+        const boxH = l.lines.length * l.lineHeight + pad * 2;
         const boxW = widest + pad * 2;
-        const bx = l.x - boxW / 2;
-        const by = l.y - l.lineHeight * 0.82 - pad * 0.7;
+        const bx = l.x - pad;
+        const by = l.y - pad;
         const r = Math.min(7, pad * 1.5);
         const was = ctx.globalAlpha;
         ctx.globalAlpha = 1;
@@ -1131,7 +1235,9 @@ export default function Graph({
         "charge",
         forceManyBody<Node>().strength((n) => {
           const rules = ruleset(planWidth());
-          return rules.charge - n.r * rules.chargeByRadius;
+          // How hard everything pushes apart, which is the one thing that
+          // decides whether the map reads as a shape or as a list of things.
+          return (rules.charge - n.r * rules.chargeByRadius) * SPREAD_PUSH[spreadRef.current];
         }),
       )
       // The label hangs below the node rather than around it, so this is an
@@ -1408,12 +1514,37 @@ export default function Graph({
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
 
+    const forestGround =
+      styleRef.current === "forest" ? toScreen({ x: 0, y: 0 }, w, h).y : null;
+
     let best: Node | null = null;
     let bestDist = Infinity;
     for (const n of nodesRef.current) {
       const s = toScreen(n, w, h);
+
+      // A conversation in a forest is a tree, so the tree is what answers to
+      // the pointer. Testing a circle at the apex meant the whole canopy —
+      // the part that actually looks like the thing — was dead, and the only
+      // live spot was a patch of sky above it.
+      if (forestGround !== null && n.data.kind === "conversation") {
+        if (inTree(treeShape(s, forestGround), px, py)) {
+          // Nearest by apex, so two overlapping trees still resolve.
+          const d = Math.hypot(px - s.x, py - s.y);
+          if (d < bestDist) {
+            best = n;
+            bestDist = d;
+          }
+        }
+        continue;
+      }
       const drawn = drawnRadius(n.r, viewRef.current.scale, canvas.clientWidth, styleRef.current);
-      const r = Math.max(drawn + 6, ruleset(canvas.clientWidth, styleRef.current).hitRadius);
+      // The comfort radius is in screen pixels and did not shrink with the
+      // map. Zoomed out, a node draws as a dot and still answered to the
+      // pointer from a couple of centimetres away — so nodes lit up with the
+      // pointer visibly nowhere near them. It can still be generous, but
+      // never much larger than the thing it is standing in for.
+      const comfort = ruleset(canvas.clientWidth, styleRef.current).hitRadius;
+      const r = Math.max(drawn + 4, Math.min(comfort, drawn * 2));
       const d = Math.hypot(px - s.x, py - s.y);
       if (d <= r && d < bestDist) {
         best = n;
@@ -1705,6 +1836,64 @@ export default function Graph({
         >
           Fit
         </button>
+      )}
+
+      {!empty && (
+        <div className="graph-arrange">
+          {/* The arrangement lives here rather than only in Settings. It is
+              not a preference you set once — it is a way of looking at what
+              is on screen, and the whole point of trying another one is
+              seeing this map in it. Leaving the switch two tabs away made it
+              a thing you configure instead of a thing you use. */}
+          <button
+            type="button"
+            className={showArrange ? "graph-arrange-btn on" : "graph-arrange-btn"}
+            aria-expanded={showArrange}
+            onClick={() => setShowArrange((v) => !v)}
+          >
+            {MAP_STYLES.find((m) => m.value === style)?.label ?? "Arrange"}
+          </button>
+          {showArrange && (
+            <div className="graph-arrange-panel">
+              <p className="graph-arrange-head">Arrangement</p>
+              <div className="graph-arrange-row">
+                {MAP_STYLES.map((m) => (
+                  <button
+                    type="button"
+                    key={m.value}
+                    className={style === m.value ? "on" : undefined}
+                    title={m.blurb}
+                    onClick={() => {
+                      void getSettings().then((st) =>
+                        saveSettings({ ...st, map_style: m.value }),
+                      );
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <p className="graph-arrange-head">How much room they take</p>
+              <div className="graph-arrange-row">
+                {MAP_SPREADS.map((m) => (
+                  <button
+                    type="button"
+                    key={m.value}
+                    className={spread === m.value ? "on" : undefined}
+                    title={m.blurb}
+                    onClick={() => {
+                      void getSettings().then((st) =>
+                        saveSettings({ ...st, map_spread: m.value }),
+                      );
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {empty && (

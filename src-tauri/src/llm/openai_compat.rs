@@ -515,14 +515,7 @@ impl OpenAiCompat {
             return;
         }
         if self.label == "openrouter" {
-            body["reasoning"] = match how {
-                // Some models cannot turn thinking off at all: their metadata
-                // says `"mandatory": true`, and `enabled: false` is quietly
-                // ignored. For those the only lever is how *much* — and the
-                // lowest effort they support, since "none" is not among them.
-                Reasoning::AsLittleAsPossible => serde_json::json!({ "effort": "low" }),
-                _ => serde_json::json!({ "enabled": false }),
-            };
+            body["reasoning"] = serde_json::json!({ "enabled": false });
             return;
         }
         // llama.cpp takes `reasoning`; `enable_thinking` is what LM Studio and
@@ -598,29 +591,6 @@ impl OpenAiCompat {
 
         let first =
             self.through_the_network(prompt, schema.clone(), Reasoning::Off, true, stream).await;
-
-        // Asked not to think, and thought anyway until the budget was gone.
-        //
-        // Some models cannot switch reasoning off at all — their metadata says
-        // `"mandatory": true` — and on those `enabled: false` is quietly
-        // ignored while the default effort is the highest they have. This used
-        // to be the end of the road: an error telling the person to go and
-        // choose a different model. There is one more thing to ask for first,
-        // which is simply *less*.
-        if let Err(LlmError::BadOutput(said)) = &first {
-            if said.contains(THOUGHT_ITSELF_OUT) {
-                tracing::debug!("the model cannot stop thinking; asking it to think less");
-                return self
-                    .through_the_network(
-                        prompt,
-                        schema,
-                        Reasoning::AsLittleAsPossible,
-                        true,
-                        stream,
-                    )
-                    .await;
-            }
-        }
 
         let Err(LlmError::Transport(msg)) = &first else { return first };
         if !looks_like_a_rejected_parameter(msg) {
@@ -783,8 +753,8 @@ impl OpenAiCompat {
                         // Worded identically to the unstreamed branch, because
                         // the rung that answers this matches on the wording.
                         format!(
-                            "the model {THOUGHT_ITSELF_OUT} {budget}-token budget reasoning \
-                             and never produced an answer"
+                            "the model spent its entire {budget}-token budget \
+                             reasoning and never produced an answer"
                         )
                     } else {
                         "the model returned an empty reply".to_string()
@@ -834,8 +804,8 @@ impl OpenAiCompat {
             let truncated = choice.finish_reason.as_deref() == Some("length");
             return Err(LlmError::BadOutput(if !thought.is_empty() && truncated {
                 format!(
-                    "the model {THOUGHT_ITSELF_OUT} {budget}-token budget reasoning \
-                     and never produced an answer"
+                    "the model spent its entire {budget}-token budget \
+                     reasoning and never produced an answer"
                 )
             } else if truncated {
                 format!("reply hit the {budget}-token limit before completing")
@@ -916,16 +886,9 @@ const CLOUD_EXTRACT_MAX_TOKENS: u32 = 32_000;
 enum Reasoning {
     /// Off, where the model allows it. The right ask for a mechanical task.
     Off,
-    /// As little as the model will accept — for one that cannot switch it off.
-    AsLittleAsPossible,
     /// Say nothing about it, for a server that refused to be told.
     LeftAlone,
 }
-
-/// The marker in the failure a model produces when it thinks instead of
-/// answering. Matched rather than re-derived, so the rung that responds to it
-/// and the message that reports it cannot drift apart.
-const THOUGHT_ITSELF_OUT: &str = "spent its entire";
 
 #[async_trait]
 impl IdeaExtractor for OpenAiCompat {
@@ -1199,33 +1162,6 @@ mod tests {
         assert!(!local.routes_to_many_providers(), "a local server is the only provider there is");
     }
 
-    /// The reason glm-flash could never digest anything.
-    ///
-    /// Its metadata says `"reasoning": {"mandatory": true, "default_effort":
-    /// "max"}` and its supported efforts are only max/high/low — there is no
-    /// "none". So `enabled: false` is ignored, it thinks at full effort, and
-    /// on an OpenAI-compatible cloud API `max_tokens` covers the thinking as
-    /// well as the answer. Against a 5,000-token budget it spent everything
-    /// reasoning and returned empty content, every single time.
-    #[test]
-    fn a_model_that_cannot_stop_thinking_is_asked_to_think_less() {
-        let openrouter = OpenAiCompat::new("https://openrouter.ai/api/v1", "m", None, "openrouter");
-
-        let mut off = body();
-        openrouter.quieten_reasoning(&mut off, Reasoning::Off);
-        assert_eq!(off["reasoning"], serde_json::json!({ "enabled": false }));
-
-        // The fallback for a model that ignored that: not "none", which such
-        // models do not offer, but the lowest effort they do.
-        let mut least = body();
-        openrouter.quieten_reasoning(&mut least, Reasoning::AsLittleAsPossible);
-        assert_eq!(least["reasoning"], serde_json::json!({ "effort": "low" }));
-
-        let mut alone = body();
-        openrouter.quieten_reasoning(&mut alone, Reasoning::LeftAlone);
-        assert!(alone.get("reasoning").is_none(), "a server that refused is told nothing");
-    }
-
     /// The budget has to cover the thinking on a cloud model, and the small
     /// one was chosen for a local model's speed. Keeping both at 5,000 meant
     /// a reasoning model could not reach its answer at all.
@@ -1238,19 +1174,5 @@ mod tests {
             cloud.extract_budget() > local.extract_budget() * 4,
             "max-effort reasoning plus the answer does not fit in a local budget"
         );
-    }
-
-    /// The rung only fires if it recognises the failure, and two places
-    /// produce that failure — streamed and not. Both must word it the same.
-    #[test]
-    fn thinking_itself_out_is_worded_the_same_either_way() {
-        let budget = CLOUD_EXTRACT_MAX_TOKENS;
-        let streamed =
-            format!("the model {THOUGHT_ITSELF_OUT} {budget}-token budget reasoning and never produced an answer");
-        assert!(streamed.contains(THOUGHT_ITSELF_OUT));
-        // And it must not be mistaken for something the retry ladder handles,
-        // or it would be answered by asking more simply instead of asking for
-        // less thinking.
-        assert!(!looks_transient(&streamed));
     }
 }

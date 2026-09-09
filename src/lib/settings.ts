@@ -50,6 +50,8 @@ export interface Settings {
   runtime: Runtime;
   layout: Layout;
   map_style: MapStyle;
+  /** How hard the map's nodes push each other apart. */
+  map_spread: MapSpread;
   /** Advanced layout order: conversations left, Make right. */
   advanced_swap: boolean;
   /** The accent colour id. Empty means the theme's own. */
@@ -77,6 +79,20 @@ export type Layout = "simple" | "advanced";
  * would be a filter wearing an appearance setting's clothes.
  */
 export type MapStyle = "nodes" | "forest" | "galaxy";
+
+/**
+ * How much room the map's nodes claim from each other.
+ *
+ * Separate from the arrangement, which decides *where* things go. This decides
+ * how insistently they push apart once they are there.
+ */
+export type MapSpread = "loose" | "balanced" | "tight";
+
+export const MAP_SPREADS: { value: MapSpread; label: string; blurb: string }[] = [
+  { value: "loose", label: "Roomy", blurb: "Nothing overlaps. The map gets large." },
+  { value: "balanced", label: "Balanced", blurb: "The default." },
+  { value: "tight", label: "Close", blurb: "The whole shape without panning." },
+];
 
 export const MAP_STYLES: { value: MapStyle; label: string; blurb: string }[] = [
   {

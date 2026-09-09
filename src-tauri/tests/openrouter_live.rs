@@ -17,17 +17,17 @@
 //! them tried. The catalogue says what a model *claims* to support; only a
 //! request finds out what it does.
 //!
-//! The model to point it at is whichever one is failing. `~z-ai/glm-flash-latest`
-//! is the default because that is the one that could not be made to work: its
-//! metadata says reasoning is mandatory at maximum effort, which is the case
-//! the extraction path had no answer for.
+//! The default is `z-ai/glm-5.2`, which works. `~z-ai/glm-flash-latest` (5.3)
+//! does not, for reasons that were never pinned down — it reached an answer
+//! once here and does not in the app — so the app is not contorted around it.
+//! Point this at whichever model is in question.
 
 use aigraph_lib::extract::{self, verify::Turn};
 use aigraph_lib::llm::openai_compat::OpenAiCompat;
 use aigraph_lib::llm::types::Role;
 
 fn model() -> String {
-    std::env::var("AIGRAPH_OR_MODEL").unwrap_or_else(|_| "~z-ai/glm-flash-latest".into())
+    std::env::var("AIGRAPH_OR_MODEL").unwrap_or_else(|_| "z-ai/glm-5.2".into())
 }
 
 /// The key, from the environment or from the same keychain the app reads.

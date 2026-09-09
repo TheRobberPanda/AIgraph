@@ -2213,7 +2213,9 @@ blockquote {
 .plain-list li { margin-bottom: 0.3rem; }
 
 .filters { margin-bottom: 0.5rem; }
-.filter-input { flex: 1; max-width: 22rem; }
+/* It now sits directly over the list rather than in a row of its own, so it
+   needs its own bottom margin and to fill the column it heads. */
+.filter-input { flex: 1; max-width: 22rem; width: 100%; margin-bottom: 0.5rem; }
 .tag-row { margin-bottom: 0.85rem; }
 .tag-row .btn { font-size: 0.74rem; padding: 0.18rem 0.55rem; }
 .tag-row .row-meta { margin-left: 0.3rem; }
@@ -2232,12 +2234,17 @@ blockquote {
 .tag-swatch.big { width: 0.7rem; height: 0.7rem; align-self: center; }
 
 .chat-row { align-items: flex-start; padding: 0.6rem 0.35rem; }
+/* A chat's opening line, in the import list. Clamped at two lines it cut off
+   most of a first message — and a conversation with no title is *identified*
+   by its first message, so two lines was often not enough to tell which one
+   this was, which is the only thing the row exists to do. */
 .chat-open {
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  line-height: 1.4;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .chat-sub {
   display: block;
@@ -2687,3 +2694,37 @@ blockquote {
    only give the eye somewhere to rest inside it. */
 .turn.user .turn-para { margin: 0 0 0.7rem; }
 .turn.user .turn-para:last-child { margin-bottom: 0; }
+
+/* ---- The map's own arrangement controls ---- */
+
+.graph-arrange { position: absolute; top: 0.7rem; left: 0.7rem; z-index: 4; }
+.graph-arrange-btn {
+  font: inherit; font-size: 0.78rem; cursor: pointer;
+  padding: 0.3rem 0.65rem; border-radius: 999px;
+  color: var(--muted); background: var(--surface);
+  border: 1px solid var(--line);
+}
+.graph-arrange-btn:hover, .graph-arrange-btn.on { color: var(--fg); border-color: var(--accent); }
+.graph-arrange-panel {
+  margin-top: 0.4rem; padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line); border-radius: 11px;
+  background: var(--surface-lift);
+  box-shadow: 0 8px 26px rgba(0,0,0,0.35);
+  display: grid; gap: 0.3rem; min-width: 13rem;
+}
+.graph-arrange-head {
+  margin: 0.2rem 0 0.1rem; font-size: 0.68rem; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--muted);
+}
+.graph-arrange-row { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.graph-arrange-row button {
+  font: inherit; font-size: 0.76rem; cursor: pointer;
+  padding: 0.24rem 0.55rem; border-radius: 7px;
+  color: var(--muted); background: transparent;
+  border: 1px solid var(--line);
+}
+.graph-arrange-row button:hover { color: var(--fg); }
+.graph-arrange-row button.on {
+  color: var(--fg); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}

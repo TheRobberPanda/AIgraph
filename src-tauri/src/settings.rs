@@ -107,6 +107,8 @@ pub struct Settings {
     pub layout: Layout,
     /// How the map arranges itself.
     pub map_style: MapStyle,
+    /// How hard the map's nodes push each other apart.
+    pub map_spread: MapSpread,
     /// Advanced layout order: conversations on the left and Make on the
     /// right, instead of the default Make left / conversations right.
     pub advanced_swap: bool,
@@ -162,6 +164,24 @@ pub fn default_presets() -> Vec<Preset> {
 /// Nothing is ever hidden by a style — the map's job is to show you everything
 /// you have thought, and a style that dropped nodes would be a filter wearing
 /// an appearance setting's clothes.
+/// How much room the map's nodes claim from each other.
+///
+/// Separate from [`MapStyle`], which decides *where* things go. This decides
+/// how insistently they push apart once they are there — the difference
+/// between a map you can read a single node out of and one whose shape you
+/// can take in at a glance. Both are worth having and neither is right for
+/// everyone, which is what makes it a setting rather than a number in the code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MapSpread {
+    /// Room to breathe: nothing overlaps, and the map is large.
+    Loose,
+    #[default]
+    Balanced,
+    /// Close together, so the whole shape fits without panning.
+    Tight,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MapStyle {
@@ -426,6 +446,7 @@ impl Default for Settings {
             runtime: Runtime::default(),
             layout: Layout::default(),
             map_style: MapStyle::default(),
+            map_spread: MapSpread::default(),
             advanced_swap: false,
             accent: String::new(),
             presets: default_presets(),
