@@ -55,7 +55,7 @@ impl OpenAiCompat {
             model: model.into(),
             api_key,
             label: label.into(),
-            http: reqwest::Client::new(),
+            http: long_read_client(),
         }
     }
 
@@ -375,6 +375,63 @@ impl ChatProvider for OpenAiCompat {
 }
 
 /// Did the server reject us specifically over `reasoning_effort`?
+/// A client built for requests that run for minutes.
+///
+/// The default one is built for ordinary web calls. An extraction request
+/// holds a single connection open for as long as the model takes to write its
+/// answer, which is exactly the shape of connection that NAT tables, proxies
+/// and load balancers drop when they see nothing on it — and a dropped body
+/// arrives here as "error decoding response body", with no hint that the
+/// network rather than the model was at fault.
+///
+/// Keepalive is the part that matters: it puts traffic on the socket during
+/// the long quiet stretch while the model is still thinking. The connect
+/// timeout is there so an unreachable host fails in seconds rather than
+/// hanging the queue behind it.
+fn long_read_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .tcp_keepalive(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(20))
+        // Deliberately no overall timeout: a long read is the normal case
+        // here, and a request cut off at some arbitrary minute would be
+        // indistinguishable from the failures this is meant to prevent.
+        .pool_idle_timeout(std::time::Duration::from_secs(30))
+        .build()
+        // The builder only fails if the TLS backend cannot start, and then
+        // nothing else would work either.
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Whether a failure is the network rather than the request.
+///
+/// Both halves of the retry story were missing. The ladder below retries a
+/// request the *server* refused, which it answers by asking more simply — but
+/// a connection that was reset, or a body that stopped arriving halfway, is
+/// not a request anybody objected to. Asking more simply cannot help, and
+/// nothing else tried again either, so one dropped connection permanently
+/// failed that conversation's read.
+fn looks_transient(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    // A stop is not a failure, and must never be retried — that would restart
+    // the very work the person just asked to end.
+    if m.contains("the read was stopped") {
+        return false;
+    }
+    m.contains("error decoding response body")
+        || m.contains("connection reset")
+        || m.contains("connection closed")
+        || m.contains("connection refused")
+        || m.contains("broken pipe")
+        || m.contains("is not reachable")
+        || m.contains("timed out")
+        || m.contains("timeout")
+        || m.contains("429")
+        || m.contains("500")
+        || m.contains("502")
+        || m.contains("503")
+        || m.contains("504")
+}
+
 /// Whether a failure looks like the server refusing a parameter rather than
 /// failing at the work.
 ///
@@ -441,6 +498,55 @@ impl OpenAiCompat {
         body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
     }
 
+    /// One structured call, tried again if the network drops it.
+    ///
+    /// Separate from the ladder below, and underneath it, because the two
+    /// answer different questions. The ladder asks "did the server refuse
+    /// something?" and responds by asking for less. This asks "did the request
+    /// arrive at all?" and responds by asking again, unchanged — asking for
+    /// less would be answering a question nobody posed, and would quietly give
+    /// up the reasoning switches over a flaky connection.
+    async fn through_the_network(
+        &self,
+        prompt: &str,
+        schema: serde_json::Value,
+        disable_reasoning: bool,
+        structured_output: bool,
+        stream: bool,
+    ) -> Result<String, LlmError> {
+        // Three tries, seconds apart. A read already costs minutes, so the
+        // wait is free; and a transient failure that is still failing on the
+        // third attempt is not transient, at which point saying so is the
+        // right answer rather than holding the queue up any longer.
+        const WAITS: [u64; 2] = [2, 6];
+
+        for (attempt, wait) in WAITS.iter().enumerate() {
+            let result = self
+                .structured(prompt, schema.clone(), disable_reasoning, structured_output, stream)
+                .await;
+            let msg = match &result {
+                Err(LlmError::Transport(m)) | Err(LlmError::Unavailable(m)) => m.clone(),
+                // Anything else is the model's answer, good or bad. Sending
+                // the same prompt again would only spend the time twice.
+                _ => return result,
+            };
+            if !looks_transient(&msg) {
+                return result;
+            }
+            tracing::warn!(
+                error = %msg,
+                attempt = attempt + 1,
+                retrying_in_seconds = wait,
+                "the connection failed rather than the request; trying again"
+            );
+            // What arrived before the drop is not part of the next attempt.
+            crate::llm::pulse::reset();
+            tokio::time::sleep(std::time::Duration::from_secs(*wait)).await;
+        }
+
+        self.structured(prompt, schema, disable_reasoning, structured_output, stream).await
+    }
+
     /// One structured call, giving up a parameter at a time.
     ///
     /// A server that refuses something is told less rather than treated as
@@ -456,7 +562,7 @@ impl OpenAiCompat {
         // so it stays on the path that has been working.
         let stream = self.streams_extraction();
 
-        let first = self.structured(prompt, schema.clone(), true, true, stream).await;
+        let first = self.through_the_network(prompt, schema.clone(), true, true, stream).await;
         let Err(LlmError::Transport(msg)) = &first else { return first };
         if !looks_like_a_rejected_parameter(msg) {
             return first;
@@ -471,7 +577,8 @@ impl OpenAiCompat {
         // switches as well.
         if stream {
             tracing::debug!(error = %msg, "retrying without streaming");
-            let unstreamed = self.structured(prompt, schema.clone(), true, true, false).await;
+            let unstreamed =
+                self.through_the_network(prompt, schema.clone(), true, true, false).await;
             let Err(LlmError::Transport(msg)) = &unstreamed else { return unstreamed };
             if !looks_like_a_rejected_parameter(msg) {
                 return unstreamed;
@@ -479,14 +586,14 @@ impl OpenAiCompat {
         }
 
         tracing::debug!(error = %msg, "retrying without the reasoning switches");
-        let second = self.structured(prompt, schema.clone(), false, true, false).await;
+        let second = self.through_the_network(prompt, schema.clone(), false, true, false).await;
         let Err(LlmError::Transport(msg)) = &second else { return second };
         if !looks_like_a_rejected_parameter(msg) {
             return second;
         }
 
         tracing::debug!(error = %msg, "retrying without a response schema");
-        self.structured(prompt, schema, false, false, false).await
+        self.through_the_network(prompt, schema, false, false, false).await
     }
 
     /// Whether extraction is worth streaming on this provider.
@@ -865,5 +972,48 @@ mod tests {
             serde_json::json!({ "enabled": false }),
             "the unstreamed retry still asks for reasoning to be off"
         );
+    }
+
+    /// The two failures that were killing real digests. Neither is a rejected
+    /// parameter, so nothing retried them, so one dropped connection cost the
+    /// whole conversation until its backoff came round minutes later.
+    #[test]
+    fn a_dropped_connection_is_worth_trying_again() {
+        for msg in [
+            "error decoding response body",
+            "openrouter is not reachable at https://openrouter.ai/api/v1. Is the server running?",
+            "connection reset by peer",
+            "operation timed out",
+            "429: rate limited",
+            "503: upstream unavailable",
+        ] {
+            assert!(looks_transient(msg), "the network failed, not the request: {msg}");
+            assert!(
+                !looks_like_a_rejected_parameter(msg) || msg.starts_with('4'),
+                "and asking more simply cannot help: {msg}"
+            );
+        }
+    }
+
+    /// Pressing Stop must never be retried. Retrying it would restart exactly
+    /// the work the person just asked to end — the one failure where trying
+    /// again is not merely useless but contrary.
+    #[test]
+    fn a_stop_is_never_retried() {
+        assert!(!looks_transient("the read was stopped"));
+    }
+
+    /// A refused parameter is answered by asking for less, not by asking the
+    /// same thing again — the two paths must not claim each other's failures.
+    #[test]
+    fn a_refusal_is_not_mistaken_for_a_flaky_connection() {
+        for msg in [
+            "400 Bad Request: reasoning: Expected object, received string",
+            "422: model does not support response_format",
+            "unrecognized request argument supplied: chat_template_kwargs",
+        ] {
+            assert!(looks_like_a_rejected_parameter(msg));
+            assert!(!looks_transient(msg), "retrying this unchanged would fail identically: {msg}");
+        }
     }
 }
