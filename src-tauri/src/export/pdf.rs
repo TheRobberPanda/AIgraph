@@ -95,7 +95,14 @@ impl<'a> Pen<'a> {
         self.y = MARGIN_TOP;
         let folio = self.page.to_string();
         let w = self.rm.width(&folio, SMALL_PT);
-        self.text(&folio, SMALL_PT, (PAGE_W - w) / 2.0, PAGE_H - MARGIN_BOTTOM + 8.0, false, faint());
+        self.text(
+            &folio,
+            SMALL_PT,
+            (PAGE_W - w) / 2.0,
+            PAGE_H - MARGIN_BOTTOM + 8.0,
+            false,
+            faint(),
+        );
     }
 
     fn room_for(&mut self, needed: f32) {
@@ -126,8 +133,7 @@ pub fn render(title: &str, blocks: &[Block]) -> Result<Vec<u8>, ExportError> {
         return Err(ExportError::Empty);
     }
 
-    let (doc, page, layer) =
-        printpdf::PdfDocument::new(title, Mm(PAGE_W), Mm(PAGE_H), "Page");
+    let (doc, page, layer) = printpdf::PdfDocument::new(title, Mm(PAGE_W), Mm(PAGE_H), "Page");
     let regular = doc
         .add_external_font(REGULAR)
         .map_err(|e| ExportError::Pdf(format!("the bundled font: {e}")))?;

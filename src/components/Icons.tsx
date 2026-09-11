@@ -146,6 +146,16 @@ export function IconPlus(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Two arrows meeting head-on — a contradiction between two claims. */
+export function IconClash(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="15" height="15" {...props}>
+      <path d="M4 8h12m0 0-3-3m3 3-3 3" />
+      <path d="M20 16H8m0 0 3-3m-3 3 3 3" />
+    </Base>
+  );
+}
+
 /** A box with a lid — the archive. */
 export function IconArchive(props: SVGProps<SVGSVGElement>) {
   return (
@@ -287,6 +297,25 @@ export function IconMic(props: SVGProps<SVGSVGElement>) {
     <Base {...props}>
       <rect x="9" y="3" width="6" height="11" rx="3" />
       <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" />
+    </Base>
+  );
+}
+
+/** A pencil — reword one of the two claims. */
+export function IconPencil(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="14" height="14" {...props}>
+      <path d="M4 20h4l11-11-4-4L4 16v4z" />
+      <path d="M13 7l4 4" />
+    </Base>
+  );
+}
+
+/** A check mark — a test that passed, or a settled choice. */
+export function IconCheck(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base width="14" height="14" {...props}>
+      <path d="M4 12.5 9.5 18 20 6.5" />
     </Base>
   );
 }

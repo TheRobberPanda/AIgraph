@@ -120,6 +120,22 @@ impl Conversation {
         self.messages.push(Message { role: Role::Assistant, content: content.into() });
     }
 
+    /// Point the conversation at a different model without losing it.
+    pub fn set_model(&mut self, model: impl Into<String>) {
+        self.model = model.into();
+    }
+
+    /// Whether this conversation is still waiting on an answer to `text`.
+    ///
+    /// A reply takes seconds to minutes to arrive, and the conversation it was
+    /// asked from can be replaced in that time. Adding it to whatever is live
+    /// when it lands put an answer into a conversation that never asked the
+    /// question — which was then filed as a session holding nothing but that
+    /// answer, with no words of the person's in it to find an idea in.
+    pub fn awaits_reply_to(&self, text: &str) -> bool {
+        self.messages.last().map(|m| m.role == Role::User && m.content == text).unwrap_or(false)
+    }
+
     pub fn set_call_mode(&mut self, on: bool) {
         self.call_mode = on;
     }
@@ -278,10 +294,7 @@ mod tests {
 
     #[test]
     fn the_open_marker_never_reaches_the_record() {
-        assert_eq!(
-            strip_open_marker("[[open:map]]\nOpening the map."),
-            "Opening the map."
-        );
+        assert_eq!(strip_open_marker("[[open:map]]\nOpening the map."), "Opening the map.");
         // The longest marker wins: matching "[[open:map]]" first would leave
         // "conversations]]" sitting at the front of the stored turn.
         assert_eq!(strip_open_marker("[[open:conversations]] Here they are."), "Here they are.");
@@ -418,5 +431,21 @@ mod tests {
         c.rewind(1);
         let texts: Vec<_> = c.messages().iter().map(|m| m.content.as_str()).collect();
         assert_eq!(texts, vec!["one"], "everything from the rewind point on should be gone");
+    }
+
+    /// The session that filed no ideas: its reply landed in a conversation
+    /// that had been replaced while the reply was being written.
+    #[test]
+    fn a_reply_only_belongs_to_the_conversation_that_asked_for_it() {
+        let mut c = Conversation::new("m");
+        c.push_user("is exit a discipline?");
+        assert!(c.awaits_reply_to("is exit a discipline?"));
+        assert!(!c.awaits_reply_to("something else"));
+
+        let fresh = Conversation::new("m");
+        assert!(!fresh.awaits_reply_to("is exit a discipline?"), "nothing was asked here");
+
+        c.push_assistant("yes");
+        assert!(!c.awaits_reply_to("is exit a discipline?"), "already answered");
     }
 }

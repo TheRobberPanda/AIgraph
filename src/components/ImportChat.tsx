@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useUndoable } from "../lib/undo";
 import {
   importClaudeConversation,
   importConversation,
+  importObsidianNote,
   listClaudeImports,
+  listObsidianNotes,
   previewImport,
   type ClaudeImport,
   type Import,
+  type ObsidianNote,
 } from "../lib/import";
 import { longDate } from "../lib/format";
 
@@ -29,7 +33,7 @@ const BASIS_NOTE: Record<string, string> = {
 export default function ImportChat({ onDone }: { onDone: () => void }) {
   /** Paste is the general case; Claude's own logs on this machine are the
    *  pleasant one — no copy-paste, roles already known. */
-  const [mode, setMode] = useState<"paste" | "claude">("paste");
+  const [mode, setMode] = useState<"paste" | "claude" | "obsidian">("paste");
   const [claude, setClaude] = useState<ClaudeImport[] | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
   const [text, setText] = useState("");
@@ -39,6 +43,9 @@ export default function ImportChat({ onDone }: { onDone: () => void }) {
   const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The vault that was chosen, and the notes in it. */
+  const [vault, setVault] = useState<string | null>(null);
+  const [notes, setNotes] = useState<ObsidianNote[] | null>(null);
 
   useEffect(() => {
     if (mode !== "claude" || claude !== null) return;
@@ -49,6 +56,40 @@ export default function ImportChat({ onDone }: { onDone: () => void }) {
         setError(String(e));
       });
   }, [mode, claude]);
+
+  async function pickVault() {
+    setError(null);
+    const dir = await open({ directory: true, title: "Choose an Obsidian vault" });
+    if (!dir) return;
+    setVault(dir);
+    setNotes(null);
+    try {
+      setNotes(await listObsidianNotes(dir));
+    } catch (e) {
+      setNotes([]);
+      setError(String(e));
+    }
+  }
+
+  async function keepNote(path: string) {
+    setImporting(path);
+    setError(null);
+    try {
+      await importObsidianNote(path, vaultName());
+      setNotes((ns) => (ns ?? []).filter((n) => n.path !== path));
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setImporting(null);
+    }
+  }
+
+  function vaultName(): string {
+    if (!vault) return "";
+    const parts = vault.replace(/[\\/]+$/, "").split(/[\\/]/);
+    return parts[parts.length - 1] ?? "";
+  }
 
   async function keepClaude(path: string) {
     setImporting(path);
@@ -107,6 +148,9 @@ export default function ImportChat({ onDone }: { onDone: () => void }) {
         <button className={mode === "claude" ? "btn on" : "btn"} onClick={() => setMode("claude")}>
           From Claude on this machine
         </button>
+        <button className={mode === "obsidian" ? "btn on" : "btn"} onClick={() => setMode("obsidian")}>
+          From an Obsidian vault
+        </button>
       </div>
 
       {mode === "claude" ? (
@@ -130,6 +174,45 @@ export default function ImportChat({ onDone }: { onDone: () => void }) {
                     </span>
                     <span className="row-meta">
                       {importing === c.path ? "importing…" : "Import"}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : mode === "obsidian" ? (
+        <>
+          <div className="row">
+            <button className="btn" onClick={() => void pickVault()}>
+              {vault ? "Choose another folder" : "Choose a vault folder…"}
+            </button>
+            {vault && <span className="muted row-main">{vault}</span>}
+          </div>
+          <p className="blurb">
+            Each markdown note becomes one conversation — the note itself as your
+            thinking, its frontmatter left behind. A note that holds a pasted
+            transcript with speaker labels still keeps its roles.
+          </p>
+          {notes === null ? null : notes.length === 0 ? (
+            <p className="blurb">
+              {vault ? "No markdown notes found there." : ""}
+            </p>
+          ) : (
+            <ul className="list claude-list obsidian-list">
+              {notes.map((n) => (
+                <li key={n.path} className="claude-row">
+                  <button className="row-btn chat-row" onClick={() => void keepNote(n.path)}>
+                    <span className="row-main">
+                      <span className="chat-open">{n.title}</span>
+                      <span className="chat-sub">
+                        {n.modified ? longDate(n.modified) : ""}
+                        {n.chars > 0 &&
+                          ` · ${n.chars < 1024 ? `${n.chars} bytes` : `${Math.round(n.chars / 1024)} kB`}`}
+                      </span>
+                    </span>
+                    <span className="row-meta">
+                      {importing === n.path ? "importing…" : "Import"}
                     </span>
                   </button>
                 </li>

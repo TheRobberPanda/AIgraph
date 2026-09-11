@@ -259,6 +259,26 @@ export default function Settings() {
               ))}
             </div>
 
+            <Section
+              hint="Locked, nothing on the map can be dragged out of place. Clicking still opens a node."
+            >
+              Moving nodes
+            </Section>
+            <div className="row">
+              <button
+                className={!s.map_lock_nodes ? "btn on" : "btn"}
+                onClick={() => void update({ map_lock_nodes: false })}
+              >
+                Free
+              </button>
+              <button
+                className={s.map_lock_nodes ? "btn on" : "btn"}
+                onClick={() => void update({ map_lock_nodes: true })}
+              >
+                Locked
+              </button>
+            </div>
+
             <Section>Interface size</Section>
             <div className="row scale-row">
               <input

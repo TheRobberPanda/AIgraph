@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS ideas (
     -- conversation happened to produce it.
     category   TEXT NOT NULL DEFAULT '',
     revision   INTEGER NOT NULL DEFAULT 0,
+    -- Set when a re-read leaves an idea with no evidence behind it. The idea is
+    -- kept rather than deleted: nothing a person thought should be destroyed by
+    -- re-reading a conversation. Archived ideas are out of the map and the
+    -- lists, and shown under Archived on the waiting-to-be-read page.
+    archived   INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -116,6 +121,8 @@ CREATE TABLE IF NOT EXISTS relations (
     created_at TEXT NOT NULL,
     -- Set once the person has dealt with this link; see `migrate`.
     resolved_at TEXT,
+    -- How both stand, in the person's words, when they said.
+    resolution  TEXT,
     UNIQUE (idea_a, idea_b, kind)
 );
 
@@ -217,7 +224,52 @@ CREATE TABLE IF NOT EXISTS rejected_ideas (
     claim      TEXT NOT NULL,
     quote      TEXT NOT NULL,
     reason     TEXT NOT NULL,
+    -- Set when a re-read replaces this session's rejections. Kept rather than
+    -- deleted, like everything else a read produces.
+    archived   INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
+);
+
+-- Something a folder was made into: an essay, a script, a deck. Kept here
+-- rather than only on screen so it has a page of its own, an edit history of
+-- one (the current text), and the conversations it came from beside it.
+--
+-- Deliberately not part of the record the rest of the app runs on: like the
+-- compose module says, a script is not the kind of thing that joins the map.
+-- This table holds what was made, where it came from, and nothing that claims
+-- to be traceable to words that were said.
+CREATE TABLE IF NOT EXISTS make_outputs (
+    id         INTEGER PRIMARY KEY,
+    folder_id  INTEGER NOT NULL DEFAULT 1 REFERENCES folders(id),
+    title      TEXT NOT NULL DEFAULT '',
+    -- A short line for the archive card and the list, cut from the text itself
+    -- so it costs no model call and cannot disagree with what was written.
+    summary    TEXT NOT NULL DEFAULT '',
+    content    TEXT NOT NULL,
+    -- markdown | pdf | docx | pptx — what the instruction asked for.
+    format     TEXT NOT NULL DEFAULT 'markdown',
+    -- The instruction that produced it, verbatim.
+    prompt     TEXT NOT NULL DEFAULT '',
+    -- The conversations that were in front of the model, as a JSON array of
+    -- session ids. Resolved to titles on read, so renames are picked up.
+    sessions   TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_outputs_folder ON make_outputs(folder_id);
+
+-- Deleted on purpose, destroyed by accident. Every delete of a conversation,
+-- an idea or an output moves its rows here whole, in one JSON snapshot, until
+-- it is restored or the bin is emptied. No foreign keys: a bin entry stands
+-- alone, holding its own copy of everything it needs to come back.
+CREATE TABLE IF NOT EXISTS trash (
+    id         INTEGER PRIMARY KEY,
+    kind       TEXT NOT NULL CHECK (kind IN ('session','idea','make_output')),
+    label      TEXT NOT NULL DEFAULT '',
+    detail     TEXT NOT NULL DEFAULT '',
+    deleted_at TEXT NOT NULL,
+    payload    TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_turns_session   ON turns(session_id);
@@ -257,6 +309,21 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     if !idea_cols.iter().any(|c| c == "title") {
         conn.execute_batch("ALTER TABLE ideas ADD COLUMN title TEXT NOT NULL DEFAULT '';")?;
     }
+    if !idea_cols.iter().any(|c| c == "archived") {
+        // An idea that loses its evidence to a re-read is hidden rather than
+        // deleted. Additive and defaulted, so existing ideas stay live.
+        conn.execute_batch("ALTER TABLE ideas ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;")?;
+    }
+
+    let rejected_cols: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('rejected_ideas')")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !rejected_cols.iter().any(|c| c == "archived") {
+        conn.execute_batch(
+            "ALTER TABLE rejected_ideas ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
 
     if !columns.iter().any(|c| c == "model") {
         conn.execute_batch(
@@ -284,6 +351,12 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // the pair is still true history, and reconciliation would otherwise
         // draw the same link again the next time either idea is touched.
         conn.execute_batch("ALTER TABLE relations ADD COLUMN resolved_at TEXT;")?;
+    }
+    if !relation_cols.iter().any(|c| c == "resolution") {
+        // What the person said makes both stand, when they settled it that
+        // way. Nullable: most settlements are a reword, a drop, or a
+        // dismissal, and none of those comes with words.
+        conn.execute_batch("ALTER TABLE relations ADD COLUMN resolution TEXT;")?;
     }
 
     let session_cols_ai: Vec<String> = conn
@@ -328,16 +401,47 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     // database made before them gains the table without a rebuild.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS dispute_answers (
-            id          INTEGER PRIMARY KEY,
-            idea_id     INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
-            challenge   TEXT NOT NULL,
-            answer      TEXT NOT NULL,
-            claim       TEXT NOT NULL DEFAULT '',
-            title       TEXT NOT NULL DEFAULT '',
-            digested_at TEXT,
-            created_at  TEXT NOT NULL
+             id          INTEGER PRIMARY KEY,
+             idea_id     INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+             challenge   TEXT NOT NULL,
+             answer      TEXT NOT NULL,
+             claim       TEXT NOT NULL DEFAULT '',
+             title       TEXT NOT NULL DEFAULT '',
+             digested_at TEXT,
+             created_at  TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_answers_idea ON dispute_answers(idea_id);",
+    )?;
+
+    // Things a folder was made into. Same treatment: created here as well as
+    // in the schema so an older database gains the table on open.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS make_outputs (
+             id         INTEGER PRIMARY KEY,
+             folder_id  INTEGER NOT NULL DEFAULT 1 REFERENCES folders(id),
+             title      TEXT NOT NULL DEFAULT '',
+             summary    TEXT NOT NULL DEFAULT '',
+             content    TEXT NOT NULL,
+             format     TEXT NOT NULL DEFAULT 'markdown',
+             prompt     TEXT NOT NULL DEFAULT '',
+             sessions   TEXT NOT NULL DEFAULT '[]',
+             created_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS idx_answers_idea ON dispute_answers(idea_id);",
+         CREATE INDEX IF NOT EXISTS idx_outputs_folder ON make_outputs(folder_id);",
+    )?;
+
+    // The trash bin. Created here as well as in the schema so a database made
+    // before it gains the table on open.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS trash (
+             id         INTEGER PRIMARY KEY,
+             kind       TEXT NOT NULL CHECK (kind IN ('session','idea','make_output')),
+             label      TEXT NOT NULL DEFAULT '',
+             detail     TEXT NOT NULL DEFAULT '',
+             deleted_at TEXT NOT NULL,
+             payload    TEXT NOT NULL
+         );",
     )?;
 
     // Root always exists, on a fresh database and on one made before folders.

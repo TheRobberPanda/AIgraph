@@ -169,12 +169,79 @@ You are being asked to make something out of this material.
 - Where the material genuinely will not support what was asked for, say so and
   make what it does support, rather than padding it out.
 
+## Exporting a file
+
+When what is asked for should end up as a file on disk — a PDF, a Word or
+LibreOffice Writer document, a slide deck — end your reply with one export
+line, and nothing after it:
+
+::export <format> <file name>
+
+`<format>` is one of pdf, docx, pptx, md. `<file name>` is the file's name
+without the extension. The app executes that line itself: it takes the
+document written above it, writes the file in that format, and says where the
+file went. The line is a command for the app, not part of the document — write
+it exactly once, as the very last line, and never inside a code block. When
+nothing was asked for as a file, write no export line at all.
+
 {text}"#,
         n = packed.conversations,
         s = if packed.conversations == 1 { "" } else { "s" },
         folder = folder,
         text = packed.text,
     )
+}
+
+/// The export command the Make tab's model may append to a reply.
+///
+/// One line: `::export pdf a-book-of-ideas`. Deliberately the only command
+/// there is — the app executes it with its own exporters, so the model runs
+/// nothing and reaches nothing outside one folder of files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportDirective {
+    /// One of the four formats the app writes itself, as the model named it.
+    pub format: String,
+    /// The file's name, without the extension it will be given.
+    pub name: String,
+}
+
+/// Split the export line off the end of a reply, if the model wrote one.
+///
+/// Returns the document without the line, plus the command. Blank lines after
+/// the directive are ignored — models add them — and a directive anywhere but
+/// the end is left alone: the document is what came before the last thing the
+/// model said, not the first thing that looks like a command.
+pub fn split_export(reply: &str) -> (&str, Option<ExportDirective>) {
+    let trimmed = reply.trim_end();
+    let mut lines = trimmed.rsplit('\n');
+    // Up to two blank lines of trailing air, then the last thing written.
+    let last = loop {
+        match lines.next() {
+            Some(l) if l.trim().is_empty() => continue,
+            Some(l) => break l.trim(),
+            None => return (trimmed, None),
+        }
+    };
+
+    let mut parts = last.splitn(3, char::is_whitespace);
+    if parts.next() != Some("::export") {
+        return (trimmed, None);
+    }
+    let format = match parts.next() {
+        Some(f) if !f.is_empty() => f,
+        _ => return (trimmed, None),
+    };
+    let name = parts.next().unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        return (trimmed, None);
+    }
+
+    // Everything before the line, itself trimmed, is the document.
+    let body = match trimmed.rfind(last) {
+        Some(at) => trimmed[..at].trim_end(),
+        None => trimmed,
+    };
+    (body, Some(ExportDirective { format: format.to_string(), name }))
 }
 
 #[cfg(test)]
@@ -238,5 +305,33 @@ mod tests {
         assert!(s.contains("Root"));
         assert!(s.contains("The thinking is theirs"));
         assert!(s.contains("a thought"));
+        assert!(s.contains("::export"), "the one command the model can run is documented");
+    }
+
+    #[test]
+    fn the_export_line_comes_off_the_end() {
+        let (body, cmd) = split_export("# A book\n\nSome words.\n::export pdf a-book\n");
+        assert_eq!(body, "# A book\n\nSome words.");
+        assert_eq!(cmd, Some(ExportDirective { format: "pdf".into(), name: "a-book".into() }));
+    }
+
+    #[test]
+    fn a_reply_without_one_is_left_whole() {
+        let reply = "# A book\n\nSome words.\n\n::export is mentioned in passing\n\nAnd so on.";
+        let (body, cmd) = split_export(reply);
+        assert_eq!(body, reply);
+        assert!(cmd.is_none());
+    }
+
+    #[test]
+    fn a_directive_without_a_name_is_not_one() {
+        let (_, cmd) = split_export("Document.\n::export pdf\n");
+        assert!(cmd.is_none());
+    }
+
+    #[test]
+    fn only_a_trailing_directive_counts() {
+        let (_, cmd) = split_export("::export pdf first\n\nReal text.\n::export md real");
+        assert_eq!(cmd, Some(ExportDirective { format: "md".into(), name: "real".into() }));
     }
 }

@@ -4,7 +4,7 @@ import SpeakInto from "./SpeakInto";
 import { useUndoable } from "../lib/undo";
 import Sheet from "./Sheet";
 import Resolve from "./Resolve";
-import { IconChevron } from "./Icons";
+import { IconChevron, IconSend } from "./Icons";
 import { dateTime, plainDate } from "../lib/format";
 import { categoryColor } from "../lib/categories";
 import { getSettings, onSettingsChanged, type ChatStance } from "../lib/settings";
@@ -14,7 +14,7 @@ import {
   digestDisputeAnswer,
   ideaDeepDive,
   ideaView,
-  revertRevision,
+  unresolveRelation,
   type ConversationView,
   type DisputeAnswer,
   type Segment,
@@ -40,44 +40,13 @@ function paragraphs(segments: Segment[]): Segment[][] {
 }
 
 /**
- * The arrow from a challenge to the box that answers it.
- *
- * An arc rather than a straight line, and drawn rather than described: the
- * note and the box are two things a long way apart on the page, and without
- * something joining them the box reads as a general comment field that
- * happens to sit nearby. The curve is the sentence "this one — answer this
- * one", which is not a sentence worth writing out.
- *
- * Purely decorative, so it takes no pointer and no place in the reading
- * order, and it is laid over the row it belongs to rather than taking a
- * column of its own — a stretched SVG between two flex items would move every
- * time either of them wrapped.
- */
-function ArcToAnswer() {
-  return (
-    <svg
-      className="dispute-arc"
-      viewBox="0 0 120 80"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-      focusable="false"
-    >
-      {/* Born at the note's baseline on the left, over the top, down into the
-          box. `preserveAspectRatio="none"` lets it stretch to whatever the
-          gap turns out to be. */}
-      <path d="M4 12 C 40 -6, 86 6, 108 62" fill="none" />
-      <path className="dispute-arc-head" d="M100 50 L108 64 L114 50" fill="none" />
-    </svg>
-  );
-}
-
-/**
- * One of the AI's notes, and the box that answers it.
+ * One of the AI's notes, and its own small conversation.
  *
  * The notes were the end of the conversation: the app said "no measurement is
  * offered" and there was nothing to do about it — an observation you cannot
- * reply to is a verdict. This is the reply, in the person's own words, typed
- * or spoken.
+ * reply to is a verdict. So each one is a chat now: the note, the replies
+ * already made under it, and a box that is simply there, waiting — "answer
+ * this" greyed out in it, the way a typebox says what it is for.
  *
  * The answer is saved first and read back second. Reading back is a model
  * call; on a local model that is tens of seconds, and an answer lost because
@@ -96,8 +65,9 @@ function Dispute({
   challenge: string;
   /** Replies already recorded against this exact note. */
   answers: DisputeAnswer[];
-  /** Open with the box already waiting — this is the doubt that was clicked
-   *  on the map to get here. */
+  /** Set when this dispute is the one that was clicked to get here — the
+   *  chat is scrolled to it, since a file several screens long does not show
+   *  the bottom by default. */
   startOpen?: boolean;
   /** A question put to the reader rather than a doubt the model raised, so
    *  it is not dressed as one and carries no "AI" badge. */
@@ -105,24 +75,18 @@ function Dispute({
   onAnswered: () => void;
 }) {
   const [draft, setDraft] = useState("");
-  const [open, setOpen] = useState(startOpen ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const undo = useUndoable(draft, setDraft);
   const boxRef = useRef<HTMLTextAreaElement>(null);
 
-  // Opened from the map, on a doubt several screens down a long file. Being
+  // Arriving from the map, at a dispute several screens down the page. Being
   // taken to the right page and left at the top of it is the same as not
-  // being taken anywhere. Keyed on `open` as well, because the box does not
-  // exist to be scrolled to until the render that opens it has happened.
+  // being taken anywhere.
   useEffect(() => {
     if (!startOpen) return;
-    setOpen(true);
-  }, [startOpen]);
-  useEffect(() => {
-    if (!startOpen || !open) return;
     boxRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [startOpen, open]);
+  }, [startOpen]);
 
   async function save() {
     const text = draft.trim();
@@ -132,7 +96,6 @@ function Dispute({
     try {
       const id = await answerDispute(ideaId, challenge, text);
       setDraft("");
-      setOpen(false);
       onAnswered();
       // Reading it back is what makes it a moon. It can fail — no extraction
       // model, a model that returns nothing usable — and the answer is
@@ -152,7 +115,7 @@ function Dispute({
   }
 
   return (
-    <div className={`dispute${open ? " open" : ""}${asked ? " asked" : ""}`}>
+    <div className={`dispute chat${asked ? " asked" : ""}`}>
       {asked ? (
         <p className="ask-why">{challenge}</p>
       ) : (
@@ -170,56 +133,47 @@ function Dispute({
         </p>
       ))}
 
-      {open ? (
-        <div className="dispute-reply">
-          <ArcToAnswer />
-          <div className="dispute-box">
-            <textarea
-              ref={boxRef}
-              className="field dispute-field"
-              rows={3}
-              autoFocus
-              placeholder={asked ? "answer this" : "answer this dispute"}
-              value={draft}
-              disabled={busy}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                undo(e);
-                if (e.key === "Escape" && !draft.trim()) setOpen(false);
-                // Enter sends, as it does in the composer. A dispute is
-                // answered in a sentence or two; a paragraph needs shift.
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void save();
-                }
-              }}
-            />
-            {/* Spoken rather than typed is the point of this box as much as
-                the box is: an argument you make out loud comes out in your
-                own words, and typing it invites editing it into something
-                tidier than you think. */}
-            <SpeakInto
-              disabled={busy}
-              onPhrase={(text) =>
-                setDraft((d) => (d ? `${d.replace(/\s+$/, "")} ${text}` : text))
-              }
-            />
-          </div>
-          <div className="row dispute-actions">
-            <button className={busy ? "btn busy" : "btn"} disabled={busy || !draft.trim()} onClick={() => void save()}>
-              {busy && <span className="spinner" aria-hidden="true" />}
-              {busy ? "Reading it back…" : "Answer"}
-            </button>
-            <button className="btn subtle" disabled={busy} onClick={() => { setDraft(""); setOpen(false); }}>
-              Not now
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button className="dispute-open" onClick={() => setOpen(true)}>
-          {answers.length > 0 ? "Say more" : asked ? "Answer this" : "Answer this dispute"}
+      {/* The chat's own box, always here. Nothing to open first: a reply
+          that needs a click before it can be typed is a reply that mostly
+          does not happen. */}
+      <div className="dispute-box">
+        <textarea
+          ref={boxRef}
+          className="field dispute-field"
+          rows={2}
+          placeholder={asked ? "answer this" : "answer this dispute"}
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            undo(e);
+            // Enter sends, as it does in the composer. A dispute is
+            // answered in a sentence or two; a paragraph needs shift.
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void save();
+            }
+          }}
+        />
+        {/* Spoken rather than typed is the point of this box as much as
+            the box is: an argument you make out loud comes out in your
+            own words, and typing it invites editing it into something
+            tidier than you think. */}
+        <SpeakInto
+          disabled={busy}
+          onPhrase={(text) =>
+            setDraft((d) => (d ? `${d.replace(/\s+$/, "")} ${text}` : text))
+          }
+        />
+        <button
+          className="btn btn-send dispute-send"
+          disabled={busy || !draft.trim()}
+          data-tip="Answer it"
+          onClick={() => void save()}
+        >
+          {busy ? <span className="spinner" aria-hidden="true" /> : <IconSend />}
         </button>
-      )}
+      </div>
 
       {error && <p className="error">{error}</p>}
     </div>
@@ -245,7 +199,6 @@ function Nudges({
   about,
   ideaId,
   answers,
-  openChallenge,
   onAnswered,
 }: {
   strong: string[];
@@ -257,8 +210,6 @@ function Nudges({
    *  from — so they stay observations there. */
   ideaId?: number;
   answers?: DisputeAnswer[];
-  /** The one doubt to open ready to be answered. */
-  openChallenge?: string | null;
   onAnswered?: () => void;
 }) {
   const [askWhy, setAskWhy] = useState(true);
@@ -317,7 +268,6 @@ function Nudges({
                   ideaId={ideaId}
                   challenge={t}
                   answers={(answers ?? []).filter((a) => a.challenge === t)}
-                  startOpen={openChallenge === t}
                   onAnswered={onAnswered}
                 />
               ) : (
@@ -346,7 +296,6 @@ function Nudges({
             ideaId={ideaId}
             challenge={askWhyText(about)}
             answers={(answers ?? []).filter((a) => a.challenge === askWhyText(about))}
-            startOpen={openChallenge === askWhyText(about)}
             onAnswered={onAnswered}
           />
         ) : (
@@ -648,6 +597,26 @@ export function ConversationFile({
  * three thousand characters of reply against a sentence of thinking turns the
  * page into somewhere the machine does all the talking.
  */
+/**
+ * Where a reply shown in part stops.
+ *
+ * A hard character count cut wherever it landed — usually a few words into
+ * the next paragraph, which then sat there visible under the ellipsis,
+ * looking like part of the thought it followed. So the cut looks for the last
+ * paragraph break inside the budget and ends the preview there; a reply with
+ * no paragraph in reach ends at the last whole sentence instead. What is
+ * shown is always whole, and the ellipsis says what was left.
+ */
+function clipReply(text: string, limit = 420): { shown: string; clipped: boolean } {
+  if (text.length <= limit) return { shown: text, clipped: false };
+  const head = text.slice(0, limit);
+  const paragraph = head.lastIndexOf("\n\n");
+  if (paragraph > 0) return { shown: head.slice(0, paragraph), clipped: true };
+  const sentence = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "));
+  if (sentence > 0) return { shown: head.slice(0, sentence + 1), clipped: true };
+  return { shown: head.trimEnd(), clipped: true };
+}
+
 function Reply({
   text,
   digest,
@@ -658,7 +627,8 @@ function Reply({
   stance?: string;
 }) {
   const [full, setFull] = useState(false);
-  const long = text.length > 420;
+  const clip = clipReply(text, 420);
+  const long = clip.clipped;
 
   if (digest && !full) {
     return (
@@ -678,7 +648,7 @@ function Reply({
 
   return (
     <div className={`turn assistant${!digest && long && !full ? " clipped" : ""}`}>
-      <Markdown>{!digest && long && !full ? `${text.slice(0, 420)}…` : text}</Markdown>
+      <Markdown>{!digest && long && !full ? `${clip.shown}…` : text}</Markdown>
       {(digest || long) && (
         <button
           className={`icon-btn expand-toggle${digest || full ? " flip" : ""}`}
@@ -725,15 +695,10 @@ function worthShowing(dive: string | null, claim: string): boolean {
 
 export function IdeaFile({
   ideaId,
-  openChallenge,
   onOpenConversation,
   onClose,
 }: {
   ideaId: number;
-  /** One of the AI's doubts to open ready to be answered — set when the file
-   *  was opened by clicking that doubt on the map, so the reader lands on the
-   *  thing they clicked rather than at the top of the page. */
-  openChallenge?: string | null;
   /** Go to the conversation a quote came from. The idea comes with it so the
    *  transcript can go straight to those words and flash them, rather than
    *  opening at the top and leaving them to be found. */
@@ -749,7 +714,10 @@ export function IdeaFile({
     a: { idea_id: number; claim: string };
     b: { idea_id: number; claim: string };
     reasoning?: string;
+    resolution?: string;
   } | null>(null);
+  /** A settled contradiction being taken back, so the button says so once. */
+  const [busyUnsettle, setBusyUnsettle] = useState<number | null>(null);
 
   const load = () => ideaView(ideaId).then(setView).catch((e) => setError(String(e)));
 
@@ -841,16 +809,6 @@ export function IdeaFile({
             </div>
           ))}
 
-          <Nudges
-            strong={view.strong}
-            weak={view.weak}
-            about={view.claim}
-            ideaId={view.id}
-            answers={view.answers}
-            openChallenge={openChallenge}
-            onAnswered={load}
-          />
-
           {view.evidence.map((e) => (
             <div key={e.id} className="evidence">
               {e.reasoning && <p className="why-inline">{e.reasoning}</p>}
@@ -878,43 +836,76 @@ export function IdeaFile({
               and the map has drawn them — but the idea's own file, the one
               place somebody reads the idea properly, never mentioned them.
               Here, and actionable, because a tension you cannot act on is
-              just a complaint. */}
-          {view.contradictions.map((c) => (
-            <div key={c.relation_id} className="at-odds">
-              <p className="at-odds-head">This sits badly with</p>
-              <p className="at-odds-claim">{c.other_claim}</p>
-              {c.reasoning && <p className="blurb">{c.reasoning}</p>}
-              <button
-                className="btn subtle"
-                onClick={() =>
-                  setSettling({
-                    relationId: c.relation_id,
-                    a: { idea_id: view.id, claim: view.claim },
-                    b: { idea_id: c.other_id, claim: c.other_claim },
-                    reasoning: c.reasoning ?? undefined,
-                  })
-                }
-              >
-                Settle it
-              </button>
-            </div>
-          ))}
+              just a complaint. Settled ones stay listed below the open ones:
+              a decision you cannot see is a decision you cannot take back. */}
+          {view.contradictions
+            .filter((c) => !c.resolved)
+            .map((c) => (
+              <div key={c.relation_id} className="at-odds">
+                <p className="at-odds-head">This sits badly with</p>
+                <p className="at-odds-claim">{c.other_claim}</p>
+                {c.reasoning && <p className="blurb">{c.reasoning}</p>}
+                <button
+                  className="btn subtle"
+                  onClick={() =>
+                    setSettling({
+                      relationId: c.relation_id,
+                      a: { idea_id: view.id, claim: view.claim },
+                      b: { idea_id: c.other_id, claim: c.other_claim },
+                      reasoning: c.reasoning ?? undefined,
+                      resolution: c.resolution ?? undefined,
+                    })
+                  }
+                >
+                  Settle it
+                </button>
+              </div>
+            ))}
 
-          {/* One quiet line. The wording, the date and the confidence were
-              three lines of furniture around one fact; what actually has to
-              survive is the undo, because rewriting is the only thing here
-              that can destroy something you wrote. */}
-          {view.revisions.filter((r) => !r.reverted_at).map((r) => (
-            <p key={r.id} className="revision-line muted">
-              rewritten {plainDate(r.created_at)} ·{" "}
-              <button
-                className="link"
-                onClick={() => revertRevision(r.id).then(load).catch((e) => setError(String(e)))}
-              >
-                undo
-              </button>
-            </p>
-          ))}
+          {/* And the ones already dealt with. Quieter, and the action is
+              undoing: "both can stand" decided in haste, or a reword made in
+              the wrong direction, can be argued with again from here. */}
+          {view.contradictions
+            .filter((c) => c.resolved)
+            .map((c) => (
+              <div key={c.relation_id} className="at-odds settled">
+                <p className="at-odds-head">Settled with</p>
+                <p className="at-odds-claim">{c.other_claim}</p>
+                {c.resolution && (
+                  <p className="at-odds-stand">
+                    <span className="muted">Both stand because </span>
+                    {c.resolution}
+                  </p>
+                )}
+                <button
+                  className="btn subtle"
+                  disabled={busyUnsettle === c.relation_id}
+                  data-tip="Argue it again — the line comes back on the map"
+                  onClick={() => {
+                    setBusyUnsettle(c.relation_id);
+                    void unresolveRelation(c.relation_id)
+                      .then(load)
+                      .catch((e) => setError(String(e)))
+                      .finally(() => setBusyUnsettle(null));
+                  }}
+                >
+                  Settle it again
+                </button>
+              </div>
+            ))}
+
+          {/* The model's notes on the idea, and the small conversations that
+              answer them — at the foot of the page, where an answer belongs:
+              after the claim, the words it rests on, the reading and the
+              tensions, not crowded in among them. */}
+          <Nudges
+            strong={view.strong}
+            weak={view.weak}
+            about={view.claim}
+            ideaId={view.id}
+            answers={view.answers}
+            onAnswered={load}
+          />
 
         </>
       )}
@@ -925,6 +916,7 @@ export function IdeaFile({
           b={settling.b}
           relationId={settling.relationId}
           reasoning={settling.reasoning}
+          resolution={settling.resolution}
           onClose={() => setSettling(null)}
           onChanged={load}
         />

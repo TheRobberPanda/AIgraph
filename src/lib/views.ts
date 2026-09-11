@@ -99,6 +99,10 @@ export interface Contradiction {
   other_claim: string;
   other_title: string;
   reasoning: string | null;
+  /** Already dealt with. Kept in the view so the decision can be taken back. */
+  resolved: boolean;
+  /** How both stand, in the person's words, when they said. */
+  resolution: string | null;
 }
 
 export function conversationView(sessionId: number): Promise<ConversationView> {
@@ -150,4 +154,9 @@ export function digestDisputeAnswer(answerId: number): Promise<string> {
 
 export function deleteDisputeAnswer(answerId: number): Promise<void> {
   return invoke("delete_dispute_answer", { answerId });
+}
+
+/** Take a settled contradiction back, so it can be settled differently. */
+export function unresolveRelation(relationId: number): Promise<void> {
+  return invoke("unresolve_relation", { relationId });
 }

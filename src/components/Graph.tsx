@@ -306,8 +306,12 @@ function moonsOf(nodes: Node[]): Moon[] {
 }
 
 /** Put every moon where it belongs, given where its planet is right now. */
-function settleMoons(moons: Moon[]) {
+function settleMoons(moons: Moon[], except?: Node | null) {
   for (const m of moons) {
+    // The moon being pointed at stands still: its overlay is anchored where
+    // it was, and a moon that kept moving read as the map drifting away from
+    // its own highlight.
+    if (except && m.node === except) continue;
     m.node.x = (m.planet.x ?? 0) + Math.cos(m.angle) * m.away;
     m.node.y = (m.planet.y ?? 0) + Math.sin(m.angle) * m.away;
     // Pinned, so neither the simulation nor a drag pulls one away from the
@@ -556,6 +560,46 @@ function inTree(t: ReturnType<typeof treeShape>, px: number, py: number): boolea
   return false;
 }
 
+/**
+ * An idea in a forest is not a dot at the end of a root — it is the root's
+ * nodule, the thing the root grew to reach. A small teardrop, wide where it
+ * meets the branch and tapering to a tip, so the map reads as a root system
+ * rather than a tree with beads strung below it.
+ */
+function drawRoot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(x, y - r);
+  ctx.bezierCurveTo(x + r * 1.1, y - r * 0.3, x + r * 0.75, y + r * 0.7, x, y + r * 1.7);
+  ctx.bezierCurveTo(x - r * 0.75, y + r * 0.7, x - r * 1.1, y - r * 0.3, x, y - r);
+  ctx.closePath();
+  ctx.fill();
+}
+
+/**
+ * The whole tree a node belongs to: the conversation at its top and every idea
+ * it grew. Pointing at any part of a forest tree lights the whole root system,
+ * so a claim is read in the context of what it came from rather than alone.
+ */
+function forestCluster(hover: Node | null, links: Link[], style: MapStyle): Set<Node> | null {
+  if (!hover || style !== "forest") return null;
+  let hub: Node | null = hover.data.kind === "conversation" ? hover : null;
+  if (!hub) {
+    for (const l of links) {
+      if (l.kind === "from" && (l.target as Node) === hover) {
+        hub = l.source as Node;
+        break;
+      }
+    }
+  }
+  if (!hub) return null;
+  const set = new Set<Node>([hub]);
+  for (const l of links) {
+    if (l.kind === "from" && (l.source as Node) === hub) set.add(l.target as Node);
+  }
+  return set;
+}
+
+
 /** How tall a tree stands above the ground, in world units. */
 const FOREST_TRUNK = 160;
 
@@ -613,6 +657,10 @@ export default function Graph({
    *  than the zoom alone would, and zooming out pulls it in tighter. */
   const fitScaleRef = useRef(1);
   const hoverRef = useRef<Node | null>(null);
+  /** How far the galaxy has turned, in seconds of turning. It only advances
+   *  while nothing is pointed at or dragged — see the draw loop. */
+  const galaxyClockRef = useRef(0);
+  const galaxyFrameRef = useRef<number | null>(null);
   /** A subject picked out of the legend. Clicking pins it — that is what
    *  reveals titles; hovering only previews the highlight, because a preview
    *  that also rearranged the labels would flicker the map on the way past. */
@@ -676,10 +724,11 @@ export default function Graph({
    *  which is on. The refs above are what the draw loop reads. */
   const [style, setStyle] = useState<MapStyle>("nodes");
   const [spread, setSpread] = useState<MapSpread>("balanced");
+  /** Whether nodes may be dragged out of place. The handlers read the ref;
+   *  the state is for the toggle that shows what is set. */
+  const [locked, setLocked] = useState(false);
+  const lockRef = useRef(false);
   const [showArrange, setShowArrange] = useState(false);
-  /** A doubt the map asked to answer, so the file it opens starts on that
-   *  one rather than at the top. Cleared once the file has taken it. */
-  const [answering, setAnswering] = useState<string | null>(null);
   const buildRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
@@ -697,13 +746,22 @@ export default function Graph({
       restyle((n) => n + 1);
       buildRef.current();
     };
+    const applyLock = (on: boolean | undefined) => {
+      if (!alive || on === undefined) return;
+      lockRef.current = on;
+      setLocked(on);
+    };
     // The first read is not a change, so it sets the ref and rebuilds once —
     // the initial build may already have run under the default.
     void getSettings().then((st) => {
       if (!alive) return;
       apply(st.map_style, st.map_spread ?? "balanced");
+      applyLock(st.map_lock_nodes);
     });
-    const un = onSettingsChanged((st) => apply(st.map_style, st.map_spread ?? "balanced"));
+    const un = onSettingsChanged((st) => {
+      apply(st.map_style, st.map_spread ?? "balanced");
+      applyLock(st.map_lock_nodes);
+    });
     return () => {
       alive = false;
       void un.then((f) => f());
@@ -843,12 +901,29 @@ export default function Graph({
     // the whole map at once.
     const focus =
       legendPinRef.current || legendHoverRef.current || hover?.data.category || null;
+    // In a forest, the whole tree under the pointer is what is being pointed
+    // at — a claim and the conversation it grew from are one thing.
+    const cluster = forestCluster(hover, linksRef.current, styleRef.current);
     // A galaxy turns. Inner rings go round faster than outer ones, which is
     // what a galaxy actually does and what keeps the rings legible as rings
     // rather than as a wheel of spokes.
+    //
+    // Pointing at anything stops the whole galaxy, not just the node under
+    // the pointer. Holding only that one still while its ring kept turning
+    // pulled it off its orbit: the radius it was re-read at on release was
+    // wherever it had been nudged to, so nodes came away snagged, bunched up
+    // on their ring or sitting off it. With one clock that simply pauses,
+    // every node stays exactly on its orbit and resumes from where it was.
     const placed = placedRef.current;
+    const now = performance.now() / 1000;
+    const last = galaxyFrameRef.current;
+    galaxyFrameRef.current = now;
+    if (!hoverRef.current && !dragNodeRef.current && last !== null) {
+      // Capped, so a tab that slept does not jump the galaxy a quarter turn.
+      galaxyClockRef.current += Math.min(0.1, now - last);
+    }
     if (styleRef.current === "galaxy" && placed.orbits.length) {
-      const t = performance.now() / 1000;
+      const t = galaxyClockRef.current;
       for (const o of placed.orbits) {
         // Slow. A galaxy that visibly races is a loading spinner; this should
         // read as drift you notice only if you watch for it.
@@ -861,7 +936,7 @@ export default function Graph({
     }
 
     // Whatever moved the planets this frame, the moons follow.
-    settleMoons(moonsRef.current);
+    settleMoons(moonsRef.current, hoverRef.current);
 
     // The rings themselves, faint, so a shared orbit reads as one thing.
     if (styleRef.current === "galaxy") {
@@ -901,43 +976,29 @@ export default function Graph({
         // the ground it stands on, and the taproot under it.
         const foot = toScreen({ x: trunk.x, y: trunk.groundY }, w, h);
         const deep = toScreen({ x: trunk.x, y: trunk.deepestY }, w, h);
-        // A root, not a spike. It wanders slightly off the vertical, tapers
-        // as it goes, and frays into two thinner ends — a straight triangle
-        // read as a pin holding the tree down.
-        const wide = Math.max(1.2, 5 * k);
+        // A root, not a spike and not a tentacle. One smooth, tapering shape:
+        // wide at the foot, narrowing steadily to the depth it actually
+        // reaches, with the faintest bow off the vertical. The earlier
+        // version frayed into two wandering bezier forks, which read as
+        // tentacles holding the tree down rather than as a root going down.
+        const wide = Math.max(1.2, 4.5 * k);
         const drop = deep.y - foot.y;
-        const wander = wide * 1.8;
         ctx.fillStyle = trunk.hub.color;
-        ctx.globalAlpha = 0.5;
+        ctx.globalAlpha = 0.45;
         ctx.beginPath();
         ctx.moveTo(foot.x - wide, foot.y);
+        // The left edge runs down and in, easing through most of the drop.
         ctx.bezierCurveTo(
-          foot.x - wide * 0.7, foot.y + drop * 0.4,
-          deep.x - wander - wide, foot.y + drop * 0.75,
-          deep.x - wander, deep.y,
+          foot.x - wide * 0.55, foot.y + drop * 0.35,
+          deep.x - wide * 0.35, foot.y + drop * 0.8,
+          deep.x, deep.y,
         );
-        ctx.lineTo(deep.x - wander + wide * 0.35, deep.y - drop * 0.06);
+        // The right edge is its mirror, so the taper is even and the tip
+        // lands exactly at the deepest root.
         ctx.bezierCurveTo(
-          deep.x - wander * 0.4, foot.y + drop * 0.7,
-          foot.x + wide * 0.2, foot.y + drop * 0.45,
+          deep.x + wide * 0.35, foot.y + drop * 0.8,
+          foot.x + wide * 0.55, foot.y + drop * 0.35,
           foot.x + wide, foot.y,
-        );
-        ctx.closePath();
-        ctx.fill();
-        // The second fork, thinner and shorter, leaving the other way.
-        ctx.globalAlpha = 0.34;
-        ctx.beginPath();
-        ctx.moveTo(foot.x + wide * 0.2, foot.y);
-        ctx.bezierCurveTo(
-          foot.x + wide * 1.2, foot.y + drop * 0.35,
-          deep.x + wander, foot.y + drop * 0.6,
-          deep.x + wander * 1.5, foot.y + drop * 0.82,
-        );
-        ctx.lineTo(deep.x + wander * 1.2, foot.y + drop * 0.84);
-        ctx.bezierCurveTo(
-          deep.x + wander * 0.5, foot.y + drop * 0.6,
-          foot.x + wide * 0.6, foot.y + drop * 0.3,
-          foot.x - wide * 0.2, foot.y,
         );
         ctx.closePath();
         ctx.fill();
@@ -951,7 +1012,8 @@ export default function Graph({
       !focus ||
       (n.data.kind !== "conversation" && n.data.category === focus) ||
       n === hover ||
-      isTraced(n);
+      isTraced(n) ||
+      (cluster?.has(n) ?? false);
 
     for (const link of linksRef.current) {
       const a = link.source as Node;
@@ -1061,6 +1123,17 @@ export default function Graph({
           ctx.fillStyle = C.hoverRing;
           ctx.fill();
         }
+      } else if (cluster?.has(n)) {
+        // The rest of the tree, softly — one root system picked out at once.
+        if (tree) {
+          ctx.fillStyle = C.halo;
+          drawFir(ctx, s, tree, 1.1);
+        } else {
+          ctx.beginPath();
+          ctx.arc(s.x, midY, ringR + 5, 0, Math.PI * 2);
+          ctx.fillStyle = C.halo;
+          ctx.fill();
+        }
       }
       if (n.data.shared) {
         ctx.beginPath();
@@ -1085,6 +1158,10 @@ export default function Graph({
       if (tree) {
         ctx.fillStyle = n.color;
         drawFir(ctx, s, tree);
+      } else if (styleRef.current === "forest") {
+        // What the roots were reaching for: a nodule, not a dot.
+        ctx.fillStyle = n.color;
+        drawRoot(ctx, s.x, s.y, r);
       } else {
         ctx.beginPath();
         ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
@@ -1741,10 +1818,23 @@ export default function Graph({
    *  where the node was on screen, so any move of the view leaves it sitting
    *  over empty map. */
   function dropHover() {
+    releasePin(hoverRef.current);
     hoverRef.current = null;
     keepAliveRef.current = null;
     setHovered(null);
     setHoverAt(null);
+  }
+
+  /**
+   * Release a node that was held still because it was being pointed at.
+   *
+   * A node being dragged keeps its drag pin, and one being flown to keeps its
+   * travel pin — releasing those here would be the same bug wearing gloves.
+   */
+  function releasePin(n: Node | null) {
+    if (!n || dragNodeRef.current === n || travelRef.current?.node === n) return;
+    n.fx = null;
+    n.fy = null;
   }
 
   /** Fly the view to a node and hold it still while doing so. */
@@ -1782,6 +1872,14 @@ export default function Graph({
   function planWidth(): number {
     const w = canvasRef.current?.clientWidth ?? 0;
     return w > 0 ? w : 900;
+  }
+
+  /** The pointer's shape: a hand over bare map, a pointer over anything live.
+   *  Set in JS because the whole map is one canvas — there is no element for a
+   *  CSS `cursor: pointer` to hang off. */
+  function setCursor(cursor: string) {
+    const canvas = canvasRef.current;
+    if (canvas) canvas.style.cursor = cursor;
   }
 
   function nodeAt(clientX: number, clientY: number): Node | null {
@@ -1903,11 +2001,13 @@ export default function Graph({
           dragNodeRef.current.fy = null;
           dragNodeRef.current = null;
         }
+        releasePin(hoverRef.current);
         hoverRef.current = null;
         keepAliveRef.current = null;
         setHovered(null);
         setHoverAt(null);
         setEdgeHover(null);
+        setCursor("");
       }}
     >
       <canvas
@@ -1916,7 +2016,11 @@ export default function Graph({
         onMouseDown={(e) => {
           // Any deliberate move of the view takes it over from the animation.
           cancelTravel();
-          const hit = nodeAt(e.clientX, e.clientY);
+          setCursor("grabbing");
+          // With the nodes locked, pressing one is never the start of a drag
+          // — the arrangements are compositions, and this is how they stay
+          // as drawn. Panning still works, and so does clicking through.
+          const hit = lockRef.current ? null : nodeAt(e.clientX, e.clientY);
           if (hit) {
             // Pinned while held, so the rest of the map reorganises around it.
             dragNodeRef.current = hit;
@@ -1937,6 +2041,7 @@ export default function Graph({
         onMouseMove={(e) => {
           const drag = dragNodeRef.current;
           if (drag) {
+            setCursor("grabbing");
             const w = toWorld(e.clientX, e.clientY);
             drag.fx = w.x;
             drag.fy = w.y;
@@ -1952,6 +2057,7 @@ export default function Graph({
           }
           const pan = panRef.current;
           if (pan) {
+            setCursor("grabbing");
             const dx = e.clientX - pan.x;
             const dy = e.clientY - pan.y;
             if (Math.abs(dx) + Math.abs(dy) > 2) pan.moved = true;
@@ -1988,7 +2094,15 @@ export default function Graph({
           }
 
           if (hit !== hoverRef.current) {
+            // Whatever was held still for being pointed at goes back into the
+            // movement of the map, and the one being pointed at now holds
+            // still for as long as it is being read.
+            releasePin(hoverRef.current);
             hoverRef.current = hit;
+            if (hit && !dragNodeRef.current) {
+              hit.fx = hit.x ?? 0;
+              hit.fy = hit.y ?? 0;
+            }
             setHovered(hit?.data ?? null);
             const at = hit ? screenPos(hit) : null;
             setHoverAt(at);
@@ -1999,6 +2113,7 @@ export default function Graph({
           // A correlation or contradiction line names how two ideas connect —
           // worth reading on the way past, not worth a click to find out.
           if (hit) {
+            setCursor("pointer");
             if (edgeHover) setEdgeHover(null);
             return;
           }
@@ -2017,12 +2132,15 @@ export default function Graph({
               x: rect ? e.clientX - rect.left : 0,
               y: rect ? e.clientY - rect.top : 0,
             });
-          } else if (edgeHover) {
-            setEdgeHover(null);
+            setCursor("pointer");
+          } else {
+            setCursor("");
+            if (edgeHover) setEdgeHover(null);
           }
         }}
         onMouseUp={(e) => {
           const wasDrag = panRef.current?.moved ?? false;
+          setCursor("");
           if (dragNodeRef.current) {
             // Released back into the simulation rather than left pinned, so the
             // map keeps behaving like one thing.
@@ -2034,6 +2152,11 @@ export default function Graph({
           panRef.current = null;
           if (wasDrag) return;
 
+          // Every node answers a click, whatever the zoom is doing with its
+          // name: an idea is a door to its file, and a door that opens only
+          // when its label happens to be drawn is a door that mostly does
+          // not. Hovering stays zoom-gated, because that is a side effect of
+          // where the pointer rests — a click is a decision.
           const hit = nodeAt(e.clientX, e.clientY);
           if (!hit) {
             // A contradiction is the one edge worth clicking: it is the only
@@ -2087,8 +2210,9 @@ export default function Graph({
           setPanel({ kind, id });
         }}
         onContextMenu={(e) => {
-          // The map's own menu, not the browser's — and only over a node,
-          // since there is nothing to do to empty canvas.
+          // The map's own menu, not the browser's. Any node answers here —
+          // deleting or re-reading an idea is about the idea, not about
+          // whether its name happened to be drawn at this zoom.
           e.preventDefault();
           const hit = nodeAt(e.clientX, e.clientY);
           if (!hit) return;
@@ -2229,6 +2353,29 @@ export default function Graph({
                   </button>
                 ))}
               </div>
+              <p className="graph-arrange-head">Moving the nodes</p>
+              <div className="graph-arrange-row">
+                <button
+                  type="button"
+                  className={!locked ? "on" : undefined}
+                  title="Push nodes around; a force layout reorganises around the one you hold"
+                  onClick={() => {
+                    void getSettings().then((st) => saveSettings({ ...st, map_lock_nodes: false }));
+                  }}
+                >
+                  Free
+                </button>
+                <button
+                  type="button"
+                  className={locked ? "on" : undefined}
+                  title="Nothing can be dragged out of place — the arrangement stays exactly as drawn"
+                  onClick={() => {
+                    void getSettings().then((st) => saveSettings({ ...st, map_lock_nodes: true }));
+                  }}
+                >
+                  Locked
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -2240,47 +2387,11 @@ export default function Graph({
         </p>
       )}
 
-      {hovered && hoverAt && (
-        <Nudges
-          node={hovered}
-          at={hoverAt}
-          onAnswer={
-            hovered.kind === "idea" && hovered.idea_id !== null
-              ? (challenge) => {
-                  const id = hovered.idea_id!;
-                  cancelTravel();
-                  dropHover();
-                  // The file opens on that exact doubt, with the box already
-                  // waiting. Opening it at the top and leaving them to find
-                  // the note again is how the click stops being worth making.
-                  setAnswering(challenge);
-                  if (onOpenFile) onOpenFile("idea", id);
-                  else setPanel({ kind: "idea", id });
-                }
-              : undefined
-          }
-        />
-      )}
+      {hovered && hoverAt && <Nudges node={hovered} at={hoverAt} />}
 
-      {hovered && (
-        <div
-          className={`graph-tip ${hoverAt && hoverAt.below ? "top" : "bottom"} ${
-            hoverAt && hoverAt.x > (canvasRef.current?.clientWidth ?? 0) / 2 ? "left" : "right"
-          }`}
-        >
-          <span className="muted">
-            {hovered.kind === "conversation"
-              ? `Conversation · ${hovered.weight} idea${hovered.weight === 1 ? "" : "s"}`
-              : hovered.kind === "moon"
-                ? `Your answer${hovered.category ? ` · ${hovered.category}` : ""}`
-                : hovered.category
-                  ? hovered.category
-                  : "Idea"}
-            {hovered.shared && ` · returned to in ${hovered.weight} conversations`}
-          </span>
-          <div className="graph-tip-label">{hovered.label}</div>
-        </div>
-      )}
+      {/* The hovered node's name is drawn on the canvas beside it — the card
+          that used to pin itself to a corner of the screen said the same
+          thing twice, and stayed long after the pointer had moved on. */}
 
       <div className="graph-key">
         <span className="conv-key">
@@ -2405,12 +2516,8 @@ export default function Graph({
           {panel.kind === "idea" ? (
             <IdeaFile
               ideaId={panel.id}
-              openChallenge={answering}
               onOpenConversation={(id, ideaId) => openConversation.current(id, ideaId)}
-              onClose={() => {
-                setAnswering(null);
-                setPanel(null);
-              }}
+              onClose={() => setPanel(null)}
             />
           ) : (
             <ConversationFile
@@ -2438,14 +2545,9 @@ export default function Graph({
 function Nudges({
   node,
   at,
-  onAnswer,
 }: {
   node: GraphNode;
   at: { x: number; y: number; r: number; color: string; below: boolean };
-  /** Answer one of the doubts, from here. Absent where there is no idea for
-   *  the answer to belong to — a conversation's notes are about the whole
-   *  session, and have no single claim to hang a moon from. */
-  onAnswer?: (challenge: string) => void;
 }) {
   const points = [
     ...node.strong.map((text) => ({ text, kind: "strong" as const })),
@@ -2473,11 +2575,6 @@ function Nudges({
       />
       {points.map((p, i) => {
         const angle = (i / points.length) * Math.PI * 2 - Math.PI / 2;
-        // A doubt can be answered from here, without first opening the file
-        // and finding it again. The map is where you are when you notice the
-        // red mark, and making you go somewhere else to reply to it is how a
-        // reply stops being worth making.
-        const answerable = p.kind === "weak" && onAnswer !== undefined;
         const style = {
           left: at.x,
           top: at.y,
@@ -2485,27 +2582,10 @@ function Nudges({
           "--dy": `${Math.sin(angle) * radius}px`,
           animationDelay: `${i * 45}ms`,
         } as React.CSSProperties;
-        const body = (
-          <span className="ai-text">
-            {p.text}
-            {answerable && <span className="ai-answer">Answer this dispute →</span>}
-          </span>
-        );
-        return answerable ? (
-          <button
-            type="button"
-            key={i}
-            className={`ai-nudge ${p.kind} answerable${at.below ? " up" : ""}`}
-            style={style}
-            onClick={() => onAnswer(p.text)}
-          >
-            AI
-            {body}
-          </button>
-        ) : (
+        return (
           <span key={i} className={`ai-nudge ${p.kind}${at.below ? " up" : ""}`} style={style}>
             AI
-            {body}
+            <span className="ai-text">{p.text}</span>
           </span>
         );
       })}

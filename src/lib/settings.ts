@@ -49,6 +49,8 @@ export interface Settings {
   mic_timeout_seconds: number;
   runtime: Runtime;
   layout: Layout;
+  /** The folder the app opens in — the last one used, remembered across restarts. */
+  current_folder: number;
   /** Whether explanations sit on the page or wait under a hint. */
   show_explanations: boolean;
   /** Whether an idea's notes are followed by a question about them. */
@@ -56,6 +58,8 @@ export interface Settings {
   map_style: MapStyle;
   /** How hard the map's nodes push each other apart. */
   map_spread: MapSpread;
+  /** Whether the map's nodes can be dragged out of place. */
+  map_lock_nodes: boolean;
   /** Advanced layout order: conversations left, Make right. */
   advanced_swap: boolean;
   /** The accent colour id. Empty means the theme's own. */
@@ -344,6 +348,54 @@ export function setOpenRouterKey(key: string): Promise<string[]> {
 
 export function clearOpenRouterKey(): Promise<void> {
   return invoke("clear_openrouter_key");
+}
+
+/** What one model-versus-provider check came to. */
+export interface ModelTest {
+  ok: boolean;
+  /** The round trip, in milliseconds. */
+  ms: number;
+  reply: string;
+  error: string | null;
+}
+
+/**
+ * A tiny real request to the named model, through its own provider.
+ *
+ * A list says what a server has; only an answer says the model works. This is
+ * the check to run when a pick "saves fine" and then sits there.
+ */
+export function testModel(kind: LocalKind, host: string, model: string): Promise<ModelTest> {
+  return invoke<ModelTest>("test_model", { kind, host, model });
+}
+
+/** One model from OpenRouter's public listing, with what filters need. */
+export interface OpenRouterModel {
+  id: string;
+  name: string;
+  /** Context window, in tokens. */
+  context: number;
+  /** USD per million prompt tokens. */
+  prompt_price: number;
+  /** USD per million completion tokens. */
+  completion_price: number;
+  /** Unix seconds — the order OpenRouter itself ships newest-first in. */
+  created: number;
+  /** Input kinds the model takes: "text", and "image" where it sees. */
+  modalities: string[];
+  tools: boolean;
+  reasoning: boolean;
+}
+
+/**
+ * OpenRouter's catalogue, with prices and windows.
+ *
+ * The plain model list the picker gets from startup() carries ids only, which
+ * is enough to pick and useless to choose by. This is the same list with the
+ * fields worth filtering by, fetched on its own and remembered briefly.
+ */
+export function openrouterCatalog(): Promise<OpenRouterModel[]> {
+  return invoke<OpenRouterModel[]>("openrouter_catalog");
 }
 
 /** The model the app runs itself. */

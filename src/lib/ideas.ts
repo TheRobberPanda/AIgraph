@@ -144,6 +144,24 @@ export function pendingSessions(): Promise<import("./chat").SessionSummary[]> {
   return invoke("pending_sessions");
 }
 
+/** Conversations put aside before they were read, so they are not lost. */
+export function archivedSessions(): Promise<import("./chat").SessionSummary[]> {
+  return invoke("archived_sessions");
+}
+
+/** An idea a re-read left without evidence. Kept, not shown as a live idea. */
+export interface ArchivedIdea {
+  id: number;
+  title: string;
+  claim: string;
+  category: string;
+}
+
+/** Ideas that no longer stand on any conversation. Kept, not shown as live. */
+export function archivedIdeas(): Promise<ArchivedIdea[]> {
+  return invoke("archived_ideas");
+}
+
 
 /** Ask a running digest to stop after the conversation it is on. */
 export function stopDigest(): Promise<void> {
@@ -157,8 +175,22 @@ export function stopDigest(): Promise<void> {
  * Kept on record rather than deleted — the pair really was judged
  * incompatible, and without the record it would simply be drawn again.
  */
-export function resolveRelation(relationId: number): Promise<void> {
-  return invoke("resolve_relation", { relationId });
+/** Settle a contradiction, with what makes both stand if it was said. */
+export function resolveRelation(relationId: number, note?: string): Promise<void> {
+  return invoke("resolve_relation", { relationId, note: note ?? null });
+}
+
+/**
+ * Why two ideas cannot both stand. The recorded reason when there is one;
+ * otherwise the model is asked once and its answer kept on the link.
+ */
+export function explainContradiction(relationId: number): Promise<string> {
+  return invoke<string>("explain_contradiction", { relationId });
+}
+
+/** Take a settled contradiction back, so it can be settled differently. */
+export function unresolveRelation(relationId: number): Promise<void> {
+  return invoke("unresolve_relation", { relationId });
 }
 
 /** Reword an idea by hand. Kept as a revision, so it can be reverted. */

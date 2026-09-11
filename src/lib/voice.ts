@@ -18,17 +18,32 @@ export interface Parsed {
 }
 
 const MARKER = /^\s*\[\[open:(map|ideas|conversations)\]\]\s*/i;
+/** The marker, wherever it sits. The instructions say a marker opens the
+ *  reply, but a model that remembered the instruction a paragraph late put it
+ *  at the head of the next paragraph instead — and the app's own plumbing
+ *  typed itself out in the middle of an answer that had already begun. */
+const ANY_MARKER = /\[\[open:(map|ideas|conversations)\]\]/gi;
 
 /**
  * Pull a navigation marker off the front of a reply.
  *
  * The marker is stripped before anything is displayed or archived, so the
- * transcript keeps what was actually said and not the app's own plumbing.
+ * transcript keeps what was actually said and not the app's own plumbing. A
+ * marker that arrived late — at the start of a following paragraph rather
+ * than the start of the reply — still means "open this", so it is acted on
+ * and removed too. Only a marker standing at a line's start counts: the
+ * brackets in the middle of a sentence are something the model was saying,
+ * and saying it is allowed.
  */
 export function parseReply(text: string): Parsed {
   const m = text.match(MARKER);
-  if (!m) return { open: null, text };
-  return { open: m[1].toLowerCase() as OpenTarget, text: text.slice(m[0].length) };
+  let open: OpenTarget | null = m ? (m[1].toLowerCase() as OpenTarget) : null;
+  let rest = m ? text.slice(m[0].length) : text;
+  for (const later of rest.matchAll(ANY_MARKER)) {
+    if (open === null) open = later[1].toLowerCase() as OpenTarget;
+  }
+  rest = rest.replace(/^\[\[open:(map|ideas|conversations)\]\]/gim, "");
+  return { open, text: rest };
 }
 
 const OPENERS = ["[[open:map]]", "[[open:ideas]]", "[[open:conversations]]"];
@@ -42,18 +57,34 @@ const OPENERS = ["[[open:map]]", "[[open:ideas]]", "[[open:conversations]]"];
  * it is half-arrived: `[[open:conv` is not even the plumbing, it is a
  * fragment of it.
  *
- * So anything that is still only a *prefix* of a marker shows as nothing. It
- * either completes and is dropped, or it turns out to be something that was
- * actually said and appears whole on the next chunk.
+ * So complete markers go, wherever they landed, and anything that is still
+ * only a *fragment* of a marker — at the head of the reply, or starting a
+ * line the way the instructions ask — shows as nothing. It either completes
+ * and is dropped, or it turns out to be something that was actually said and
+ * appears whole on the next chunk.
  */
 export function visibleReply(text: string): string {
-  const lead = text.replace(/^\s+/, "");
-  const lower = lead.toLowerCase();
+  const stripped = text.replace(ANY_MARKER, " ");
+  const lower = stripped.toLowerCase();
+  // The head of the reply first: a marker being typed there is mid-word, and
+  // every fragment of it is hidden rather than shown growing.
+  const head = lower.replace(/^\s+/, "");
   for (const opener of OPENERS) {
-    if (lower.startsWith(opener)) return lead.slice(opener.length).replace(/^\s+/, "");
-    if (opener.startsWith(lower)) return "";
+    if (opener.startsWith(head) && head.length > 0) return "";
   }
-  return text;
+  // Then a half-arrived marker opening any later paragraph.
+  const at = lower.lastIndexOf("[[open");
+  if (at !== -1 && atLineStart(stripped, at)) {
+    const tail = lower.slice(at);
+    if (OPENERS.some((o) => o.startsWith(tail))) return stripped.slice(0, at);
+  }
+  return stripped;
+}
+
+/** Whether the text at `at` opens a line — the one place a marker may
+ *  genuinely be arriving, and so worth hiding while it is only a fragment. */
+function atLineStart(text: string, at: number): boolean {
+  return at === 0 || /\n\s*$/.test(text.slice(0, at));
 }
 
 /** Strip markdown that has no spoken equivalent, so it isn't read out. */

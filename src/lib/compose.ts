@@ -58,9 +58,28 @@ export function composeClear(): Promise<void> {
   return invoke("compose_clear");
 }
 
-/** Ask for something. Resolves with the whole answer; tokens arrive on the way. */
-export function composeSend(instruction: string): Promise<string> {
-  return invoke<string>("compose_send", { instruction });
+/** One file a Make answer asked to be written out, and where it went. */
+export interface ExportedFile {
+  path: string;
+  format: string;
+  /** The file's name on disk, extension included. */
+  name: string;
+}
+
+/** The answer, and the files its export command wrote. */
+export interface ComposeReply {
+  reply: string;
+  exports: ExportedFile[];
+  /** Why an export the model asked for did not land, if it did not. */
+  export_error: string | null;
+}
+
+/**
+ * Ask for something. Resolves with the whole answer and any files the model's
+ * export line produced; tokens arrive on the way.
+ */
+export function composeSend(instruction: string): Promise<ComposeReply> {
+  return invoke<ComposeReply>("compose_send", { instruction });
 }
 
 export function onComposeToken(cb: (text: string) => void): Promise<UnlistenFn> {

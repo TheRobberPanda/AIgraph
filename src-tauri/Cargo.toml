@@ -1,6 +1,6 @@
 [package]
 name = "aigraph"
-version = "0.3.0"
+version = "0.4.0"
 description = "Think out loud, get a map back"
 authors = ["AIgraph contributors"]
 license = "AGPL-3.0-or-later"

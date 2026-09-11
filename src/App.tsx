@@ -22,6 +22,13 @@ import { ConversationFile, IdeaFile } from "./components/Deep";
 import { t as tr, useLang } from "./lib/i18n";
 import { useUndoable } from "./lib/undo";
 import { stopGeneration } from "./lib/compose";
+import {
+  clearMaking,
+  getMaking,
+  onMaking,
+  requestOpenMakeOutput,
+  type Making,
+} from "./lib/making";
 import Confirm from "./components/Confirm";
 import Sheet from "./components/Sheet";
 import Call from "./components/Call";
@@ -78,6 +85,8 @@ import {
   rewindConversation,
   sendMessage,
   startup,
+  wantsReasoning,
+  REASONING_REFUSED,
   type Archived,
   type Selected,
   type Turn,
@@ -202,6 +211,9 @@ export default function App() {
   const [thoughtChars, setThoughtChars] = useState(0);
   const [provider, setProvider] = useState<Selected | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The message that just failed, so an error that can be fixed on the spot
+  // can also send it again.
+  const failedRef = useRef<string | null>(null);
   const [justArchived, setJustArchived] = useState<Archived | null>(null);
   const [view, setView] = useState<Tab>(tabFromHash());
   const [ending, setEnding] = useState(false);
@@ -213,6 +225,8 @@ export default function App() {
   const [digesting, setDigesting] = useState<ExtractionProgress | null>(null);
   const [digestBusy, setDigestBusy] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  /** What the Make tab is making, so its progress follows you around the app. */
+  const [making, setMaking] = useState<Making | null>(getMaking());
   const [showModels, setShowModels] = useState(false);
   // A pending delete or rewind, waiting on confirmation — losing a message is
   // not something a stray click should be able to do.
@@ -486,6 +500,9 @@ export default function App() {
     };
   }, []);
 
+  // What the Make tab is making, wherever you are.
+  useEffect(() => onMaking(setMaking), []);
+
   /**
    * Pick an archived conversation back up.
    *
@@ -547,6 +564,9 @@ export default function App() {
     const p = onArchived((a) => {
       setTurns([]);
       setJustArchived(a);
+      // Filing no longer starts a digest, so the waiting count has to be
+      // re-read here rather than arriving on a progress event.
+      void extractionProgress().then(setDigesting);
     });
     return () => {
       void p.then((un) => un());
@@ -655,6 +675,19 @@ export default function App() {
   }
 
   /**
+   * Switch reasoning on and ask again, from the error that asked for it.
+   *
+   * Some models will not answer with it off, and the refusal used to be all
+   * there was — a raw error, and a trip to Settings to find the one switch.
+   */
+  async function retryWithReasoning() {
+    const text = failedRef.current;
+    await patchSetting({ reasoning: true });
+    setError(null);
+    if (text) await sendText(text, true);
+  }
+
+  /**
    * Undo a call-mode exchange that was talked over, so the continuation can
    * join the message that triggered it instead of arriving as a second one.
    *
@@ -670,7 +703,7 @@ export default function App() {
     setHeardText(heardRef.current);
   }
 
-  async function sendText(text: string) {
+  async function sendText(text: string, resend = false) {
     if (!text || streaming) return;
     // Said rather than swallowed. Without this, pressing Send with no model
     // did nothing at all — the same thing a broken button does.
@@ -682,6 +715,7 @@ export default function App() {
 
     setDraft("");
     setError(null);
+    failedRef.current = null;
     pendingSpeech.current = "";
     rawReply.current = "";
     streamingRef.current = true;
@@ -689,8 +723,17 @@ export default function App() {
     setStreaming(true);
     setThinking(false);
     setThoughtChars(0);
-    activeExchangeRef.current = { index: turns.length, text };
-    setTurns((t) => [...t, { role: "user", content: text }, { role: "assistant", content: "" }]);
+    // A resend takes the place of the message that failed rather than
+    // repeating it: the backend already took that one back, and a second copy
+    // on screen would put every later index one out from the conversation.
+    const last = turns[turns.length - 1];
+    const ghost = resend && last?.role === "user" && last.content === text;
+    activeExchangeRef.current = { index: ghost ? turns.length - 1 : turns.length, text };
+    setTurns((t) => [
+      ...(ghost ? t.slice(0, -1) : t),
+      { role: "user", content: text },
+      { role: "assistant", content: "" },
+    ]);
 
     try {
       const reply = await sendMessage(
@@ -770,6 +813,7 @@ export default function App() {
       }
     } catch (e) {
       if (!interruptedRef.current) {
+        failedRef.current = text;
         setError(String(e));
         setTurns((t) => t.slice(0, -1));
       }
@@ -1003,6 +1047,39 @@ export default function App() {
               </button>
             </>
           )}
+          {making && (
+            <button
+              className={
+                "making-chip" +
+                (making.status === "working" ? " working" : "") +
+                (making.status === "done" ? " done" : "") +
+                (making.status === "failed" ? " failed" : "")
+              }
+              data-tip={
+                making.status === "failed"
+                  ? (making.error ?? "It failed")
+                  : making.status === "done"
+                    ? "Open what was made"
+                    : "Making something in the Make tab"
+              }
+              onClick={() => {
+                setDeep(null);
+                if (layout === "simple") setView("make");
+                else setExpanded("make");
+                if (making.status === "done" && making.outputId !== null) {
+                  requestOpenMakeOutput(making.outputId);
+                }
+                if (making.status !== "working") clearMaking();
+              }}
+            >
+              {making.status === "working" && <span className="spinner" aria-hidden="true" />}
+              {making.status === "working"
+                ? `Making ${making.name}…`
+                : making.status === "done"
+                  ? `Made ${making.name} — open`
+                  : `${making.name} failed`}
+            </button>
+          )}
           {pending > 0 && (
             <span className="row digest-group">
               {/* Running, it becomes the way to stop — the same button, because
@@ -1011,14 +1088,21 @@ export default function App() {
                   would be dead most of the time. */}
               <button
                 className={digesting?.running ? "digest-btn running" : "digest-btn"}
-                disabled={digestBusy || digesting?.stopping}
+                // A stop that was asked for only holds the button while a read
+                // is actually in flight. The snapshot that carries `stopping`
+                // can outlive the run it belongs to, and a disabled button over
+                // "Read (5)" is the button not working — which is exactly how
+                // a stopped digest used to end.
+                disabled={digestBusy || (digesting?.stopping && !!digesting?.running)}
                 onClick={() => {
                   if (digesting?.running) {
                     void stopDigest();
                     return;
                   }
-                  setDigestBusy(true);
-                  void extractNow().finally(() => setDigestBusy(false));
+                  // Reading is confirmed on the waiting page before a model
+                  // spends minutes on it, so this opens that page rather than
+                  // starting the digest.
+                  setShowQueue(true);
                 }}
               >
                 {digesting?.running ? (
@@ -1041,17 +1125,8 @@ export default function App() {
                     )}
                   </>
                 ) : (
-                  `Digest (${pending})`
+                  `Read (${pending})`
                 )}
-              </button>
-              {/* The count says how many; this says which, and lets one be
-                  thrown away before it costs a reading. */}
-              <button
-                className="digest-btn queue-btn"
-                data-tip="What is waiting to be read"
-                onClick={() => setShowQueue(true)}
-              >
-                More
               </button>
             </span>
           )}
@@ -1210,7 +1285,14 @@ export default function App() {
                 )}
               </>
             ) : (
-              <p className="filed-status muted">Queued to be read back.</p>
+              <>
+                <p className="filed-status muted">Waiting to be read.</p>
+                <div className="row">
+                  <button className="btn" onClick={() => setShowQueue(true)}>
+                    Read it back
+                  </button>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -1293,7 +1375,16 @@ export default function App() {
           />
         )}
 
-        {error && <div className="error">{error}</div>}
+        {error && (
+          <div className="error">
+            {wantsReasoning(error) ? REASONING_REFUSED : error}
+            {wantsReasoning(error) && (
+              <button className="btn error-action" onClick={() => void retryWithReasoning()}>
+                {failedRef.current ? "Turn reasoning on and send again" : "Turn reasoning on"}
+              </button>
+            )}
+          </div>
+        )}
         <div ref={endRef} />
       </div>
 
@@ -1517,6 +1608,10 @@ export default function App() {
         <Queue
           onClose={() => setShowQueue(false)}
           onChanged={() => void extractionProgress().then(setDigesting)}
+          onDigest={() => {
+            setDigestBusy(true);
+            void extractNow().finally(() => setDigestBusy(false));
+          }}
         />
       )}
 
@@ -1650,7 +1745,11 @@ export default function App() {
           <span>{digesting?.pending} waiting to be read</span>
         )}
         <span className="spacer" />
-        {error && <span style={{ color: "var(--danger)" }}>{error}</span>}
+        {error && (
+          <span style={{ color: "var(--danger)" }}>
+            {wantsReasoning(error) ? REASONING_REFUSED : error}
+          </span>
+        )}
       </div>
     </main>
   );

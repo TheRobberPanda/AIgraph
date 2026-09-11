@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { splitRecall } from "../lib/recall";
@@ -20,7 +21,7 @@ import RecallHighlight from "./RecallHighlight";
  * are already block boundaries, so a reply with no recall in it renders
  * identically either way.
  */
-export default function Markdown({ children }: { children: string }) {
+function Markdown({ children }: { children: string }) {
   const segments = splitRecall(children);
   return (
     <div className="md">
@@ -38,3 +39,11 @@ export default function Markdown({ children }: { children: string }) {
     </div>
   );
 }
+
+/**
+ * Memoized: a reply's text does not change while the surrounding panel does.
+ * Without this, selecting a passage in an output to add to the chat re-parsed
+ * and re-rendered the whole document on every mouse-up, which is the lag felt
+ * when pointing at part of a long PDF. Only the selection state moved.
+ */
+export default memo(Markdown);

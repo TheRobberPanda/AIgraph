@@ -83,7 +83,6 @@ export default function PresetPreview({
     <Sheet size="mid" onClose={onClose}>
       <div className="sheet-head">
         <h2 className="sheet-title">{preset.name}</h2>
-        <span className="muted">This is what will be sent</span>
       </div>
       <div className="sheet-body">
         <div className="pane-inner preset-preview">
@@ -123,14 +122,17 @@ export default function PresetPreview({
           {chosen && <p className="blurb">{chosen.blurb}</p>}
 
           <div className="row preset-preview-bar">
+            {/* The two decisions this sheet exists for, said in colour and
+                sitting apart at the bottom centre: everything above is what
+                will be sent, these are what happens to it. */}
             <button
-              className="btn btn-send"
+              className="btn yes"
               disabled={!prompt.trim()}
               onClick={() => onStart(prompt.trim(), format)}
             >
               Send it
             </button>
-            <button className="btn subtle" onClick={onClose}>
+            <button className="btn no" onClick={onClose}>
               Not yet
             </button>
             {/* Said rather than implied. An edit box with no save button is

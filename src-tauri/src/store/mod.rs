@@ -28,6 +28,8 @@ pub enum StoreError {
         "evidence {evidence_id} no longer matches its source (expected {quote:?}, found {found:?})"
     )]
     Provenance { evidence_id: i64, quote: String, found: String },
+    #[error("trash: {0}")]
+    Bin(String),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -47,6 +49,16 @@ pub struct Folder {
 
 /// Root always exists and cannot be removed — unsorted thinking lands here.
 pub const ROOT_FOLDER: i64 = 1;
+
+/// One thing sitting in the bin, without its contents.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrashItem {
+    pub id: i64,
+    pub kind: String,
+    pub label: String,
+    pub detail: String,
+    pub deleted_at: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionSummary {
@@ -86,6 +98,15 @@ pub struct StoredIdea {
     pub evidence: Vec<StoredEvidence>,
     pub strong: Vec<String>,
     pub weak: Vec<String>,
+}
+
+/// An idea a re-read left without evidence. Kept, not shown as a live idea.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchivedIdea {
+    pub id: i64,
+    pub title: String,
+    pub claim: String,
+    pub category: String,
 }
 
 /// A conversation that could not be read, and why. See [`Store::stalled`].
@@ -266,6 +287,12 @@ pub struct Contradiction {
     pub other_title: String,
     /// Why the model read the two as incompatible.
     pub reasoning: Option<String>,
+    /// Already dealt with — by rewording, dropping a side, or deciding both
+    /// can stand. Settled ones are kept in the view so the decision itself
+    /// can be taken back.
+    pub resolved: bool,
+    /// How both stand, in the person's words, if they settled it by saying.
+    pub resolution: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -304,7 +331,9 @@ const CONTEXT_BYTES: usize = 220;
 /// The words either side of a span, cut to whole words and to char
 /// boundaries, with an ellipsis where they were cut.
 fn context_around(text: &str, start: usize, end: usize) -> (String, String) {
-    if start > text.len() || end > text.len() || !text.is_char_boundary(start)
+    if start > text.len()
+        || end > text.len()
+        || !text.is_char_boundary(start)
         || !text.is_char_boundary(end)
     {
         // Offsets that do not land on this text describe some other text.
@@ -317,8 +346,18 @@ fn context_around(text: &str, start: usize, end: usize) -> (String, String) {
         from += 1;
     }
     let mut before = &text[from..start];
-    let cut_start = from > 0;
-    if cut_start {
+    // Two ways the window can fall short of the turn's edge: it was clamped,
+    // or it was drawn back to the blank line that ends the previous paragraph.
+    // Either way the citation shows an ellipsis where the words went.
+    let mut cut_start = from > 0;
+    if let Some(at) = before.rfind("\n\n") {
+        // The context stays inside the quote's own paragraph. Left to the raw
+        // window it trailed the tail of the thought before it — and worse on
+        // the far side, where it ran straight into the next paragraph's
+        // opening words and put them in this quote's mouth.
+        before = &before[at..];
+        cut_start = true;
+    } else if cut_start {
         // Whatever word the window landed inside belongs to the part that was
         // cut off, not to the context.
         if let Some(space) = before.find(char::is_whitespace) {
@@ -331,8 +370,11 @@ fn context_around(text: &str, start: usize, end: usize) -> (String, String) {
         to -= 1;
     }
     let mut after = &text[end..to];
-    let cut_end = to < text.len();
-    if cut_end {
+    let mut cut_end = to < text.len();
+    if let Some(at) = after.find("\n\n") {
+        after = &after[..at];
+        cut_end = true;
+    } else if cut_end {
         if let Some(space) = after.rfind(char::is_whitespace) {
             after = &after[..space];
         }
@@ -743,7 +785,8 @@ impl Store {
     /// for. Nothing the user said should be lost to bad timing.
     pub fn pending_extraction(&self) -> Result<Vec<i64>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id FROM sessions WHERE extract_state IN ('pending','extracting') ORDER BY id",
+            "SELECT id FROM sessions WHERE extract_state IN ('pending','extracting')
+               AND archived = 0 ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
@@ -849,12 +892,12 @@ impl Store {
                 "SELECT DISTINCT i.id, i.title FROM ideas i
                    JOIN evidence e ON e.idea_id = i.id
                    JOIN sessions s ON s.id = e.session_id
-                  WHERE i.title <> '' AND COALESCE(s.folder_id, 1) = ?1
+                  WHERE i.title <> '' AND i.archived = 0 AND COALESCE(s.folder_id, 1) = ?1
                   ORDER BY i.updated_at DESC LIMIT ?2"
             }
             None => {
                 "SELECT id, title FROM ideas
-                  WHERE title <> '' AND ?1 IS NULL
+                  WHERE title <> '' AND archived = 0 AND ?1 IS NULL
                   ORDER BY updated_at DESC LIMIT ?2"
             }
         };
@@ -871,7 +914,7 @@ impl Store {
             // since it is that other conversation's idea too.
             .prepare(
                 "SELECT i.id, i.claim, i.title, i.category FROM ideas i
-                 WHERE EXISTS (
+                 WHERE i.archived = 0 AND EXISTS (
                    SELECT 1 FROM evidence e JOIN sessions s ON s.id = e.session_id
                    WHERE e.idea_id = i.id AND s.archived = 0
                      AND (?1 IS NULL OR s.folder_id = ?1)
@@ -926,10 +969,41 @@ impl Store {
         Ok(out)
     }
 
+    /// Ideas that no longer stand on anything. Kept and listed, never deleted.
+    ///
+    /// Two ways to end up here: a re-read left the idea with no evidence, or a
+    /// restore brought an idea back whose quotes could not. Both are the same
+    /// thing — a claim nothing in the record supports — and both are shown
+    /// rather than quietly disappearing.
+    pub fn archived_ideas(&self) -> Result<Vec<ArchivedIdea>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, claim, category FROM ideas
+              WHERE archived = 1
+                 OR NOT EXISTS (SELECT 1 FROM evidence e WHERE e.idea_id = ideas.id)
+              ORDER BY updated_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let title: String = r.get(1)?;
+            let claim: String = r.get(2)?;
+            Ok(ArchivedIdea {
+                id: r.get(0)?,
+                title: if title.trim().is_empty() { claim.clone() } else { title },
+                claim,
+                category: r.get(3)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
     pub fn diagnostics(&self) -> Result<Diagnostics> {
-        let ideas: i64 = self.conn.query_row("SELECT COUNT(*) FROM ideas", [], |r| r.get(0))?;
-        let rejected: i64 =
-            self.conn.query_row("SELECT COUNT(*) FROM rejected_ideas", [], |r| r.get(0))?;
+        let ideas: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM ideas WHERE archived = 0", [], |r| r.get(0))?;
+        let rejected: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM rejected_ideas WHERE archived = 0",
+            [],
+            |r| r.get(0),
+        )?;
         let normalized: i64 =
             self.conn.query_row("SELECT COUNT(*) FROM evidence WHERE normalized = 1", [], |r| {
                 r.get(0)
@@ -940,13 +1014,15 @@ impl Store {
             |r| r.get(0),
         )?;
         let pending: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sessions WHERE extract_state IN ('pending','extracting')",
+            "SELECT COUNT(*) FROM sessions
+              WHERE extract_state IN ('pending','extracting') AND archived = 0",
             [],
             |r| r.get(0),
         )?;
 
         let mut stmt = self.conn.prepare(
-            "SELECT reason, COUNT(*) FROM rejected_ideas GROUP BY reason ORDER BY 2 DESC",
+            "SELECT reason, COUNT(*) FROM rejected_ideas
+              WHERE archived = 0 GROUP BY reason ORDER BY 2 DESC",
         )?;
         let by_reason = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -1218,15 +1294,17 @@ impl Store {
 
         // Either side of the pair may be this idea: `relations` stores the
         // pair once, ordered by id, so which column holds which is an accident
-        // of when they were coined.
+        // of when they were coined. Settled ones come too — deciding a tension
+        // was only apparent is a decision about it, and being unable to take
+        // it back made settling a permanent act over something the person
+        // might simply have been wrong about that day.
         let mut con = self.conn.prepare(
-            "SELECT r.id, i.id, i.claim, i.title, r.reasoning
+            "SELECT r.id, i.id, i.claim, i.title, r.reasoning, r.resolved_at, r.resolution
              FROM relations r
              JOIN ideas i ON i.id = CASE WHEN r.idea_a = ?1 THEN r.idea_b ELSE r.idea_a END
              WHERE r.kind = 'contradicts'
-               AND r.resolved_at IS NULL
                AND (r.idea_a = ?1 OR r.idea_b = ?1)
-             ORDER BY r.created_at",
+             ORDER BY r.resolved_at IS NOT NULL, r.created_at",
         )?;
         let contradictions = con
             .query_map([idea_id], |r| {
@@ -1242,6 +1320,8 @@ impl Store {
                     },
                     other_claim,
                     reasoning: r.get(4)?,
+                    resolved: r.get::<_, Option<String>>(5)?.is_some(),
+                    resolution: r.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1304,12 +1384,7 @@ impl Store {
     /// step that can fail, be slow, or be turned off — and an answer that was
     /// lost because a local model was busy would be the worst thing this
     /// feature could do.
-    pub fn add_dispute_answer(
-        &self,
-        idea_id: i64,
-        challenge: &str,
-        answer: &str,
-    ) -> Result<i64> {
+    pub fn add_dispute_answer(&self, idea_id: i64, challenge: &str, answer: &str) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO dispute_answers (idea_id, challenge, answer, created_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -1600,10 +1675,21 @@ impl Store {
                     (i.revision > 0 AND i.updated_at > datetime('now', '-10 minutes')),
                     i.title
              FROM ideas i
-             WHERE EXISTS (
-               SELECT 1 FROM evidence e JOIN sessions s ON s.id = e.session_id
-               WHERE e.idea_id = i.id AND s.archived = 0
-                 AND (?1 IS NULL OR s.folder_id = ?1)
+             WHERE i.archived = 0 AND (
+               EXISTS (
+                 SELECT 1 FROM evidence e JOIN sessions s ON s.id = e.session_id
+                 WHERE e.idea_id = i.id AND s.archived = 0
+                   AND (?1 IS NULL OR s.folder_id = ?1)
+               )
+               -- A contradiction between two ideas is the one thing that can be
+               -- on the map without a quote behind it: a pair added by hand to
+               -- try the settling UI with has no transcript, and leaving it off
+               -- the map would hide the very link the button was pressed for.
+               OR EXISTS (
+                 SELECT 1 FROM relations r
+                 WHERE r.kind = 'contradicts' AND r.resolved_at IS NULL
+                   AND (r.idea_a = i.id OR r.idea_b = i.id)
+               )
              )",
         )?;
         for row in ideas.query_map([folder], |r| {
@@ -1938,7 +2024,7 @@ impl Store {
     pub fn categories_in(&self, folder: Option<i64>) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT i.category, COUNT(*) c FROM ideas i
-             WHERE i.category <> ''
+             WHERE i.category <> '' AND i.archived = 0
                AND (?1 IS NULL OR EXISTS (
                      SELECT 1 FROM evidence e JOIN sessions s ON s.id = e.session_id
                      WHERE e.idea_id = i.id AND s.folder_id = ?1))
@@ -2064,6 +2150,10 @@ impl Store {
             ],
         )?;
 
+        // An idea a previous re-read set aside comes back the moment a
+        // conversation supports it again.
+        tx.execute("UPDATE ideas SET archived = 0 WHERE id = ?1", [idea_id])?;
+
         // Nudges belong to the new phrasing; only add them for a fresh bubble.
         if matches!(decision, Decision::New { .. } | Decision::Conflict { .. }) {
             for note in &idea.raw.notes {
@@ -2121,10 +2211,54 @@ impl Store {
     /// a record, reconciliation would draw the same link again the next time
     /// either side is touched, which is how a settled question becomes a
     /// recurring one.
-    pub fn resolve_relation(&mut self, relation_id: i64) -> Result<()> {
+    ///
+    /// `note` is how both stand, when the person said. A reword, a drop or a
+    /// dismissal comes without one, and records none.
+    pub fn resolve_relation(&mut self, relation_id: i64, note: Option<&str>) -> Result<()> {
         self.conn.execute(
-            "UPDATE relations SET resolved_at = ?2 WHERE id = ?1 AND resolved_at IS NULL",
-            params![relation_id, Utc::now().to_rfc3339()],
+            "UPDATE relations SET resolved_at = ?2, resolution = ?3
+             WHERE id = ?1 AND resolved_at IS NULL",
+            params![relation_id, Utc::now().to_rfc3339(), note],
+        )?;
+        Ok(())
+    }
+
+    /// Take a settled contradiction back.
+    ///
+    /// Settling was a judgement, and judgements get revised. The record of
+    /// having settled it is cleared rather than the row deleted: if
+    /// reconciliation meets the pair again it will draw the same link, which
+    /// is the honest outcome of deciding the earlier answer was wrong. What
+    /// was said about how both stand is kept, so settling it again starts
+    /// from those words rather than an empty box.
+    pub fn unresolve_relation(&mut self, relation_id: i64) -> Result<()> {
+        self.conn
+            .execute("UPDATE relations SET resolved_at = NULL WHERE id = ?1", [relation_id])?;
+        Ok(())
+    }
+
+    /// Both claims of a contradiction, and the reason recorded for it.
+    pub fn contradiction_pair(&self, relation_id: i64) -> Result<(String, String, Option<String>)> {
+        Ok(self.conn.query_row(
+            "SELECT a.claim, b.claim, r.reasoning
+             FROM relations r
+             JOIN ideas a ON a.id = r.idea_a
+             JOIN ideas b ON b.id = r.idea_b
+             WHERE r.id = ?1",
+            [relation_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?)
+    }
+
+    /// Keep a reason for a link that was drawn without one.
+    ///
+    /// Never over one that is already there: the reason given when the link
+    /// was judged is the better witness to why it was drawn.
+    pub fn set_relation_reasoning(&mut self, relation_id: i64, reasoning: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE relations SET reasoning = ?2
+             WHERE id = ?1 AND (reasoning IS NULL OR trim(reasoning) = '')",
+            params![relation_id, reasoning],
         )?;
         Ok(())
     }
@@ -2167,26 +2301,40 @@ impl Store {
     /// Needed whenever the extraction prompt changes — which it will, since
     /// prompt quality *is* product quality here — and to recover from a bad run.
     ///
-    /// **Destructive, and deliberately narrow.** It removes only what this
-    /// session contributed: its evidence, its notes, its rejections. An idea
-    /// that other conversations also support survives, minus this session's
-    /// quote. Only ideas left with no evidence at all are removed, because an
-    /// idea with nothing behind it is exactly what the provenance rule forbids.
+    /// **Never destructive.** It removes only what this session contributed:
+    /// its evidence, its notes. An idea that other conversations also support
+    /// survives, minus this session's quote. Ideas left with no evidence at all
+    /// are *archived* rather than deleted — the provenance rule keeps them off
+    /// the map, but nothing a person thought is destroyed by re-reading; see
+    /// `archived_ideas`. Rejections are archived too, never dropped.
     ///
-    /// Returns (evidence removed, ideas orphaned).
+    /// Their vectors are deliberately kept: reconciliation then matches the next
+    /// read against the idea that was already there and re-attaches the quote,
+    /// instead of leaving an archived copy beside a live duplicate.
+    ///
+    /// Returns (evidence removed, ideas archived).
     pub fn clear_extraction(&mut self, session_id: i64) -> Result<(usize, usize)> {
         let tx = self.conn.transaction()?;
 
         let evidence = tx.execute("DELETE FROM evidence WHERE session_id = ?1", [session_id])?;
         tx.execute("DELETE FROM session_nudges WHERE session_id = ?1", [session_id])?;
-        tx.execute("DELETE FROM rejected_ideas WHERE session_id = ?1", [session_id])?;
+        tx.execute(
+            "UPDATE rejected_ideas SET archived = 1
+              WHERE session_id = ?1 AND archived = 0",
+            [session_id],
+        )?;
 
-        // Cascades take the nudges, embeddings, positions and relations with them.
-        let orphans = tx.execute(
-            "DELETE FROM ideas WHERE NOT EXISTS (
-               SELECT 1 FROM evidence e WHERE e.idea_id = ideas.id
-             )",
-            [],
+        let now = Utc::now().to_rfc3339();
+        // An idea with nothing behind it is hidden, not removed. It is kept so
+        // the thinking survives a re-read, and listed under Archived on the
+        // waiting-to-be-read page. Keeping its vector lets the next read find
+        // it and support it again rather than make a second copy.
+        let archived = tx.execute(
+            "UPDATE ideas SET archived = 1, updated_at = ?1
+              WHERE archived = 0 AND NOT EXISTS (
+                SELECT 1 FROM evidence e WHERE e.idea_id = ideas.id
+              )",
+            [&now],
         )?;
 
         tx.execute(
@@ -2194,42 +2342,473 @@ impl Store {
             [session_id],
         )?;
         tx.commit()?;
-        Ok((evidence, orphans))
+        Ok((evidence, archived))
     }
 
-    /// Delete a conversation and everything derived from it.
+    /// Move a conversation to the bin, with everything derived from it.
     ///
-    /// Someone's own thinking is theirs to remove. Ideas supported only by this
-    /// conversation go with it; ideas other conversations also support stay.
-    pub fn delete_session(&mut self, session_id: i64) -> Result<()> {
-        let md_path: Option<String> = self
-            .conn
-            .query_row("SELECT md_path FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
-            .optional()?
-            .flatten();
+    /// Someone's own thinking is theirs to remove, but a delete that cannot
+    /// be taken back sits one twitch away from destruction. The whole record
+    /// goes into the bin in one JSON snapshot: the conversation, its turns,
+    /// its evidence and rejected ideas, and every idea it was the only
+    /// supporter of, each with its own nudges, positions, deep dives,
+    /// dispute answers, revisions and links. Restore puts the rows back under
+    /// their own ids where those are still free.
+    pub fn trash_session(&mut self, session_id: i64) -> Result<()> {
+        let Some(session) =
+            capture_rows(&self.conn, "SELECT * FROM sessions WHERE id = ?1", [session_id])?
+                .into_iter()
+                .next()
+        else {
+            // Already gone — nothing to bin.
+            return Ok(());
+        };
+
+        let md_path = session.get("md_path").and_then(|v| v.as_str()).map(str::to_string);
+        let md_text = md_path.as_ref().and_then(|p| std::fs::read_to_string(p).ok());
+
+        let turns = capture_rows(
+            &self.conn,
+            "SELECT * FROM turns WHERE session_id = ?1 ORDER BY ord",
+            [session_id],
+        )?;
+        let evidence =
+            capture_rows(&self.conn, "SELECT * FROM evidence WHERE session_id = ?1", [session_id])?;
+        let rejected = capture_rows(
+            &self.conn,
+            "SELECT * FROM rejected_ideas WHERE session_id = ?1",
+            [session_id],
+        )?;
+        let nudges = capture_rows(
+            &self.conn,
+            "SELECT * FROM session_nudges WHERE session_id = ?1",
+            [session_id],
+        )?;
+
+        // Ideas supported only by this conversation would be left with no
+        // evidence behind them once it is gone. They are *archived* rather than
+        // deleted: deleting a conversation is not a decision to destroy the
+        // thinking that came out of it, and emptying the bin later must not turn
+        // into one. Restoring the conversation brings them back with it.
+        let orphan_ids: Vec<i64> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT DISTINCT i.id FROM ideas i
+                   JOIN evidence e ON e.idea_id = i.id
+                  WHERE e.session_id = ?1
+                    AND NOT EXISTS (
+                      SELECT 1 FROM evidence e2
+                       WHERE e2.idea_id = i.id AND e2.session_id <> ?1
+                    )",
+            )?;
+            let rows = stmt.query_map([session_id], |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+
+        // A name for the list: what the rail would have shown.
+        let opening = turns
+            .iter()
+            .find(|t| t.get("role").and_then(|r| r.as_str()) == Some("user"))
+            .and_then(|t| t.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let title = session.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let label = if title.trim().is_empty() { opening } else { title };
+        let label = label.trim();
+        let label =
+            if label.is_empty() { format!("Conversation {session_id}") } else { label.to_string() };
+        let detail = format!(
+            "{} {} · {} {}",
+            turns.len(),
+            if turns.len() == 1 { "turn" } else { "turns" },
+            orphan_ids.len(),
+            if orphan_ids.len() == 1 { "idea" } else { "ideas" },
+        );
+
+        // The ideas themselves are not snapshotted: they stay in the table,
+        // hidden, so the bin entry is just the conversation. Old entries that
+        // still carry their ideas restore exactly as they did.
+        let payload = serde_json::json!({
+            "session": session,
+            "turns": turns,
+            "evidence": evidence,
+            "rejected_ideas": rejected,
+            "session_nudges": nudges,
+            "md": md_text,
+        });
 
         let tx = self.conn.transaction()?;
-        // Turns, evidence, and notes go by cascade.
+        // Turns, evidence and notes go by cascade. The ideas stay behind,
+        // archived, with their own notes and links intact.
         tx.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        for id in &orphan_ids {
+            tx.execute("UPDATE ideas SET archived = 1 WHERE id = ?1", [id])?;
+        }
         tx.execute(
-            "DELETE FROM ideas WHERE NOT EXISTS (
-               SELECT 1 FROM evidence e WHERE e.idea_id = ideas.id
-             )",
-            [],
+            "INSERT INTO trash (kind, label, detail, deleted_at, payload)
+             VALUES ('session', ?1, ?2, ?3, ?4)",
+            params![label, detail, Utc::now().to_rfc3339(), payload.to_string()],
         )?;
         tx.commit()?;
 
-        // The markdown copy is the user's own file. Removed only after the
-        // database change committed, so a failure here cannot orphan the row.
+        // The markdown copy is the user's own file, and a copy of it rides in
+        // the bin. Removed only after the bin row committed, so a failure here
+        // cannot orphan the bin entry.
         if let Some(path) = md_path {
             std::fs::remove_file(path).ok();
         }
         Ok(())
     }
 
-    /// Delete one idea and its evidence, leaving the conversations untouched.
-    pub fn delete_idea(&mut self, idea_id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM ideas WHERE id = ?1", [idea_id])?;
+    /// Move one idea to the bin with everything that hangs off it.
+    pub fn trash_idea(&mut self, idea_id: i64) -> Result<()> {
+        let Some(idea) = capture_rows(&self.conn, "SELECT * FROM ideas WHERE id = ?1", [idea_id])?
+            .into_iter()
+            .next()
+        else {
+            return Ok(());
+        };
+        let idea_nudges =
+            capture_rows(&self.conn, "SELECT * FROM nudges WHERE idea_id = ?1", [idea_id])?;
+        let idea_positions =
+            capture_rows(&self.conn, "SELECT * FROM positions WHERE idea_id = ?1", [idea_id])?;
+        let idea_deep_dives = capture_rows(
+            &self.conn,
+            "SELECT * FROM idea_deep_dives WHERE idea_id = ?1",
+            [idea_id],
+        )?;
+        let dispute_answers = capture_rows(
+            &self.conn,
+            "SELECT * FROM dispute_answers WHERE idea_id = ?1",
+            [idea_id],
+        )?;
+        let idea_revisions =
+            capture_rows(&self.conn, "SELECT * FROM idea_revisions WHERE idea_id = ?1", [idea_id])?;
+        // A link is a pair: when one side is binned the pair goes too, and a
+        // restore puts the pair back beside whatever idea still stands.
+        let relations = capture_rows(
+            &self.conn,
+            "SELECT * FROM relations WHERE idea_a = ?1 OR idea_b = ?1",
+            [idea_id],
+        )?;
+        // The idea's quotes cascade away with it — they are its proof, so
+        // they ride in the bin. Whether they can come back depends on their
+        // conversation still standing when the idea is restored.
+        let idea_evidence =
+            capture_rows(&self.conn, "SELECT * FROM evidence WHERE idea_id = ?1", [idea_id])?;
+
+        let title = idea.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let claim = idea.get("claim").and_then(|v| v.as_str()).unwrap_or("");
+        let label = if title.trim().is_empty() { claim } else { title };
+
+        let payload = serde_json::json!({
+            "idea": idea,
+            "idea_evidence": idea_evidence,
+            "idea_nudges": idea_nudges,
+            "idea_positions": idea_positions,
+            "idea_deep_dives": idea_deep_dives,
+            "dispute_answers": dispute_answers,
+            "idea_revisions": idea_revisions,
+            "relations": relations,
+        });
+
+        let tx = self.conn.transaction()?;
+        // Nudges, embeddings, positions, deep dives, answers, revisions and
+        // links go by cascade.
+        tx.execute("DELETE FROM ideas WHERE id = ?1", [idea_id])?;
+        tx.execute(
+            "INSERT INTO trash (kind, label, detail, deleted_at, payload)
+             VALUES ('idea', ?1, '', ?2, ?3)",
+            params![label.trim(), Utc::now().to_rfc3339(), payload.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Move an output to the bin. One row, no dependents.
+    pub fn trash_make_output(&mut self, id: i64) -> Result<()> {
+        let Some(output) =
+            capture_rows(&self.conn, "SELECT * FROM make_outputs WHERE id = ?1", [id])?
+                .into_iter()
+                .next()
+        else {
+            return Ok(());
+        };
+        let title = output.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let summary = output.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+        let label = if title.trim().is_empty() { summary } else { title };
+
+        let payload = serde_json::json!({ "output": output });
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM make_outputs WHERE id = ?1", [id])?;
+        tx.execute(
+            "INSERT INTO trash (kind, label, detail, deleted_at, payload)
+             VALUES ('make_output', ?1, '', ?2, ?3)",
+            params![label.trim(), Utc::now().to_rfc3339(), payload.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// What is in the bin, newest first.
+    pub fn trash_list(&self) -> Result<Vec<TrashItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, label, detail, deleted_at
+             FROM trash
+             ORDER BY deleted_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(TrashItem {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                label: r.get(2)?,
+                detail: r.get(3)?,
+                deleted_at: r.get(4)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    /// Put a binned thing back.
+    ///
+    /// Rows come back under their own ids where those are still free. Where
+    /// an id has been taken in the meantime the row lands under a new one and
+    /// everything pointing at the old id is re-pointed, so restoring an old
+    /// conversation beside new work cannot corrupt either.
+    pub fn trash_restore(&mut self, trash_id: i64, md_dir: Option<&Path>) -> Result<()> {
+        let (kind, payload): (String, String) = self
+            .conn
+            .query_row("SELECT kind, payload FROM trash WHERE id = ?1", [trash_id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?
+            .ok_or(StoreError::Bin("the bin entry is gone".into()))?;
+        let data: serde_json::Value = serde_json::from_str(&payload)
+            .map_err(|e| StoreError::Bin(format!("the binned record does not parse: {e}")))?;
+
+        // The markdown copy goes back to the folder it came from, under the
+        // name its conversation started on, with a suffix when that name is
+        // taken — the same rule the archive write runs on.
+        let md_file = md_dir.and_then(|dir| {
+            data["md"].as_str().filter(|s| !s.is_empty()).map(|_md| {
+                let started = data["session"]["started_at"].as_str().unwrap_or("");
+                bin_markdown_path(dir, started)
+            })
+        });
+        if let Some(path) = &md_file {
+            let md = data["md"].as_str().unwrap_or_default();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(path, md).ok();
+        }
+        let md_path = md_file
+            .map(|p| serde_json::json!(p.to_string_lossy().into_owned()))
+            .unwrap_or(serde_json::Value::Null);
+
+        let tx = self.conn.transaction()?;
+        let mut session_map: std::collections::HashMap<i64, i64> = Default::default();
+        let mut turn_map: std::collections::HashMap<i64, i64> = Default::default();
+        let mut idea_map: std::collections::HashMap<i64, i64> = Default::default();
+        let mut evidence_map: std::collections::HashMap<i64, i64> = Default::default();
+
+        match kind.as_str() {
+            "session" => {
+                // A folder deleted since the conversation was binned does not
+                // come back with it; the conversation lands in Root instead.
+                let folder = data["session"]["folder_id"].as_i64().unwrap_or(ROOT_FOLDER);
+                let folder_gone = !tx
+                    .query_row("SELECT 1 FROM folders WHERE id = ?1", [folder], |_| Ok(()))
+                    .optional()?
+                    .is_some();
+                let mut overrides: Vec<(&str, serde_json::Value)> = vec![("md_path", md_path)];
+                if folder_gone {
+                    overrides.push(("folder_id", serde_json::json!(ROOT_FOLDER)));
+                }
+                let (old, new) = insert_row(&tx, "sessions", &data["session"], &overrides)?;
+                session_map.insert(old, new);
+                let sid = serde_json::json!(new);
+
+                for t in data["turns"].as_array().into_iter().flatten() {
+                    let (old, new) = insert_row(&tx, "turns", t, &[("session_id", sid.clone())])?;
+                    turn_map.insert(old, new);
+                }
+                // The ideas it was the only supporter of come back before the
+                // evidence that points at them.
+                for i in data["ideas"].as_array().into_iter().flatten() {
+                    let (old, new) = insert_row(&tx, "ideas", i, &[])?;
+                    idea_map.insert(old, new);
+                }
+                for e in data["evidence"].as_array().into_iter().flatten() {
+                    // An idea binned in its own right since this conversation
+                    // was trashed has nothing left to support; the quote is
+                    // dropped rather than failing the whole restore.
+                    let idea_id = remapped(&idea_map, e["idea_id"].as_i64());
+                    let idea_stands = match idea_id.as_i64() {
+                        Some(i) => tx
+                            .query_row("SELECT 1 FROM ideas WHERE id = ?1", [i], |_| Ok(()))
+                            .optional()?
+                            .is_some(),
+                        None => false,
+                    };
+                    if !idea_stands {
+                        continue;
+                    }
+                    let (old, new) = insert_row(
+                        &tx,
+                        "evidence",
+                        e,
+                        &[
+                            ("session_id", sid.clone()),
+                            ("idea_id", idea_id),
+                            ("turn_id", remapped(&turn_map, e["turn_id"].as_i64())),
+                        ],
+                    )?;
+                    evidence_map.insert(old, new);
+                }
+                for r in data["rejected_ideas"].as_array().into_iter().flatten() {
+                    insert_row(&tx, "rejected_ideas", r, &[("session_id", sid.clone())])?;
+                }
+                for n in data["session_nudges"].as_array().into_iter().flatten() {
+                    insert_row(&tx, "session_nudges", n, &[("session_id", sid.clone())])?;
+                }
+                // The ideas this conversation was the only supporter of come
+                // back out of the archive with it.
+                tx.execute(
+                    "UPDATE ideas SET archived = 0 WHERE id IN (
+                       SELECT DISTINCT idea_id FROM evidence WHERE session_id = ?1
+                     )",
+                    [new],
+                )?;
+            }
+            "idea" => {
+                let (old, new) = insert_row(&tx, "ideas", &data["idea"], &[])?;
+                idea_map.insert(old, new);
+            }
+            "make_output" => {
+                // The output remembers which conversations were in front of
+                // the model by id; those follow the restore's remapping.
+                let sources = data["output"]["sessions"].as_str().unwrap_or("[]");
+                let ids: Vec<i64> =
+                    serde_json::from_str(sources).map_err(|e| StoreError::Bin(format!("{e}")))?;
+                let remapped_ids: Vec<i64> =
+                    ids.iter().map(|id| *session_map.get(id).unwrap_or(id)).collect();
+                let sources = serde_json::to_string(&remapped_ids)
+                    .map_err(|e| StoreError::Bin(format!("{e}")))?;
+                let folder = data["output"]["folder_id"].as_i64().unwrap_or(ROOT_FOLDER);
+                let folder_gone = !tx
+                    .query_row("SELECT 1 FROM folders WHERE id = ?1", [folder], |_| Ok(()))
+                    .optional()?
+                    .is_some();
+                let mut overrides: Vec<(&str, serde_json::Value)> =
+                    vec![("sessions", serde_json::json!(sources))];
+                if folder_gone {
+                    overrides.push(("folder_id", serde_json::json!(ROOT_FOLDER)));
+                }
+                insert_row(&tx, "make_outputs", &data["output"], &overrides)?;
+            }
+            other => return Err(StoreError::Bin(format!("unknown bin entry kind: {other}"))),
+        }
+
+        // The ideas' own things, for both kinds that carry ideas.
+        for (table, key) in [
+            ("nudges", "idea_nudges"),
+            ("positions", "idea_positions"),
+            ("idea_deep_dives", "idea_deep_dives"),
+            ("dispute_answers", "dispute_answers"),
+        ] {
+            for row in data[key].as_array().into_iter().flatten() {
+                insert_row(
+                    &tx,
+                    table,
+                    row,
+                    &[("idea_id", remapped(&idea_map, row["idea_id"].as_i64()))],
+                )?;
+            }
+        }
+        // The quotes of a binned idea come back when the words they quote
+        // still stand; a quote whose conversation is gone has nothing to
+        // point at and is left behind.
+        for row in data["idea_evidence"].as_array().into_iter().flatten() {
+            let turn = row["turn_id"].as_i64();
+            let turn_stands = match turn {
+                Some(t) => tx
+                    .query_row("SELECT 1 FROM turns WHERE id = ?1", [t], |_| Ok(()))
+                    .optional()?
+                    .is_some(),
+                None => false,
+            };
+            if !turn_stands {
+                continue;
+            }
+            match insert_row(
+                &tx,
+                "evidence",
+                row,
+                &[
+                    ("idea_id", remapped(&idea_map, row["idea_id"].as_i64())),
+                    ("session_id", row["session_id"].clone()),
+                    ("turn_id", row["turn_id"].clone()),
+                ],
+            ) {
+                Ok((old, new)) => {
+                    evidence_map.insert(old, new);
+                }
+                Err(StoreError::Db(inner)) if is_unique_violation(&inner) => {}
+                Err(other) => return Err(other),
+            }
+        }
+        for row in data["idea_revisions"].as_array().into_iter().flatten() {
+            // The revision's cause may point at an evidence row that came
+            // back under a new id — or that was never binned at all.
+            let cause = row["cause_evidence_id"]
+                .as_i64()
+                .map(|c| serde_json::json!(evidence_map.get(&c).copied().unwrap_or(c)));
+            let cause = cause.unwrap_or(serde_json::Value::Null);
+            insert_row(
+                &tx,
+                "idea_revisions",
+                row,
+                &[
+                    ("idea_id", remapped(&idea_map, row["idea_id"].as_i64())),
+                    ("cause_evidence_id", cause),
+                ],
+            )?;
+        }
+        for row in data["relations"].as_array().into_iter().flatten() {
+            // The pair may have been drawn again by reconciliation while the
+            // idea sat in the bin. A duplicate pair is dropped rather than
+            // failing the whole restore.
+            if let Err(e) = insert_row(
+                &tx,
+                "relations",
+                row,
+                &[
+                    ("idea_a", remapped(&idea_map, row["idea_a"].as_i64())),
+                    ("idea_b", remapped(&idea_map, row["idea_b"].as_i64())),
+                ],
+            ) {
+                match e {
+                    StoreError::Db(inner) if is_unique_violation(&inner) => {}
+                    other => return Err(other),
+                }
+            }
+        }
+
+        tx.execute("DELETE FROM trash WHERE id = ?1", [trash_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Drop one bin entry and its snapshot. This is the delete that cannot be
+    /// taken back.
+    pub fn trash_purge(&mut self, trash_id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM trash WHERE id = ?1", [trash_id])?;
+        Ok(())
+    }
+
+    /// Empty the bin.
+    pub fn trash_empty(&mut self) -> Result<()> {
+        self.conn.execute("DELETE FROM trash", [])?;
         Ok(())
     }
 
@@ -2359,6 +2938,219 @@ impl Store {
         )?;
         Ok(())
     }
+
+    // ------------------------------------------------- things a folder made
+
+    /// Keep what a folder was made into, and say where it came from.
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_make_output(
+        &mut self,
+        folder_id: i64,
+        title: &str,
+        summary: &str,
+        content: &str,
+        format: &str,
+        prompt: &str,
+        session_ids: &[i64],
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+        let sessions = serde_json::to_string(session_ids).unwrap_or_else(|_| "[]".to_string());
+        self.conn.execute(
+            "INSERT INTO make_outputs
+                 (folder_id, title, summary, content, format, prompt, sessions, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            params![folder_id, title, summary, content, format, prompt, sessions, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Everything a folder was made into, newest first. Empty folder means all
+    /// of them, the same rule the ideas list runs on.
+    pub fn list_make_outputs(&self, folder: Option<i64>) -> Result<Vec<MakeOutputRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, folder_id, title, summary, content, format, prompt, sessions,
+                    created_at, updated_at
+             FROM make_outputs
+             WHERE (?1 IS NULL OR folder_id = ?1)
+             ORDER BY id DESC",
+        )?;
+        let rows = stmt
+            .query_map([folder], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, String>(9)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(
+                |(
+                    id,
+                    folder_id,
+                    title,
+                    summary,
+                    content,
+                    format,
+                    prompt,
+                    sessions,
+                    created_at,
+                    updated_at,
+                )| {
+                    Ok(MakeOutputRow {
+                        id,
+                        folder_id,
+                        title,
+                        summary,
+                        content,
+                        format,
+                        prompt,
+                        sessions: self.output_sources(&sessions)?,
+                        created_at,
+                        updated_at,
+                    })
+                },
+            )
+            .collect()
+    }
+
+    /// One output, by id.
+    pub fn get_make_output(&self, id: i64) -> Result<Option<MakeOutputRow>> {
+        Ok(self.list_make_outputs(None)?.into_iter().find(|o| o.id == id))
+    }
+
+    /// Replace an output's text — by hand, or after the model revised it.
+    ///
+    /// The summary is cut from the new text, so the card never describes a
+    /// version that is no longer there. An empty title keeps the stored one.
+    pub fn update_make_output(
+        &mut self,
+        id: i64,
+        content: &str,
+        title: Option<&str>,
+    ) -> Result<()> {
+        let (_derived, summary) = summarize_output(content);
+        self.conn.execute(
+            "UPDATE make_outputs
+             SET content = ?2, summary = ?3,
+                 title = COALESCE(NULLIF(?4, ''), title),
+                 updated_at = ?5
+             WHERE id = ?1",
+            params![
+                id,
+                content,
+                summary,
+                title.map(|t| t.trim()).unwrap_or(""),
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Resolve a stored JSON id list into the conversations' current names.
+    fn output_sources(&self, json: &str) -> Result<Vec<MakeOutputSource>> {
+        let ids: Vec<i64> = serde_json::from_str(json).unwrap_or_default();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for id in ids {
+            let title: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT COALESCE(NULLIF(title, ''), substr(transcript, 1, 60))
+                     FROM sessions WHERE id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .ok();
+            out.push(MakeOutputSource {
+                session_id: id,
+                title: title.unwrap_or_else(|| format!("Conversation {id}")),
+            });
+        }
+        Ok(out)
+    }
+}
+/// One thing a folder was made into.
+///
+/// `sessions` is the resolved list of conversations that were in front of the
+/// model — read from the stored ids, so a later rename is what the page shows.
+#[derive(Debug, Clone, Serialize)]
+pub struct MakeOutputRow {
+    pub id: i64,
+    pub folder_id: i64,
+    pub title: String,
+    pub summary: String,
+    /// The whole text, carried by the list too: an output is read to be
+    /// edited more often than not, and a second fetch per row would be a
+    /// query each just to keep this struct honest about its own name.
+    pub content: String,
+    pub format: String,
+    pub prompt: String,
+    pub sessions: Vec<MakeOutputSource>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A conversation one of these was made out of.
+#[derive(Debug, Clone, Serialize)]
+pub struct MakeOutputSource {
+    pub session_id: i64,
+    pub title: String,
+}
+
+/// Cut a title and a summary out of the text itself.
+///
+/// A model call to write one would double the cost of every output and could
+/// disagree with what was actually written. The first paragraph, trimmed, is
+/// the honest thing: it is the top of the document, not an opinion of it.
+/// Returns the title and the summary.
+pub fn summarize_output(content: &str) -> (String, String) {
+    let mut title = String::new();
+    let mut first_paragraph = String::new();
+    let mut in_paragraph = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            if in_paragraph {
+                break;
+            }
+            continue;
+        }
+        if line.starts_with('#') {
+            if title.is_empty() {
+                title = line.trim_start_matches('#').trim().to_string();
+            }
+            continue;
+        }
+        if line.starts_with("```") || line.starts_with('>') || line.starts_with("---") {
+            continue;
+        }
+        if !in_paragraph {
+            first_paragraph = line.to_string();
+            in_paragraph = true;
+        } else {
+            first_paragraph.push(' ');
+            first_paragraph.push_str(line);
+        }
+        // A couple of sentences is what a card wants; more is the document.
+        if first_paragraph.len() > 320 {
+            break;
+        }
+    }
+    let mut summary = first_paragraph;
+    if summary.chars().count() > 260 {
+        summary = summary.chars().take(256).collect::<String>() + "…";
+    }
+    (title, summary)
 }
 
 /// Trim a model-supplied category into something usable as a key.
@@ -2430,6 +3222,137 @@ fn relate(
 /// Plain markdown in a folder the user picked, so their thinking is never
 /// trapped in our database — readable by Obsidian, grep, or anything else, and
 /// still there if this project is abandoned.
+/// Read stored rows as JSON objects keyed by column name.
+///
+/// Every table the bin captures holds plain text, numbers and nulls — the one
+/// blob column in the schema (`embeddings.vec`) is never captured, because a
+/// vector is derived from the claim it belongs to and is recomputed on the
+/// next embedding pass anyway.
+fn capture_rows<P: rusqlite::Params>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+) -> Result<Vec<serde_json::Value>> {
+    let mut stmt = conn.prepare(sql)?;
+    let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+    let mut rows = stmt.query(params)?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let mut map = serde_json::Map::new();
+        for (i, name) in names.iter().enumerate() {
+            map.insert(name.clone(), value_json(row.get_ref(i)?));
+        }
+        out.push(serde_json::Value::Object(map));
+    }
+    Ok(out)
+}
+
+fn value_json(value: rusqlite::types::ValueRef<'_>) -> serde_json::Value {
+    use rusqlite::types::ValueRef;
+    match value {
+        ValueRef::Null => serde_json::Value::Null,
+        ValueRef::Integer(n) => serde_json::json!(n),
+        ValueRef::Real(f) => serde_json::json!(f),
+        ValueRef::Text(t) => serde_json::json!(String::from_utf8_lossy(t).into_owned()),
+        ValueRef::Blob(_) => serde_json::Value::Null,
+    }
+}
+
+fn json_value_to_sql(value: &serde_json::Value) -> rusqlite::types::Value {
+    use rusqlite::types::Value as Sql;
+    match value {
+        serde_json::Value::Null => Sql::Null,
+        serde_json::Value::Bool(b) => Sql::Integer(*b as i64),
+        serde_json::Value::Number(n) if n.is_i64() => Sql::Integer(n.as_i64().unwrap_or_default()),
+        serde_json::Value::Number(n) => Sql::Real(n.as_f64().unwrap_or_default()),
+        serde_json::Value::String(s) => Sql::Text(s.clone()),
+        _ => Sql::Null,
+    }
+}
+
+/// Where a binned markdown copy goes back to: the name its conversation
+/// started on, suffixed when that name is already taken — the same rule the
+/// archive write runs on.
+fn bin_markdown_path(dir: &Path, started_at: &str) -> PathBuf {
+    let stamp = DateTime::parse_from_rfc3339(started_at)
+        .map(|d| d.with_timezone(&Utc).format("%Y-%m-%d-%H%M%S").to_string())
+        .unwrap_or_else(|_| Utc::now().format("%Y-%m-%d-%H%M%S").to_string());
+    let mut path = dir.join(format!("{stamp}.md"));
+    let mut suffix = 2;
+    while path.exists() {
+        path = dir.join(format!("{stamp}-{suffix}.md"));
+        suffix += 1;
+    }
+    path
+}
+
+/// Insert one captured row. When its id is free the row comes back under it;
+/// when the id has been taken in the meantime the row is inserted without one
+/// and the (old, new) pair is returned, so everything pointing at the old id
+/// can be re-pointed. Returns (old id, new id).
+fn insert_row(
+    tx: &rusqlite::Transaction,
+    table: &str,
+    row: &serde_json::Value,
+    overrides: &[(&str, serde_json::Value)],
+) -> Result<(i64, i64)> {
+    let Some(fields) = row.as_object() else {
+        return Err(StoreError::Bin(format!("binned {table} row is not an object")));
+    };
+    let mut values: Vec<(String, serde_json::Value)> =
+        fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let old_id = values.iter().find(|(k, _)| k == "id").and_then(|(_, v)| v.as_i64()).unwrap_or(-1);
+    for (k, v) in overrides {
+        match values.iter_mut().find(|(ck, _)| ck == k) {
+            Some(slot) => slot.1 = v.clone(),
+            None => values.push((k.to_string(), v.clone())),
+        }
+    }
+    if old_id >= 0 {
+        let taken: i64 =
+            tx.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"), [old_id], |r| {
+                r.get(0)
+            })?;
+        if taken > 0 {
+            values.retain(|(k, _)| k != "id");
+        }
+    }
+    let columns: Vec<&str> = values.iter().map(|(k, _)| k.as_str()).collect();
+    let binds: Vec<rusqlite::types::Value> =
+        values.iter().map(|(_, v)| json_value_to_sql(v)).collect();
+    let sql = format!(
+        "INSERT INTO {table} ({}) VALUES ({})",
+        columns.join(", "),
+        vec!["?"; columns.len()].join(", ")
+    );
+    tx.execute(&sql, rusqlite::params_from_iter(binds))?;
+    let new_id = if values.iter().any(|(k, _)| k == "id") {
+        values.iter().find(|(k, _)| k == "id").and_then(|(_, v)| v.as_i64()).unwrap_or(-1)
+    } else {
+        tx.last_insert_rowid()
+    };
+    Ok((old_id, new_id))
+}
+
+/// A captured foreign key, re-pointed when the row it named came back under
+/// a new id.
+fn remapped(map: &std::collections::HashMap<i64, i64>, old: Option<i64>) -> serde_json::Value {
+    match old {
+        Some(old) => serde_json::json!(map.get(&old).copied().unwrap_or(old)),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// A duplicate (idea_a, idea_b, kind) pair drawn again while an idea sat in
+/// the bin is dropped, not an error.
+fn is_unique_violation(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(ffi, _)
+            if ffi.code == rusqlite::ffi::ErrorCode::ConstraintViolation
+    )
+}
+
 fn write_markdown(
     dir: &Path,
     rendered: &Rendered,
@@ -2498,6 +3421,26 @@ mod tests {
         assert!(before.len() < CONTEXT_BYTES + 8, "{}", before.len());
     }
 
+    /// The window would happily run past the blank line that ends the quote's
+    /// paragraph and show the next paragraph's opening words as this quote's
+    /// context — a sentence the quote was never part of.
+    #[test]
+    fn context_stops_at_the_paragraph_it_belongs_to() {
+        let next = "The next paragraph is a different thought entirely.";
+        let text = format!(
+            "Earlier, in another paragraph, there was other business.\n\n{} QUOTE{} and the sentence carries on a little.\n\n{}",
+            "Sentences of the quote's own paragraph. ",
+            " ".repeat(0),
+            next
+        );
+        let start = text.find("QUOTE").unwrap();
+        let end = start + 5;
+        let (before, after) = context_around(&text, start, end);
+        assert!(before.starts_with('…'), "{before}");
+        assert!(!before.contains("other business"), "{before}");
+        assert!(after.contains("carries on") && !after.contains("different thought"), "{after}");
+    }
+
     #[test]
     fn offsets_that_do_not_fit_the_text_produce_no_context() {
         // Rather than a panic on a byte index that is not a char boundary,
@@ -2560,6 +3503,45 @@ mod tests {
 
         store.set_extract_state(id, "done", None).unwrap();
         assert!(store.pending_extraction().unwrap().is_empty());
+    }
+
+    /// A re-read keeps what it can no longer support, and a later read that
+    /// supports it again revives the same idea rather than making a second one.
+    #[test]
+    fn a_reread_archives_ideas_and_a_later_read_revives_them() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (session, turns) = session_with(&mut store, "latency is the problem");
+        let idea = verified("Latency is the problem", "latency is the problem", &turns);
+        let idea_id = store
+            .apply_decision(session, &idea, &Decision::New { related: vec![] }, "t", "m")
+            .unwrap();
+
+        // The re-read clears this session's evidence. The idea is hidden, not
+        // lost.
+        let (evidence, archived) = store.clear_extraction(session).unwrap();
+        assert_eq!(evidence, 1);
+        assert_eq!(archived, 1);
+        assert!(store.ideas(None).unwrap().is_empty(), "no evidence, so not live");
+        let kept = store.archived_ideas().unwrap();
+        assert_eq!(kept.len(), 1, "the idea is kept, listed as archived");
+        assert_eq!(kept[0].id, idea_id);
+
+        // The next read finds the same claim and supports it again; it comes
+        // back rather than leaving an archived copy beside a live duplicate.
+        let again = verified("Latency is the problem", "latency is the problem", &turns);
+        store
+            .apply_decision(
+                session,
+                &again,
+                &Decision::Attach { idea_id, confidence: 0.9 },
+                "t",
+                "m",
+            )
+            .unwrap();
+        assert!(store.archived_ideas().unwrap().is_empty(), "supported again, so not archived");
+        let live = store.ideas(None).unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].id, idea_id, "the same idea, not a second one");
     }
 
     /// The full chain: extract → verify → store → read back → highlight.
@@ -2959,6 +3941,132 @@ mod tests {
         assert!(store.turns(id).unwrap().is_empty(), "cascade did not fire");
     }
 
+    /// A binned conversation comes back whole: same rows, same ids, same
+    /// ideas with their evidence, and the bin entry consumed by the restore.
+    #[test]
+    fn a_trashed_session_comes_back_whole() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (idea_a, idea_b) = two_ideas(&mut store);
+        let session_id: i64 = store
+            .conn
+            .query_row("SELECT DISTINCT session_id FROM evidence", [], |r| r.get(0))
+            .unwrap();
+
+        store.trash_session(session_id).unwrap();
+
+        assert!(
+            store.list_sessions(10, None).unwrap().iter().all(|s| s.id != session_id),
+            "gone from the record"
+        );
+        assert!(store.turns(session_id).unwrap().is_empty(), "turns went with it");
+        assert!(store.ideas(None).unwrap().is_empty(), "ideas supported only by it went too");
+        let bin = store.trash_list().unwrap();
+        assert_eq!(bin.len(), 1, "one entry in the bin");
+        assert!(!bin[0].label.is_empty(), "named so it can be found again");
+        assert!(bin[0].detail.contains("turns"), "with a glanceable summary");
+
+        store.trash_restore(bin[0].id, None).unwrap();
+
+        let back = store.list_sessions(10, None).unwrap();
+        assert_eq!(back.len(), 1, "the conversation is back");
+        assert_eq!(back[0].id, session_id, "under its own id");
+        assert_eq!(store.turns(session_id).unwrap().len(), 3, "its turns with it");
+        let ideas = store.ideas(None).unwrap();
+        assert_eq!(ideas.len(), 2, "both ideas back");
+        assert!(ideas.iter().any(|i| i.id == idea_a), "with their own ids");
+        assert!(ideas.iter().any(|i| i.id == idea_b));
+        assert_eq!(store.trash_list().unwrap().len(), 0, "the bin entry is spent");
+    }
+
+    /// Trashing a conversation must not destroy the ideas only it supported —
+    /// not even when the bin is emptied.
+    #[test]
+    fn deleting_a_conversation_archives_its_ideas() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (idea_a, idea_b) = two_ideas(&mut store);
+        let session_id: i64 = store
+            .conn
+            .query_row("SELECT DISTINCT session_id FROM evidence", [], |r| r.get(0))
+            .unwrap();
+
+        store.trash_session(session_id).unwrap();
+        assert!(store.ideas(None).unwrap().is_empty(), "not live any more");
+        let kept = store.archived_ideas().unwrap();
+        assert!(kept.iter().any(|i| i.id == idea_a) && kept.iter().any(|i| i.id == idea_b));
+
+        store.trash_empty().unwrap();
+        let still = store.archived_ideas().unwrap();
+        assert!(
+            still.iter().any(|i| i.id == idea_a) && still.iter().any(|i| i.id == idea_b),
+            "emptying the bin leaves the ideas in the archive"
+        );
+    }
+
+    /// Restoring under an id that has been taken since: the rows land under a
+    /// new id and everything that pointed at the old one is re-pointed, so
+    /// neither the old work nor the restored conversation is corrupted.
+    #[test]
+    fn a_restore_under_taken_ids_repoints_everything() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (idea_a, idea_b) = two_ideas(&mut store);
+        let session_id: i64 = store
+            .conn
+            .query_row("SELECT DISTINCT session_id FROM evidence", [], |r| r.get(0))
+            .unwrap();
+        store.trash_session(session_id).unwrap();
+
+        // The next conversation takes the freed id — which is exactly what
+        // happens when work continues after the delete.
+        let taken =
+            store.archive_session(&transcript::render(&convo()), "m", Utc::now(), None).unwrap();
+        assert_eq!(taken, session_id, "the id really was reused");
+
+        let bin = store.trash_list().unwrap();
+        store.trash_restore(bin[0].id, None).unwrap();
+
+        let sessions = store.list_sessions(10, None).unwrap();
+        assert_eq!(sessions.len(), 2, "both conversations stand");
+        let restored = sessions.iter().find(|s| s.id != taken).expect("the restored one");
+        let restored_id = restored.id;
+        assert_ne!(restored_id, session_id, "under a new id");
+        assert_eq!(store.turns(restored_id).unwrap().len(), 3, "its turns followed it");
+        // Every turn's offsets still select its text out of the transcript.
+        let stored = store.transcript(restored_id).unwrap().unwrap();
+        for turn in store.turns(restored_id).unwrap() {
+            let (s, e) = (turn.start_byte as usize, turn.end_byte as usize);
+            assert_eq!(&stored[s..e], turn.text, "offsets survived the remap");
+        }
+        // The evidence followed both the conversation and its ideas.
+        let ideas = store.ideas(None).unwrap();
+        assert_eq!(ideas.len(), 2);
+        assert!(ideas.iter().any(|i| i.id == idea_a) && ideas.iter().any(|i| i.id == idea_b));
+        for idea in &ideas {
+            for e in &idea.evidence {
+                assert_eq!(e.session_id, restored_id, "evidence points at the restored session");
+            }
+        }
+    }
+
+    /// An idea binned on its own comes back with its quotes; a link that
+    /// reconciliation drew again in the meantime is not duplicated.
+    #[test]
+    fn a_trashed_idea_comes_back_with_its_quotes() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (idea_a, idea_b) = two_ideas(&mut store);
+
+        store.trash_idea(idea_a).unwrap();
+        assert!(store.ideas(None).unwrap().iter().all(|i| i.id != idea_a));
+        assert_eq!(store.trash_list().unwrap().len(), 1);
+
+        store.trash_restore(store.trash_list().unwrap()[0].id, None).unwrap();
+
+        let ideas = store.ideas(None).unwrap();
+        assert_eq!(ideas.len(), 2, "both ideas stand again");
+        let back = ideas.iter().find(|i| i.id == idea_a).expect("restored under its own id");
+        assert!(!back.evidence.is_empty(), "its quotes came back");
+        let _ = idea_b;
+    }
+
     /// Two ideas, each quoting its own turn, in one archived session — the
     /// minimum that puts a pair of ideas on the map, since an idea with no
     /// evidence behind it is not drawn at all.
@@ -3017,8 +4125,10 @@ mod tests {
     }
 
     /// A contradiction the person has settled must stop being drawn, and stop
-    /// being brought up on either idea's file — but must still be on record,
-    /// or reconciliation redraws it the next time either side is touched.
+    /// being brought up as an open tension on either idea's file — but must
+    /// still be on record, or reconciliation redraws it the next time either
+    /// side is touched. And since settling is a judgement, it can be taken
+    /// back, which puts the link back on the map.
     #[test]
     fn a_settled_contradiction_stops_being_asked_about() {
         let mut store = Store::open_in_memory().unwrap();
@@ -3039,15 +4149,80 @@ mod tests {
         let listed = store.idea_view(a).unwrap().contradictions;
         assert_eq!(listed.len(), 1, "and named on the idea's own file");
         assert_eq!(listed[0].other_id, b, "naming the other side, not itself");
+        assert!(!listed[0].resolved);
 
-        store.resolve_relation(listed[0].relation_id).unwrap();
+        store.resolve_relation(listed[0].relation_id, None).unwrap();
 
         assert_eq!(drawn(&store), 0, "settled links are not drawn");
-        assert!(store.idea_view(a).unwrap().contradictions.is_empty());
-        assert!(store.idea_view(b).unwrap().contradictions.is_empty(), "from both sides");
+        let settled = store.idea_view(a).unwrap().contradictions;
+        assert_eq!(settled.len(), 1, "still named, as a settled one");
+        assert!(settled[0].resolved, "marked as dealt with, not open");
+        assert!(store.idea_view(b).unwrap().contradictions[0].resolved, "from both sides");
         let still_there: i64 =
             store.conn.query_row("SELECT COUNT(*) FROM relations", [], |r| r.get(0)).unwrap();
         assert_eq!(still_there, 1, "kept on record, not deleted");
+
+        // Taking the settlement back is the point of keeping it: the link is
+        // drawn again and is an open tension once more.
+        store.unresolve_relation(settled[0].relation_id).unwrap();
+        assert_eq!(drawn(&store), 1, "reopened, it is drawn again");
+        assert!(!store.idea_view(a).unwrap().contradictions[0].resolved);
+    }
+
+    /// How both stand is kept with the settlement, and survives the
+    /// settlement being taken back so the next one can start from it.
+    #[test]
+    fn how_both_stand_is_kept_with_the_settlement() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (a, b) = two_ideas(&mut store);
+        store
+            .conn
+            .execute(
+                "INSERT INTO relations (idea_a, idea_b, kind, confidence, created_at)
+                 VALUES (?1, ?2, 'contradicts', 0.9, ?3)",
+                params![a.min(b), a.max(b), Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+        let id = store.idea_view(a).unwrap().contradictions[0].relation_id;
+        let said = "one is about work, the other about home";
+
+        store.resolve_relation(id, Some(said)).unwrap();
+        let c = store.idea_view(a).unwrap().contradictions.remove(0);
+        assert!(c.resolved);
+        assert_eq!(c.resolution.as_deref(), Some(said));
+
+        store.unresolve_relation(id).unwrap();
+        let c = store.idea_view(b).unwrap().contradictions.remove(0);
+        assert!(!c.resolved, "open again");
+        assert_eq!(c.resolution.as_deref(), Some(said), "and the words are still there");
+
+        // Dismissed without a word, it says nothing.
+        store.resolve_relation(id, None).unwrap();
+        assert_eq!(store.idea_view(a).unwrap().contradictions[0].resolution, None);
+    }
+
+    /// A link drawn without a reason can be given one; a link that has one
+    /// keeps it.
+    #[test]
+    fn a_reason_is_filled_in_but_never_replaced() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (a, b) = two_ideas(&mut store);
+        store
+            .conn
+            .execute(
+                "INSERT INTO relations (idea_a, idea_b, kind, confidence, created_at)
+                 VALUES (?1, ?2, 'contradicts', 0.9, ?3)",
+                params![a.min(b), a.max(b), Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+        let id = store.idea_view(a).unwrap().contradictions[0].relation_id;
+        assert_eq!(store.contradiction_pair(id).unwrap().2, None);
+
+        store.set_relation_reasoning(id, "one says always, the other never").unwrap();
+        store.set_relation_reasoning(id, "a second opinion").unwrap();
+        let (first, second, why) = store.contradiction_pair(id).unwrap();
+        assert!(!first.is_empty() && !second.is_empty(), "both claims come back");
+        assert_eq!(why.as_deref(), Some("one says always, the other never"));
     }
 
     /// Rewording by hand has to be as reversible as the model rewording it,
@@ -3161,5 +4336,46 @@ mod tests {
                 "no breaks recorded, so nothing opens a paragraph"
             );
         }
+    }
+
+    #[test]
+    fn a_summary_is_cut_from_the_text_not_written_about_it() {
+        let (title, summary) = summarize_output(
+            "# A talk on greed\n\nThis is the opening line. It carries on \
+             for long enough that it has to be cut, because the card wants a \
+             couple of sentences and not the whole first paragraph.",
+        );
+        assert_eq!(title, "A talk on greed");
+        assert!(summary.contains("This is the opening line"));
+        assert!(summary.len() < 280, "summary kept to a card-sized line: {summary}");
+    }
+
+    #[test]
+    fn a_make_output_is_kept_listed_and_edited() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = store
+            .save_make_output(
+                1,
+                "A talk",
+                "This is a summary.",
+                "# A talk\n\nFirst paragraph.",
+                "markdown",
+                "write a talk",
+                &[1, 2],
+            )
+            .unwrap();
+        let listed = store.list_make_outputs(None).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, id);
+        assert_eq!(listed[0].title, "A talk");
+        assert_eq!(listed[0].sessions.len(), 2);
+
+        store.update_make_output(id, "# A talk\n\nSecond take.", None).unwrap();
+        let got = store.get_make_output(id).unwrap().unwrap();
+        assert!(got.content.contains("Second take"));
+        assert_eq!(got.summary, "Second take.");
+
+        store.trash_make_output(id).unwrap();
+        assert!(store.list_make_outputs(None).unwrap().is_empty());
     }
 }

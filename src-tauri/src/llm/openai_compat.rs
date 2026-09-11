@@ -371,7 +371,7 @@ impl ChatProvider for OpenAiCompat {
         if !resp.status().is_success() {
             let status = resp.status();
             let detail = resp.text().await.unwrap_or_default();
-            return Err(LlmError::Transport(format!("{status}: {detail}")));
+            return Err(http_error(status, detail));
         }
 
         Ok(drain_sse(resp, on_chunk).await?.content)
@@ -438,6 +438,28 @@ fn looks_transient(msg: &str) -> bool {
         || m.contains("502")
         || m.contains("503")
         || m.contains("504")
+}
+
+/// The failure behind a non-success HTTP status.
+///
+/// A missing, wrong or out-of-credit key — or a model id that is not there —
+/// is about the provider, not about the conversation being read. Reported as
+/// `Unavailable` so the digest stops at the first one instead of spending every
+/// remaining conversation to arrive at the same refusal. Anything else is a
+/// transport failure tied to this request.
+fn http_error(status: reqwest::StatusCode, detail: String) -> LlmError {
+    let text = format!("{status}: {detail}");
+    if matches!(
+        status,
+        reqwest::StatusCode::UNAUTHORIZED
+            | reqwest::StatusCode::FORBIDDEN
+            | reqwest::StatusCode::PAYMENT_REQUIRED
+            | reqwest::StatusCode::NOT_FOUND
+    ) {
+        LlmError::Unavailable(text)
+    } else {
+        LlmError::Transport(text)
+    }
 }
 
 /// Whether a failure looks like the server refusing a parameter rather than
@@ -721,7 +743,7 @@ impl OpenAiCompat {
         if !resp.status().is_success() {
             let status = resp.status();
             let detail = resp.text().await.unwrap_or_default();
-            return Err(LlmError::Transport(format!("{status}: {detail}")));
+            return Err(http_error(status, detail));
         }
 
         // Streamed, so there is something to report while it runs. A single

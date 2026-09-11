@@ -725,12 +725,23 @@ input, textarea {
    scroller now, so it stays put by being one. */
 .deep-file .deep-aside { position: static; }
 .deep-file .deep-aside .taken-head {
-  /* The heading holds while its list scrolls under it. */
+  /* The heading holds while its list scrolls under it. Opaque, so the rows
+     sliding under it do not show through — and the colour of the panel it
+     sits on, not the page behind it: over the map's file panel this used to
+     be `var(--bg)`, which drew a near-black band behind the heading. */
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--bg);
+  background: var(--surface);
 }
+.file-panel .deep-aside .taken-head { background: var(--surface); }
+/* The two scroll regions of a conversation's file scroll with the wheel;
+   their tracks are not part of what is being read, and drew a gutter down
+   both columns. */
+.deep-file .deep-main,
+.deep-file .deep-aside { scrollbar-width: none; }
+.deep-file .deep-main::-webkit-scrollbar,
+.deep-file .deep-aside::-webkit-scrollbar { display: none; }
 
 .deep-split { display: flex; gap: 1.6rem; align-items: flex-start; }
 /* The list is a fixed column and the transcript takes whatever is left, so
@@ -1166,6 +1177,7 @@ input, textarea {
 .empty-hint { display: block; margin-top: 0.6rem; font-size: 0.78rem; color: var(--faint); }
 
 .error { color: var(--danger); font-size: 0.82rem; }
+.error .error-action { margin-left: 0.6rem; vertical-align: baseline; }
 .muted { color: var(--muted); }
 
 /* ---- Controls ---- */
@@ -2125,7 +2137,47 @@ blockquote {
 .digest-btn.running:hover .digest-label { visibility: hidden; }
 .digest-btn.running:hover .digest-hover { opacity: 1; }
 .digest-btn.running:hover { color: var(--danger); }
-.queue-btn { padding: 0.2rem 0.5rem; font-size: 0.9rem; line-height: 1; }
+
+/* What the Make tab is making, in the bar. A make can take minutes; this is
+   the one line that follows you to another tab, and when it is done it opens
+   the result. */
+.making-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 18rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.making-chip:hover { color: var(--fg); border-color: var(--accent); }
+.making-chip.done { color: var(--fg); border-color: var(--accent); }
+.making-chip.failed { color: var(--danger); border-color: var(--danger); }
+.making-chip .spinner { width: 0.75rem; height: 0.75rem; }
+
+/* The waiting-to-be-read page: the stop where a digest is agreed to. */
+.queue-tabs { gap: 0.35rem; margin: 0.4rem 0 0.8rem; }.queue-read-row { justify-content: flex-end; margin-top: 0.9rem; }
+.queue-title { display: block; }
+/* The opening line under the title, clamped — an imported note is one long
+   turn, and left unclamped it grew the row to the height of the page. */
+.queue-opening {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
 
 /* Call mode. The whole window, because a call is not a screen you read. */
 .call {
@@ -2261,18 +2313,6 @@ blockquote {
 .ai-nudge.up .ai-text { top: auto; bottom: calc(100% + 0.4rem); }
 .ai-nudge:hover { z-index: 4; }
 .ai-nudge:hover .ai-text { display: block; }
-/* A doubt you can reply to, rather than one you can only read. The mark
-   itself is unchanged — what changes is that it takes a click, and says so
-   on the card it opens. */
-button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size: 0.55rem; font-weight: 600; }
-.ai-nudge.answerable { cursor: pointer; }
-.ai-nudge.answerable:hover { background: var(--surface); }
-.ai-nudge.answerable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ai-answer {
-  display: block; margin-top: 0.35rem;
-  font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.04em;
-  color: var(--accent);
-}
 
 /* ---- Import ---- */
 
@@ -2437,6 +2477,26 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
 }
 .btn-send:disabled { border-color: var(--line); background: transparent; }
 
+/* The two decisions that matter, said in colour. Green goes, red waits. */
+.btn.yes {
+  color: var(--bg);
+  background: var(--verdant);
+  border-color: var(--verdant);
+  font-weight: 600;
+}
+.btn.yes:hover:not(:disabled) { color: var(--bg); filter: brightness(1.08); }
+.btn.yes:disabled {
+  opacity: 0.45;
+  background: var(--verdant);
+  border-color: var(--verdant);
+  color: var(--bg);
+}
+.btn.no {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+.btn.no:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+
 /* ---- Ideas as a tree: conversation, then what came from it ---- */
 
 .tree { display: flex; flex-direction: column; }
@@ -2526,7 +2586,8 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
 .tree-children .idea + .idea { border-top: 1px solid var(--line); }
 
 .context-menu {
-  z-index: 50;
+  /* Above the sheets (70) it can be opened from inside one, below the tooltip. */
+  z-index: 120;
   display: flex;
   flex-direction: column;
   /* Sized to its longest item. Without this it took whatever width the
@@ -2599,8 +2660,16 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
   overflow-y: auto;
 }
 .make-presets { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.2rem 0 0.9rem; }
+/* In the header the instructions share the line with the page tabs: left of
+   them, against the top of the chat. */
+.make-head .make-presets { margin: 0; flex: 1; min-width: 0; }
 
 .make-thread { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1.4rem; }
+/* The thread scrolls within the space left for it. Without this an answer
+   longer than the pane overflowed its flex-sized box and painted straight
+   over the composer underneath — reading it meant scrolling the whole pane
+   while the box it was about to be asked into sat buried in the middle of it. */
+.make-thread { overflow-y: auto; padding-right: 0.2rem; }
 .make-turn { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; }
 /* What was asked, set as the instruction it is rather than as a chat bubble —
    most of these arrive from a button and are a paragraph long. */
@@ -2661,18 +2730,408 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
 /* The wording, read before it is sent. */
 .preset-preview .section:first-child { margin-top: 0; }
 .preset-preview .preset-prompt { font-size: 0.86rem; }
-.preset-preview-bar { margin-top: 1.1rem; align-items: center; }
+/* The two decisions at the bottom, centred: they are about the whole sheet,
+   not about the format buttons above. `margin-top: auto` needs the preview to
+   be a column that fills the sheet — which it is. */
+.preset-preview { display: flex; flex-direction: column; }
+.preset-preview-bar {
+  margin-top: auto;
+  padding-top: 1.1rem;
+  justify-content: center;
+  align-items: center;
+}
+/* The kept-as-you-type note is not a third button; centred under the pair. */
+.preset-preview-bar .row-meta {
+  flex-basis: 100%;
+  text-align: center;
+  margin-top: 0.35rem;
+}
 
+/* ---- The two pages of the Make tab ---- */
+
+/* Small, on the heading's baseline: these switch pages, they are not a second
+   row of actions. */
+.make-views { display: inline-flex; gap: 0.15rem; margin-left: auto; }
+.make-view {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.make-view:hover { color: var(--fg); background: var(--surface); }
+.make-view.on {
+  color: var(--fg);
+  border-color: var(--line);
+  background: var(--surface-lift);
+}
+
+/* What came out of a request. The card, not the text: the whole document used
+   to be pasted into the conversation, and the next instruction started under
+   two thousand words of it. */
+.make-output-card {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--gold);
+  border-radius: 0 10px 10px 0;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.make-output-card:hover { border-color: var(--accent); }
+.make-output-title { font-weight: 600; font-size: 0.95rem; }
+.make-output-summary {
+  font-size: 0.84rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.make-output-meta {
+  margin-top: 0.15rem;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.make-output-card:hover .make-output-meta { color: var(--accent); }
+
+/* The page of everything that has been made. */
+.outputs { padding-bottom: 2.5rem; }
+.outputs-list li { border-bottom: 1px solid var(--line); }
+.outputs-list li:first-child { border-top: 1px solid var(--line); }
+.output-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+  width: 100%;
+  padding: 0.7rem 0.5rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.output-row:hover { background: var(--surface); }
+.output-row .row-main { display: flex; flex-direction: column; gap: 0.2rem; }
+.output-title { font-weight: 600; font-size: 0.92rem; }
+.output-summary {
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.output-sources { font-family: var(--mono); font-size: 0.66rem; color: var(--faint); }
+.output-meta {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+/* An output open: the document in a small viewer of its own, and the chat
+   that changes it beside it. The document keeps the wide column. */
+.output-head-title {
+  min-width: 0;
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.output-title-input {
+  min-width: 6rem;
+  max-width: 20rem;
+  padding: 0.2rem 0.45rem;
+  font-weight: 600;
+}
+.output-file.divided .output-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(17rem, 1fr);
+  gap: 1.2rem;
+  align-items: stretch;
+}
+/* The document/chat split fills the window. The 62rem reading cap on
+   `.pane-inner > *` is for prose; on the split it left the chat panel short of
+   the right edge with empty space beyond it. */
+.output-file.divided > * { max-width: none; }
+/* Two panels, not one column split: the document reads on one side, and the
+   chat that changes it lives in a container of its own on the other. Both run
+   the height of the window, so the chat is a full column rather than a short
+   box with dead space below it. */
+.output-file.divided .output-reading,
+.output-file.divided .output-chat-col {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 11rem);
+  max-height: none;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.output-file.divided .output-reading .doc-viewer { flex: 1; min-height: 0; max-height: none; }
+.doc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.45rem;
+}
+.doc-toolbar .spacer { margin-left: auto; }
+.doc-count { font-size: 0.76rem; margin-left: 0.1rem; }
+/* The dropdowns beside the title: the conversations this came from, and the
+   instruction behind it. They cost no height until one is opened. */
+.output-menu {
+  min-width: 14rem;
+  max-width: 26rem;
+  padding: 0.35rem;
+}
+.output-menu .pick-option { white-space: normal; text-align: left; }
+.output-prompt-body {
+  max-width: 24rem;
+  max-height: 15rem;
+  overflow: auto;
+  padding: 0.2rem 0.35rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.output-prompt-body > :first-child { margin-top: 0; }
+.output-prompt-body > :last-child { margin-bottom: 0; }
+/* The viewer: a recessed well the pages sit in, the way a PDF viewer shows
+   paper. Its own scroll, so the chat beside it stays put. */
+.doc-viewer {
+  position: relative;
+  max-height: 74vh;
+  overflow: auto;
+  padding: 1.4rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 70%, #000);
+}
+/* Paper, whatever the theme — it is a preview of a printed thing. */
+.doc-page {
+  max-width: 44rem;
+  min-height: 30rem;
+  margin: 0 auto;
+  padding: 3rem 3.2rem;
+  border-radius: 3px;
+  background: #fbfaf6;
+  color: #26231f;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 10px 30px rgba(0, 0, 0, 0.25);
+  font-family: Charter, "Iowan Old Style", Georgia, "Palatino Linotype", serif;
+  font-size: 0.98rem;
+  line-height: 1.62;
+}
+.doc-page .md, .doc-page .md strong,
+.doc-page .md h1, .doc-page .md h2, .doc-page .md h3, .doc-page .md h4 { color: inherit; }
+.doc-page .md h1 { margin: 0 0 1.1rem; font-size: 1.65rem; line-height: 1.2; }
+.doc-page .md h2 { margin: 1.5rem 0 0.5rem; font-size: 1.2rem; }
+.doc-page .md h3, .doc-page .md h4 { margin: 1.1rem 0 0.4rem; font-size: 1.02rem; }
+.doc-page .md p { margin: 0 0 0.8rem; }
+.doc-page .md code, .doc-page .md pre { background: #eeebe3; }
+/* The one place outside a field where text is for selecting: it is how a
+   passage gets pointed at in the chat. */
+.doc-page, .slide {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.doc-page ::selection, .slide ::selection {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+/* Markdown is not typeset; it reads as the text it is. */
+.doc-page.doc-md { font-family: var(--sans); font-size: 0.92rem; }
+.doc-edit {
+  display: block;
+  width: 100%;
+  min-height: 26rem;
+  overflow: hidden;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: inherit;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  line-height: 1.65;
+}
+.doc-pick {
+  position: absolute;
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 0.28rem 0.65rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--surface-lift);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.76rem;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+.doc-pick:hover { background: var(--accent); color: #fff; }
+/* A deck: the same slides the saved file will have, one under another. */
+.deck { display: grid; gap: 1.1rem; max-width: 44rem; margin: 0 auto; }
+.slide {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 16 / 9;
+  padding: 6% 8%;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #fbfaf6;
+  color: #26231f;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+.slide h2 { margin: 0 0 0.9rem; font-size: 1.35rem; line-height: 1.2; }
+.slide ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+.slide .slide-para { list-style: none; margin-left: -1.2rem; }
+.slide-title { justify-content: center; }
+.slide-title h1 { margin: 0; font-size: 2rem; line-height: 1.15; }
+.slide-no {
+  position: absolute;
+  right: 0.9rem;
+  bottom: 0.6rem;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  color: #8b857b;
+}
+/* The chat beside the document. */
+.output-chat-col {
+  position: sticky;
+  top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+  max-height: calc(74vh + 2.6rem);
+}
+.output-log {
+  flex: 1;
+  min-height: 6rem;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+.output-hint { margin: 0; font-size: 0.8rem; }
+.output-said { display: flex; flex-direction: column; gap: 0.3rem; }
+.output-you {
+  align-self: flex-end;
+  max-width: 92%;
+  padding: 0.45rem 0.65rem;
+  border-radius: 10px;
+  background: var(--user);
+  font-size: 0.85rem;
+}
+.output-you p { margin: 0; }
+.output-quotes blockquote {
+  margin: 0 0 0.35rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+.output-reply {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.output-reply.failed { color: var(--danger); }
+.output-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; padding-top: 0.4rem; }
+.output-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 100%;
+  padding: 0.15rem 0.2rem 0.15rem 0.55rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--fg);
+  font-size: 0.74rem;
+}
+.output-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.output-chip button {
+  display: inline-flex;
+  padding: 0.1rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.output-chip button:hover { color: var(--fg); }
+.output-chip button svg { width: 0.75rem; height: 0.75rem; }
+/* Narrow: the viewer gives up its own scroll and the chat follows it. */
+.output-file:not(.divided) .doc-viewer { max-height: none; padding: 0.8rem 0.6rem; }
+.output-file:not(.divided) .doc-page { padding: 1.6rem 1.4rem; min-height: 0; }
+.output-file:not(.divided) .output-chat-col { position: static; max-height: none; margin-top: 1rem; }
+/* The preview taken over the screen: the chat steps aside and the document
+   gets the whole window, with its own toolbar still across the top. */
+.output-file.maximized .output-split { display: block; }
+.output-file.maximized .output-reading {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  height: auto;
+  max-height: none;
+  padding: 0.9rem 1.3rem 1.3rem;
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+}
+.output-file.maximized .doc-viewer { flex: 1; min-height: 0; max-height: none; }
+.output-file.maximized .output-chat-col { display: none; }
+.output-chat textarea {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  resize: none;
+  outline: none;
+  padding: 0.4rem 0;
+}
 
 /* ---- Choosing what the Make tab reads ---- */
 
-/* On a full page the picker belongs at the right edge, clear of the column the
-   answers are read in. In the narrow advanced panel there is no right edge
-   worth the name, so it stays stacked with everything else. */
-/* Where there is room, the material stands in its own column beside what is
-   being made from it — rather than behind a dropdown that hid it until asked
-   and covered the answers when opened. */
+/* Where there is room, the chat stands in its own column on the left with the
+   instructions folded into it, and the material it is made from keeps the
+   right. See the block at the end of this sheet, where the chat's own rules
+   live. */
 .make.roomy { flex-direction: row; gap: 1.4rem; align-items: stretch; }
+/* The two columns fill the pane. The reading-measure cap on `.pane-inner > *`
+   is for prose; applied to a flex row it held the whole tab to 62rem and left
+   the picker floating short of the right edge. */
+.make.roomy > * { max-width: none; }
 .make.roomy .make-main {
   flex: 1;
   min-width: 0;
@@ -2682,6 +3141,7 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
 }
 .make.roomy .make-side {
   flex: none;
+  order: 2;
   width: 21rem;
   min-height: 0;
   display: flex;
@@ -2702,6 +3162,19 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
 /* Compact keeps the single column it always had. */
 .make .make-main { display: contents; }
 .make.roomy .make-main { display: flex; }
+/* Compact hoists the chat's children into the panel with `display: contents`,
+   and the picker sat where the markup put it — after the composer, pinned
+   under the box it is meant to be consulted from. The panel is one flex
+   column, so the order is decided here: what the model reads first, then
+   what it is made from, then the asking. */
+.make:not(.roomy) .make-chat > .make-head { order: 0; }
+.make:not(.roomy) .make-chat > .make-presets,
+.make:not(.roomy) .make-chat > .make-new,
+.make:not(.roomy) .make-chat > .error,
+.make:not(.roomy) .make-chat > .blurb { order: 1; }
+.make:not(.roomy) > .make-side { order: 2; }
+.make:not(.roomy) .make-chat > .make-thread { order: 3; }
+.make:not(.roomy) .make-chat > .make-box { order: 4; }
 .make-picker { display: flex; flex-direction: column; margin-bottom: 0.7rem; }
 .make-picker-head {
   display: flex; align-items: center; gap: 0.4rem;
@@ -2718,6 +3191,11 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
 .pick-tree, .pick-ideas { list-style: none; margin: 0; padding: 0; }
 .pick-ideas { margin: 0.1rem 0 0.35rem 1.75rem; }
 .pick-row { display: flex; align-items: center; gap: 0.45rem; }
+/* The tick and what it names are two things, not one word: a tighter gap read
+   the box as part of the first letter. The idea rows get the most, since their
+   smaller text sat closest to the box. */
+.pick-ideas .pick-row { gap: 0.8rem; padding: 0.12rem 0; }
+.pick-tree > li > .pick-row { padding: 0.18rem 0; }
 
 /* A real tick rather than a checkbox: the third state — some of this
    conversation's ideas, not all — is the one that matters here, and a native
@@ -2735,7 +3213,7 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
 .tick.part { color: var(--accent); border-color: var(--accent); }
 
 .pick-name {
-  flex: 1; min-width: 0;
+  flex: 1 1 auto; min-width: 0;
   display: flex; align-items: center; gap: 0.35rem;
   padding: 0.25rem 0; border: none; background: transparent;
   color: var(--fg); font: inherit; font-size: 0.8rem; text-align: left; cursor: pointer;
@@ -2743,6 +3221,20 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
 .pick-name:disabled { cursor: default; }
 .pick-name .row-meta { margin-left: auto; flex: none; }
 .pick-idea-name { font-size: 0.76rem; color: var(--muted); }
+
+/* The material this is made from sits against the right edge, under the tabs
+   that switch pages — the same side as the answers, not a column of its own
+   on the far left. Rows and their controls both hug that edge. */
+.make-picker-head { justify-content: flex-end; text-align: right; }
+.make-picker-body { text-align: right; }
+.pick-all { justify-content: flex-end; }
+.pick-row { justify-content: flex-end; }
+.pick-name { text-align: right; }
+.pick-name .row-main { overflow-wrap: anywhere; }
+.pick-name .row-meta { margin-left: 0.5rem; }
+.pick-ideas { margin: 0.1rem 1.75rem 0.35rem 0; }
+.pick-ideas .pick-row { justify-content: flex-end; }
+.pick-idea-name { text-align: right; }
 
 /* Writing a new instruction, inline where it will be used. */
 .make-new {
@@ -2788,16 +3280,43 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
 
 /* ---- Settling a contradiction ---- */
 
-.resolve-sides { list-style: none; margin: 0.8rem 0; padding: 0; display: grid; gap: 0.7rem; }
+/* The two claims, one next to the other. The question being settled is which
+   of the two to keep, and stacking them put one of them where a default
+   answer would sit. */
+.resolve-sides { list-style: none; margin: 0.8rem 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
 /* The two sides are deliberately identical in weight. Making either look like
    the default answer would be the app taking a side it cannot know. */
 .resolve-side {
   padding: 0.7rem 0.8rem;
   border: 1px solid var(--line); border-radius: 10px;
   background: var(--surface);
-  display: grid; gap: 0.5rem;
+  display: flex; flex-direction: column; gap: 0.5rem; min-width: 0;
 }
 .resolve-claim { margin: 0; font-size: 0.95rem; line-height: 1.5; }
+/* The pencil and the bin, at the bottom of each claim. They are quiet until
+   the bin is under the pointer — because what that press does should be seen
+   before it is done. */
+.resolve-tools { display: flex; align-items: center; gap: 0.15rem; margin-top: auto; }
+.resolve-tools .spacer { margin-left: auto; }
+.resolve-bin {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.9rem; height: 1.9rem;
+  padding: 0; border: none; border-radius: 8px;
+  background: transparent; color: var(--faint); cursor: pointer;
+}
+.resolve-bin:hover:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+/* Offered, not done: the claim turns red and crosses itself out while the
+   bin is under the pointer, and un-crosses if the pointer moves away. */
+.resolve-side.doomed {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+}
+.resolve-side.doomed .resolve-claim {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  color: color-mix(in srgb, var(--danger) 80%, var(--fg));
+}
+.resolve-side.doomed .resolve-bin { color: var(--danger); }
 .resolve-edit {
   width: 100%; resize: vertical; font: inherit; line-height: 1.5;
   padding: 0.5rem 0.6rem;
@@ -2805,6 +3324,56 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
   border: 1px solid var(--line); border-radius: 8px;
 }
 .resolve-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The clash as one message, and the answer under it. */
+.resolve-clash { display: flex; flex-direction: column; gap: 0.55rem; margin-top: 1rem; }
+.resolve-msg {
+  padding: 0.65rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
+  border-radius: 0 10px 10px 10px;
+  background: var(--surface);
+}
+.resolve-msg-kind {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-family: var(--mono); font-size: 0.6rem;
+  letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--danger);
+}
+.resolve-msg-text { margin: 0; font-size: 0.92rem; line-height: 1.55; }
+.resolve-msg-none { margin: 0; font-size: 0.84rem; }
+.resolve-waiting {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin: 0; color: var(--muted); font-size: 0.84rem;
+}
+/* The small space the answer goes in, with the mic at its edge. */
+.resolve-reply {
+  display: flex; align-items: flex-end; gap: 0.4rem;
+  padding: 0.25rem 0.4rem 0.25rem 0;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface);
+}
+.resolve-reply .resolve-edit {
+  flex: 1; min-width: 0;
+  border: none; background: transparent; padding: 0.35rem 0.55rem;
+  resize: none;
+}
+.resolve-mic {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.2rem;
+  width: 1.95rem; height: 1.95rem;
+  padding: 0; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface-lift); color: var(--muted); cursor: pointer;
+}
+.resolve-mic:hover:not(:disabled) { color: var(--fg); border-color: var(--accent); }
+.resolve-mic.on {
+  color: var(--accent); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.resolve-mic:disabled { opacity: 0.5; cursor: default; }
+.resolve-mic .mic-dot { width: 0.4rem; height: 0.4rem; }
+.resolve-actions .spacer { margin-left: auto; }
+.resolve-actions { margin-top: 0.1rem; }
 .relation-do { margin-top: 0.35rem; font-size: 0.72rem; color: var(--muted); }
 
 /* An idea at odds with another, on its own file. */
@@ -2819,6 +3388,14 @@ button.ai-nudge { padding: 0; font: inherit; font-family: var(--mono); font-size
   color: var(--danger);
 }
 .at-odds-claim { margin: 0; font-size: 0.9rem; line-height: 1.5; }
+.at-odds-stand { margin: 0.35rem 0 0; font-size: 0.84rem; line-height: 1.5; }
+/* A tension already dealt with. Quieter — the argument is over, and the
+   card's job is remembering it, not raising it again. */
+.at-odds.settled {
+  border-color: var(--line);
+  opacity: 0.75;
+}
+.at-odds.settled .at-odds-head { color: var(--muted); }
 /* Paragraphs inside one turn. The turn is still one block visually — these
    only give the eye somewhere to rest inside it. */
 .turn.user .turn-para { margin: 0 0 0.7rem; }
@@ -3000,62 +3577,24 @@ h3.section { display: flex; align-items: center; }
 
 /* ---- Answering the AI's doubt about an idea ---- */
 
-/* A note that can be replied to, and the reply. Not a card: the note has to
-   stay one of the notes, or the list of them turns into a stack of boxes. */
+/* Each doubt is its own small conversation: the note, the replies under it,
+   and the box that takes the next one. Not a card — the note has to stay one
+   of the notes, or the list of them turns into a stack of boxes. */
 .dispute { display: flex; flex-direction: column; gap: 0.3rem; }
 .dispute + .dispute { margin-top: 0.55rem; }
-.dispute.open { margin: 0.5rem 0; }
 
-/* The offer, kept to a link's weight. A button here competed with "Settle it"
-   and "Read it back" — both of which do more — and won on size alone. */
-.dispute-open {
-  align-self: flex-start;
-  margin-left: 1.9rem;
-  padding: 0;
-  border: none;
-  background: transparent;
-  font: inherit;
-  font-size: 0.78rem;
-  color: var(--faint);
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-underline-offset: 0.2em;
-  cursor: pointer;
-}
-.dispute-open:hover { color: var(--accent); }
-
-/* The box the arrow lands in, indented under the note it answers. */
-.dispute-reply { position: relative; margin: 0.15rem 0 0 1.9rem; padding-top: 2.4rem; }
-/* Over the gap between the note and the box rather than in a column of its
-   own: a stretched SVG between two flex items would move every time either
-   of them wrapped. */
-.dispute-arc {
-  position: absolute;
-  left: -1.2rem;
-  top: 0.1rem;
-  width: 9rem;
-  height: 2.6rem;
-  pointer-events: none;
-  stroke: var(--faint);
-  stroke-width: 1.4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  opacity: 0.75;
-  /* Non-scaling strokes: the arc is stretched by `preserveAspectRatio="none"`
-     and without this the line thins out along the shallow part of the curve
-     and fattens on the steep part. */
-  vector-effect: non-scaling-stroke;
-}
-.dispute-arc path { vector-effect: non-scaling-stroke; }
-
-.dispute-box { position: relative; display: flex; align-items: flex-start; gap: 0.4rem; }
+/* The chat's box, indented under the note it answers, with the greyed
+   "answer this" waiting in it. There is no expand step: the box is the
+   affordance, and its placeholder is the invitation. */
+.dispute-box { position: relative; display: flex; align-items: flex-start; gap: 0.4rem; margin-left: 1.9rem; }
 .dispute-field { flex: 1; min-width: 0; resize: vertical; font-size: 0.88rem; line-height: 1.55; }
 .dispute-field::placeholder { color: var(--faint); }
 /* Beside the box, at the top, where the first line of the answer will be. */
 .speak-into { margin-top: 0.15rem; }
 .speak-into.live { color: var(--accent); border-color: var(--accent); }
-
-.dispute-actions { margin-top: 0.45rem; }
+/* Sending is one press, or Enter. Small, so it answers the box rather than
+   competing with the page's real buttons. */
+.dispute-send { flex: none; width: 2rem; height: 2rem; padding: 0; }
 
 /* An answer already recorded. Marked as yours, in the same shape as the note
    it replies to, so the pair reads as an exchange. */
@@ -3072,8 +3611,7 @@ h3.section { display: flex; align-items: center; }
 /* The reader's own question, made answerable. It keeps the ask-why voice
    rather than being dressed as one of the AI's doubts — it is not one. */
 .dispute.asked { margin-top: 0.7rem; }
-.dispute.asked .dispute-open,
-.dispute.asked .dispute-reply,
+.dispute.asked .dispute-box,
 .dispute.asked .dispute-answered { margin-left: 0; }
 /* What held up, when it is the only thing shown. Laying a thought out is not
    the same as endorsing it, and a lone column of green ticks reads as a
@@ -3081,3 +3619,176 @@ h3.section { display: flex; align-items: center; }
 .notes.summary-only .note.strong { color: var(--faint); }
 .notes.summary-only .note.strong .badge { color: var(--faint); }
 .dispute-answered .tag { margin-left: 0.35rem; }
+
+/* ---- The models tab: a check that answers, and a catalogue to choose by ---- */
+
+/* The key section, compact: one row for the field, one for what is saved.
+   It was a heading, a paragraph, a row of tags and a row of fields — half a
+   screen above a picker that is the actual point. */
+.cloud-keys { gap: 0.4rem; }
+.cloud-keys .blurb { margin: 0; }
+.key-row { flex-wrap: nowrap; }
+.key-status { gap: 0.4rem; margin: 0.1rem 0 0; }
+
+/* The provider's own heading and current pick share one line, and the check
+   sits with them: "does this work" is asked about *that* model, not about the
+   page. */
+.cloud-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 0.9rem;
+  margin-bottom: 0.3rem;
+}
+.cloud-head .section { margin: 0; }
+.cloud-head .current { margin: 0; }
+.model-test { display: flex; align-items: center; gap: 0.5rem; min-height: 1.6rem; margin: 0.15rem 0 0.3rem; }
+.model-test .btn { font-size: 0.76rem; padding: 0.16rem 0.6rem; }
+.model-test-out { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; }
+.model-test-out.ok { color: var(--accent); }
+.model-test-out.ok svg { width: 0.85rem; height: 0.85rem; }
+.model-test-out.failed { color: var(--danger); word-break: break-word; }
+/* Where it does not fit beside the button, it goes under it — an error half
+   off the edge is worse than an error on its own line. */
+.model-test-out.failed { max-width: 100%; }
+
+/* The filters, one row over the list they narrow. */
+.router-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem;
+  margin: 0 0 0.5rem;
+}
+.router-filters .filter-input { flex: 1 1 12rem; min-width: 9rem; margin-bottom: 0; }
+.router-filters .field { width: auto; min-width: 6.4rem; padding: 0.28rem 0.5rem; font-size: 0.78rem; }
+.router-filters .btn { font-size: 0.76rem; padding: 0.24rem 0.6rem; }
+
+/* Rows, compact: the id on the left, the two facts that decide a pick on the
+   right. Two hundred rows of full-height buttons was a wall; this is a list. */
+.model-list.compact { gap: 0.12rem; }
+.model-list.compact .model { padding: 0.22rem 0.55rem; border-radius: 7px; }
+.model-list.compact .model-name { font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-facts { display: inline-flex; align-items: center; gap: 0.45rem; flex: none; }
+.model-price, .model-window {
+  font-family: var(--mono); font-size: 0.64rem; color: var(--faint);
+  white-space: nowrap;
+}
+.model-price:not(:empty) { min-width: 4.4rem; text-align: right; }
+.model-window { min-width: 2.6rem; text-align: right; }
+
+/* ---- The Make tab: the chat on the left, the material on the right ---- */
+
+/* The chat gets its own container first in the row, with the instructions in
+   its header: the asking keeps the left, and the folder it is made from the
+   right. It used to share the left column with the instructions, so the
+   thread — where the work happens — sat at the bottom of a column of them. */
+.make.roomy .make-chat {
+  flex: 1;
+  order: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The chat scrolls itself, so long answers never push the composer away. */
+.make.roomy .make-thread { flex: 1; min-height: 0; overflow-y: auto; padding-right: 0.3rem; }
+.make.roomy .make-box { flex: none; }
+/* Compact keeps the single column it always had: the new container folds
+   away into the panel, and the thread and composer order as they did. */
+.make:not(.roomy) .make-chat { display: contents; }
+
+/* Files the model's own export command wrote, under the answer that asked
+   for them. One row each: the kind, the name it went out under, and the open
+   that hands it to the system. */
+.make-exports { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.1rem 0 0; }
+.make-export {
+  display: flex; align-items: center; gap: 0.6rem; width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface);
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.make-export:hover { border-color: var(--accent); }
+.make-export .row-main { flex: 1; min-width: 0; font-family: var(--mono); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.make-export-kind {
+  flex: none;
+  padding: 0.1rem 0.4rem; border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-family: var(--mono); font-size: 0.6rem;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+
+/* ---- What was made, shown the way pictures are ---- */
+
+/* A grid of the documents themselves: a miniature of each, the name under it,
+   the date and kind under that — the arrangement a folder of images uses,
+   because the question it answers is the same one ("which one was it?") and
+   the answer there is the shape people already know how to read. Newest
+   first, as the list was. */
+.outputs-grid {
+  list-style: none; margin: 0; padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+  gap: 0.9rem 0.7rem;
+}
+.output-tile {
+  display: flex; flex-direction: column; align-items: stretch; gap: 0.3rem;
+  width: 100%; padding: 0.4rem;
+  border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: inherit; font: inherit; text-align: left;
+  cursor: pointer;
+}
+.output-tile:hover { border-color: var(--line); background: var(--surface); }
+.output-thumb {
+  display: block; height: 9.5rem; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 60%, #000);
+  padding: 0.5rem;
+}
+.output-thumb .thumb { height: 100%; }
+.output-tile-name {
+  font-weight: 600; font-size: 0.84rem; line-height: 1.3;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.output-tile-meta { font-family: var(--mono); font-size: 0.62rem; color: var(--faint); }
+
+/* The miniature itself: the document's own opening, at the size a thumbnail
+   can hold. Paper for a document, slides for a deck — the same surfaces the
+   reader uses, scaled down. */
+.thumb { display: flex; flex-direction: column; gap: 0.22rem; overflow: hidden; }
+.thumb-page {
+  flex: 1; min-height: 0;
+  background: #fbfaf6; color: #26231f;
+  padding: 0.6rem 0.7rem; border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  font-family: Charter, "Iowan Old Style", Georgia, serif;
+  font-size: 0.56rem; line-height: 1.5;
+}
+.thumb-deck { gap: 0.35rem; }
+.thumb-slide {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; gap: 0.15rem;
+  background: #fbfaf6; color: #26231f;
+  border-radius: 3px; padding: 0.4rem 0.5rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  font-family: var(--sans); font-size: 0.55rem; line-height: 1.4;
+  overflow: hidden;
+}
+.thumb-slide.is-title {
+  flex: 0 0 38%;
+  align-items: center; justify-content: center; text-align: center;
+  font-weight: 600; font-size: 0.66rem;
+}
+.thumb-h { font-weight: 600; font-size: 0.62rem; }
+.thumb-h.h1 { font-size: 0.72rem; }
+.thumb-h.h3 { font-size: 0.56rem; }
+.thumb-para { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.thumb-line { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* The thread's archive card carries the same miniature, shorter: it is a
+   receipt for the answer, not a place to read it. */
+.make-output-card .thumb {
+  height: 7rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 60%, #000);
+}
+.make-output-card .thumb-page,
+.make-output-card .thumb-slide { box-shadow: none; }

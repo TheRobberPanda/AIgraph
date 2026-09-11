@@ -118,9 +118,24 @@ pub struct Settings {
     pub map_style: MapStyle,
     /// How hard the map's nodes push each other apart.
     pub map_spread: MapSpread,
+    /// Whether the map's nodes can be dragged out of place.
+    ///
+    /// Off by default — pushing nodes around is half of what a live map is
+    /// for. But the arrangements (a forest, a galaxy) are compositions, and a
+    /// tree dragged sideways stays sideways; anyone who wants the picture kept
+    /// exactly as drawn asks for it to be locked.
+    pub map_lock_nodes: bool,
     /// Advanced layout order: conversations on the left and Make on the
     /// right, instead of the default Make left / conversations right.
     pub advanced_swap: bool,
+    /// The folder the app was in when it last closed.
+    ///
+    /// Everything on screen — the ideas, the map, the Make tab, the digest —
+    /// is scoped to one folder, so opening somewhere else than the last place
+    /// looked like the work had vanished. Remembered rather than reset to Root,
+    /// which is where a restart used to land, silently.
+    #[serde(default = "default_current_folder")]
+    pub current_folder: i64,
     /// The accent colour, as a hex string. Empty means the theme's own.
     pub accent: String,
     /// The one-click instructions on the Make tab.
@@ -172,6 +187,32 @@ pub enum OutputFormat {
     Pptx,
 }
 
+impl OutputFormat {
+    /// The format a stored or model-suggested name names. "odt" and "word"
+    /// land on the Writer document deliberately: LibreOffice Writer and Word
+    /// both open what `ooxml::docx` writes, and the model may ask for either
+    /// by the name people call it.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "markdown" | "md" => Some(Self::Markdown),
+            "pdf" => Some(Self::Pdf),
+            "docx" | "word" | "writer" | "odt" => Some(Self::Docx),
+            "pptx" | "slides" | "presentation" => Some(Self::Pptx),
+            _ => None,
+        }
+    }
+
+    /// The extension its file carries.
+    pub fn ext(self) -> &'static str {
+        match self {
+            Self::Markdown => "md",
+            Self::Pdf => "pdf",
+            Self::Docx => "docx",
+            Self::Pptx => "pptx",
+        }
+    }
+}
+
 /// What the buttons say out of the box.
 ///
 /// One, deliberately. Six shipped presets are six guesses at what someone
@@ -191,6 +232,12 @@ pub fn default_presets() -> Vec<Preset> {
          Quote directly where the original wording is better than a paraphrase.",
         OutputFormat::Pdf,
     )]
+}
+
+/// Where a fresh settings file, or one from before folders were remembered,
+/// opens: Root.
+fn default_current_folder() -> i64 {
+    crate::store::ROOT_FOLDER
 }
 
 /// How the map arranges itself.
@@ -488,7 +535,9 @@ impl Default for Settings {
             ask_why: true,
             map_style: MapStyle::default(),
             map_spread: MapSpread::default(),
+            map_lock_nodes: false,
             advanced_swap: false,
+            current_folder: crate::store::ROOT_FOLDER,
             accent: String::new(),
             presets: default_presets(),
         }

@@ -1,7 +1,8 @@
 //! Session extraction: transcript in, verified ideas out.
 
-pub mod closing;
 pub mod answer;
+pub mod clash;
+pub mod closing;
 pub mod deepen;
 pub mod paragraphs;
 pub mod prompt;

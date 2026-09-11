@@ -129,7 +129,8 @@ mod tests {
 
     #[test]
     fn the_prompt_carries_all_three_parts() {
-        let p = build("Latency is the problem", "No measurement is offered", "We measured it in March");
+        let p =
+            build("Latency is the problem", "No measurement is offered", "We measured it in March");
         assert!(p.contains("Latency is the problem"));
         assert!(p.contains("No measurement is offered"));
         assert!(p.contains("We measured it in March"));

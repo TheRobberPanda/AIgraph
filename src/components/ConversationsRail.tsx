@@ -6,7 +6,7 @@ import {
   setSessionArchived,
   type SessionSummary,
 } from "../lib/chat";
-import { onIdeasChanged } from "../lib/ideas";
+import { onIdeasChanged, reextractSession } from "../lib/ideas";
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 import { ConversationFile } from "./Deep";
@@ -158,6 +158,14 @@ export default function ConversationsRail({
               onSelect: () => onContinue(menu.session.id),
             },
             {
+              // Read it again from scratch: useful when the extraction prompt
+              // has changed, or a read went badly. Existing ideas are archived
+              // rather than lost, and the ones this still supports come back.
+              label: "Read it again",
+              onSelect: () =>
+                void reextractSession(menu.session.id).then(refresh).catch((e) => setError(String(e))),
+            },
+            {
               label: menu.session.archived ? "Unarchive" : "Archive",
               onSelect: () =>
                 setSessionArchived(menu.session.id, !menu.session.archived)
@@ -175,7 +183,7 @@ export default function ConversationsRail({
 
       {deleting !== null && (
         <Confirm
-          title="Delete this conversation?"
+          title="Move this conversation to the trash?"
           danger
           onConfirm={() => {
             const id = deleting;

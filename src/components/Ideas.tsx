@@ -12,9 +12,10 @@ import MoveTo from "./MoveTo";
 import Sheet from "./Sheet";
 import { IconArchive, IconPlus, IconRewind, IconTrash } from "./Icons";
 import ImportChat from "./ImportChat";
+import Trash from "./Trash";
 import { ConversationFile, IdeaFile } from "./Deep";
 import { categoryColor } from "../lib/categories";
-import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
+import { ROOT_FOLDER } from "../lib/folders";
 import { longDate } from "../lib/format";
 import {
   extractionProgress,
@@ -93,7 +94,6 @@ export default function Ideas({
   const [deleting, setDeleting] = useState<number | null>(null);
   const [moving, setMoving] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
-  const [folders, setFolders] = useState<Folder[]>([]);
   /** Subjects being shown. Empty means all of them — the same toggle the map's
    *  legend uses, so a subject is picked out the same way in both places. */
   const [subjects, setSubjects] = useState<Set<string>>(new Set());
@@ -101,6 +101,7 @@ export default function Ideas({
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [binOpen, setBinOpen] = useState(false);
   // Re-renders once a second purely so the elapsed counter advances between
   // phase events — which can be minutes apart on a local model.
   const [, tick] = useState(0);
@@ -108,7 +109,6 @@ export default function Ideas({
   const refresh = useCallback(() => {
     void listIdeas(folder).then(setIdeas).catch(() => {});
     void listSessions(folder).then(setSessions).catch(() => {});
-    void listFolders().then(setFolders).catch(() => {});
   }, [folder]);
 
   /**
@@ -138,11 +138,22 @@ export default function Ideas({
   const groups = useMemo(() => {
     const bySession = new Map<number, Idea[]>();
     const orphaned: Idea[] = [];
+    // Which conversations are archived, so the grouping can tell the
+    // conversation an idea was first said in from the one still keeping it.
+    const archived = new Set(sessions.filter((s) => s.archived).map((s) => s.id));
+    const earliest = (evidence: Evidence[]) =>
+      evidence.reduce<Evidence | null>((min, e) => (min === null || e.id < min.id ? e : min), null);
     for (const idea of shown) {
-      const first = idea.evidence.reduce<Evidence | null>(
-        (min, e) => (min === null || e.id < min.id ? e : min),
-        null,
-      );
+      // In the archive view an idea hangs under the conversation that first
+      // said it, archived or not. In the current view one whose first saying
+      // was archived hangs under the first conversation still keeping it —
+      // the archive is out of the way, and an idea alive through a current
+      // conversation is that conversation's to show.
+      const first =
+        showArchived
+          ? earliest(idea.evidence)
+          : (earliest(idea.evidence.filter((e) => !archived.has(e.session_id))) ??
+            earliest(idea.evidence));
       if (first === null) {
         orphaned.push(idea);
         continue;
@@ -163,13 +174,23 @@ export default function Ideas({
     );
     const known = new Set(visible.map((s) => s.id));
     const rows = visible
-      .filter((s) => bySession.has(s.id))
-      .map((s) => ({ session: s, ideas: bySession.get(s.id)! }));
+      // The current view hangs ideas under the conversations they came from,
+      // so a conversation with nothing filed under it is not on it. The
+      // archive view is the conversations themselves — out of the way, not
+      // gone — so every archived one is listed, with what the list still
+      // carries under the ones that carry any.
+      .filter((s) => showArchived || bySession.has(s.id))
+      .map((s) => ({ session: s, ideas: bySession.get(s.id) ?? [] }));
 
     // A session not yet in the list (still extracting) still gets a home,
-    // rather than losing its ideas until the list catches up.
-    for (const [id, list] of bySession) {
-      if (!known.has(id)) {
+    // rather than losing its ideas until the list catches up. The current
+    // view only, and never for an archived conversation: the fallback row is
+    // a current conversation by definition, and without that guard the
+    // archive filled with the current ones — deleting from the archive then
+    // deleted conversations that were never archived.
+    if (!showArchived) {
+      for (const [id, list] of bySession) {
+        if (known.has(id) || archived.has(id)) continue;
         rows.push({
           session: {
             id,
@@ -190,28 +211,11 @@ export default function Ideas({
         });
       }
     }
-    // Then gather those conversations under the folder each is filed in, so
-    // one line of thinking can be kept apart from another.
-    const byFolder = new Map<number, typeof rows>();
-    for (const row of rows) {
-      const fid = row.session.folder_id ?? ROOT_FOLDER;
-      const list = byFolder.get(fid) ?? [];
-      list.push(row);
-      byFolder.set(fid, list);
-    }
-    const foldered = [...byFolder.entries()]
-      .map(([id, list]) => ({
-        id,
-        name: folders.find((f) => f.id === id)?.name ?? "Root",
-        rows: list,
-      }))
-      // Root first, then alphabetically — the same order the picker uses.
-      .sort((a, b) =>
-        a.id === ROOT_FOLDER ? -1 : b.id === ROOT_FOLDER ? 1 : a.name.localeCompare(b.name),
-      );
-
-    return { foldered, orphaned };
-  }, [shown, sessions, folders, query, showArchived]);
+    // One folder is shown at a time, so the list is flat: no folder headings,
+    // and no group for a conversation filed elsewhere. This tab is the folder
+    // it is scoped to, and nothing outside it belongs on the page.
+    return { rows, orphaned };
+  }, [shown, sessions, query, showArchived]);
 
   function toggle(sessionId: number) {
     setOpened((prev) => {
@@ -325,9 +329,18 @@ export default function Ideas({
         >
           <IconArchive />
         </button>
+        <button
+          className={binOpen ? "icon-btn on" : "icon-btn"}
+          data-tip="The trash"
+          onClick={() => setBinOpen((b) => !b)}
+        >
+          <IconTrash />
+        </button>
       </div>
 
       {adding && <ImportChat onDone={() => { setAdding(false); refresh(); }} />}
+
+      {binOpen && <Trash onClose={() => setBinOpen(false)} onChanged={refresh} />}
 
       {tags.length > 1 && (
         <div className="tag-filter">
@@ -357,25 +370,15 @@ export default function Ideas({
         </div>
       )}
 
-      {ideas.length === 0 ? (
+      {ideas.length === 0 && !showArchived ? (
         <p className="empty">No ideas yet.</p>
       ) : shown.length === 0 ? (
         <p className="empty">Nothing filed under that subject.</p>
+      ) : groups.rows.length === 0 && groups.orphaned.length === 0 ? (
+        <p className="empty">{showArchived ? "Nothing archived here." : "Nothing here yet."}</p>
       ) : (
         <div className="tree">
-          {groups.foldered.map((folder) => (
-          <div key={folder.id} className="folder-group">
-            {/* Only worth a heading once there is more than one folder — a
-                lone "ROOT" label above everything is noise. */}
-            {groups.foldered.length > 1 && (
-              <div className="folder-head">
-                <span>{folder.name}</span>
-                <span className="row-meta">
-                  {folder.rows.length} {folder.rows.length === 1 ? "conversation" : "conversations"}
-                </span>
-              </div>
-            )}
-          {folder.rows.map(({ session, ideas: sessionIdeas }) => {
+          {groups.rows.map(({ session, ideas: sessionIdeas }) => {
             const isCollapsed = !opened.has(session.id);
             const label = session.title || session.opening || `Conversation ${session.id}`;
             return (
@@ -511,8 +514,6 @@ export default function Ideas({
               </div>
             );
           })}
-          </div>
-          ))}
 
           {groups.orphaned.length > 0 && (
             <div className="tree-group">
@@ -582,7 +583,7 @@ export default function Ideas({
 
       {deleting !== null && (
         <Confirm
-          title="Delete this conversation and the ideas found only in it?"
+          title="Move this conversation and its ideas to the trash?"
           danger
           onConfirm={() => {
             const id = deleting;

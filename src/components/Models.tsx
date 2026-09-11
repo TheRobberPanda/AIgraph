@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import RuntimePanel from "./Runtime";
 import { modelName } from "../lib/format";
-import { IconDownload, IconPlay, IconStop } from "./Icons";
+import { IconCheck, IconDownload, IconPlay, IconStop } from "./Icons";
 import { startup, type Detected, type ModelInfo } from "../lib/chat";
 import {
   activeModels,
@@ -24,6 +24,10 @@ import {
   type EmbeddedStatus,
   type RemoteModel,
   type RemoteFile,
+  testModel,
+  openrouterCatalog,
+  type ModelTest,
+  type OpenRouterModel,
 } from "../lib/settings";
 
 /** Where a model comes from. One tab each, because the setup is different. */
@@ -76,6 +80,18 @@ export default function Models() {
   const [source, setSource] = useState<Source>("local");
   /** Narrowing the cloud lists — OpenRouter alone exposes hundreds. */
   const [cloudQuery, setCloudQuery] = useState("");
+  /** The connection test: which model is being asked, and what it said. */
+  const [testing, setTesting] = useState<string | null>(null);
+  const [tested, setTested] = useState<Record<string, ModelTest>>({});
+  /** OpenRouter's catalogue with prices and windows, when it answers. */
+  const [catalog, setCatalog] = useState<OpenRouterModel[] | null>(null);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  /** Narrowing the OpenRouter catalogue: provider, sort, price, window. */
+  const [routerProvider, setRouterProvider] = useState("all");
+  const [routerSort, setRouterSort] = useState<"newest" | "price" | "context" | "name">("newest");
+  const [routerFree, setRouterFree] = useState(false);
+  const [routerMaxPrice, setRouterMaxPrice] = useState<number | null>(null);
+  const [routerMinContext, setRouterMinContext] = useState<number | null>(null);
   /** Which provider the pasted key belongs to, from its prefix. */
   const detectedProvider = (() => {
     const k = keyInput.trim();
@@ -283,6 +299,140 @@ export default function Models() {
     }
   }
 
+  /** Ask the chosen model, through its own provider, for one word. */
+  async function runTest(s: Detected, model: string) {
+    if (!model) return;
+    const key = `${s.kind}/${model}`;
+    setTesting(key);
+    setError(null);
+    try {
+      const t = await testModel(s.kind, s.host, model);
+      setTested((prev) => ({ ...prev, [key]: t }));
+    } catch (e) {
+      setTested((prev) => ({
+        ...prev,
+        [key]: { ok: false, ms: 0, reply: "", error: String(e) },
+      }));
+    } finally {
+      setTesting(null);
+    }
+  }
+
+  /** The catalogue is fetched once the OpenRouter picker is actually on screen. */
+  const wantsCatalog = source === "cloud" && remote.some((s) => s.kind === "openrouter");
+  useEffect(() => {
+    if (!wantsCatalog || catalog !== null || catalogBusy) return;
+    setCatalogBusy(true);
+    openrouterCatalog()
+      .then(setCatalog)
+      .catch(() => setCatalog([]))
+      .finally(() => setCatalogBusy(false));
+  }, [wantsCatalog, catalog, catalogBusy]);
+
+  /** The one control that answers "does this actually work". */
+  const testRow = (s: Detected, model: string | undefined) => {
+    if (!model) return null;
+    const key = `${s.kind}/${model}`;
+    const t = tested[key];
+    return (
+      <div className="model-test">
+        <button
+          className="btn subtle"
+          disabled={testing !== null}
+          data-tip="One tiny request to this model, through this provider"
+          onClick={() => void runTest(s, model)}
+        >
+          {testing === key ? <span className="spinner" aria-hidden="true" /> : "Test it"}
+        </button>
+        {t && (
+          <span className={t.ok ? "model-test-out ok" : "model-test-out failed"}>
+            {t.ok ? (
+              <>
+                <IconCheck /> Answers — {(t.ms / 1000).toFixed(1)}s
+                {t.reply && t.reply.toLowerCase() !== "ok" && (
+                  <span className="muted"> · said “{t.reply}”</span>
+                )}
+              </>
+            ) : (
+              <>
+                Will not answer · {t.error}
+              </>
+            )}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  /**
+   * The OpenRouter list, as the catalogue says it, when it can be read.
+   *
+   * Prices and windows come with the catalogue; the ids-only listing the
+   * provider probe carries is the fallback, so a failed fetch costs the
+   * filters but not the picker.
+   */
+  const routerModels = useMemo(() => {
+    const s = remote.find((x) => x.kind === "openrouter");
+    if (!s) return null;
+    const chosen = active?.chat;
+    const ids = [...new Map(chatModels(s).map((m) => [m.id, m])).values()].map((m) => m.id);
+    const all: (OpenRouterModel | { id: string; name?: string })[] =
+      catalog && catalog.length > 0
+        ? catalog
+        : ids.map((id) => ({ id }));
+    const q = cloudQuery.trim().toLowerCase();
+    let rows = all.filter(
+      (m) => !q || m.id.toLowerCase().includes(q) || m.name?.toLowerCase().includes(q),
+    );
+    if (routerProvider !== "all") {
+      rows = rows.filter((m) => m.id.split("/")[0] === routerProvider);
+    }
+    if (routerFree) {
+      rows = rows.filter(
+        (m) => "prompt_price" in m && m.prompt_price === 0 && m.completion_price === 0,
+      );
+    }
+    if (routerMaxPrice !== null) {
+      rows = rows.filter((m) => "prompt_price" in m && m.prompt_price <= routerMaxPrice);
+    }
+    if (routerMinContext !== null) {
+      rows = rows.filter((m) => "context" in m && m.context >= routerMinContext!);
+    }
+    const bySort = (
+      a: (OpenRouterModel | { id: string; name?: string }),
+      b: (OpenRouterModel | { id: string; name?: string }),
+    ): number => {
+      switch (routerSort) {
+        case "price": {
+          const pa = "prompt_price" in a ? a.prompt_price : Number.MAX_VALUE;
+          const pb = "prompt_price" in b ? b.prompt_price : Number.MAX_VALUE;
+          return pa - pb || a.id.localeCompare(b.id);
+        }
+        case "context": {
+          const ca = "context" in a ? a.context : 0;
+          const cb = "context" in b ? b.context : 0;
+          return cb - ca || a.id.localeCompare(b.id);
+        }
+        case "name":
+          return a.id.localeCompare(b.id);
+        default:
+          return ("created" in b ? b.created : 0) - ("created" in a ? a.created : 0) || a.id.localeCompare(b.id);
+      }
+    };
+    rows = [...rows].sort(bySort);
+    return { rows, chosen, all: all.length };
+  }, [remote, catalog, active, cloudQuery, routerProvider, routerSort, routerFree, routerMaxPrice, routerMinContext]);
+
+  const routerPrefixes = useMemo(() => {
+    if (!catalog) return [];
+    return [...new Set(catalog.map((m) => m.id.split("/")[0]))].sort((a, b) =>
+      a.localeCompare(b),
+    );
+  }, [catalog]);
+
+  const priceLabel = (n: number): string =>
+    n === 0 ? "free" : n < 1 ? `$${n.toFixed(2)}/M` : `$${n.toFixed(n < 10 ? 2 : 0)}/M`;
+
   return (
     <div className="pane-inner">
       {error && <p className="error">{error}</p>}
@@ -301,87 +451,210 @@ export default function Models() {
 
       {source === "cloud" && (
         <>
-          <section className="model-role">
-            <h2 className="section">API key</h2>
-            <p className="blurb">
-              Transcripts leave this machine.
-            </p>
-            {keys?.anthropic || keys?.openrouter || keys?.claude_cli ? (
-              <div className="row">
-                {keys?.anthropic && (
-                  <>
-                    <span className="tag ready">Anthropic key saved</span>
-                    <button className="btn" onClick={() => clearAnthropicKey().then(refresh)}>
-                      Remove
-                    </button>
-                  </>
-                )}
-                {keys?.openrouter && (
-                  <>
-                    <span className="tag ready">OpenRouter key saved</span>
-                    <button className="btn" onClick={() => clearOpenRouterKey().then(refresh)}>
-                      Remove
-                    </button>
-                  </>
-                )}
-                {keys?.claude_cli && <span className="tag ready">claude CLI found</span>}
-              </div>
-            ) : null}
-
-            {!(keys?.anthropic && keys?.openrouter) && (
-              <div className="row">
-                <input
-                  type="password"
-                  className="field"
-                  placeholder="Paste an API key — sk-ant-… or sk-or-…"
-                  value={keyInput}
-                  onChange={(e) => setKeyInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && void saveDetectedKey()}
-                />
-                <button
-                  className="btn"
-                  disabled={keyBusy || !keyInput.trim()}
-                  onClick={() => void saveDetectedKey()}
-                >
-                  {keyBusy
-                    ? "Checking…"
-                    : detectedProvider
-                      ? `Save — ${detectedProvider.label}`
-                      : "Save"}
-                </button>
-              </div>
-            )}
+          <section className="model-role cloud-keys">
+            <p className="blurb">Transcripts leave this machine.</p>
+            <div className="row key-row">
+              <input
+                type="password"
+                className="field"
+                placeholder="Paste an API key — sk-ant-… or sk-or-…"
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void saveDetectedKey()}
+              />
+              <button
+                className="btn"
+                disabled={keyBusy || !keyInput.trim()}
+                onClick={() => void saveDetectedKey()}
+              >
+                {keyBusy
+                  ? "Checking…"
+                  : detectedProvider
+                    ? `Save — ${detectedProvider.label}`
+                    : "Save"}
+              </button>
+            </div>
+            <div className="row key-status">
+              {keys?.anthropic && (
+                <>
+                  <span className="tag ready">Anthropic key saved</span>
+                  <button className="btn subtle" onClick={() => clearAnthropicKey().then(refresh)}>
+                    Remove
+                  </button>
+                </>
+              )}
+              {keys?.openrouter && (
+                <>
+                  <span className="tag ready">OpenRouter key saved</span>
+                  <button className="btn subtle" onClick={() => clearOpenRouterKey().then(refresh)}>
+                    Remove
+                  </button>
+                </>
+              )}
+              {keys?.claude_cli && <span className="tag ready">claude CLI found</span>}
+            </div>
             {keyInput.trim() && !detectedProvider && (
               <p className="blurb warn">
                 Not a key this app recognises — it should start with{" "}
                 <code>sk-ant-</code> (Anthropic) or <code>sk-or-</code> (OpenRouter).
               </p>
             )}
-            {detectedProvider && (
-              <p className="blurb">{detectedProvider.blurb}</p>
-            )}
+            {detectedProvider && <p className="blurb">{detectedProvider.blurb}</p>}
           </section>
 
           {/* Whatever the saved keys can reach, as pickers. The lists arrive
               from startup() the same way the local ones do — a provider is
               only detected once it is usable, so an empty list here means the
               key is missing or was rejected. */}
-          {source === "cloud" && remote.length > 0 && (
+          {remote.length > 0 && (
             <>
               {remote.map((s) => {
-                  const chosen = active?.chat;
-                  // The API hands back duplicates; one row per model.
-                  const all = [
-                    ...new Map(chatModels(s).map((m) => [m.id, m])).values(),
-                  ].sort((a, b) => a.id.localeCompare(b.id));
-                  const q = cloudQuery.trim().toLowerCase();
-                  // Bounded, or OpenRouter's three hundred models would be one
-                  // unending wall. The filter is how the rest are reached.
-                  const models = (
-                    q ? all.filter((m) => m.id.toLowerCase().includes(q)) : all
-                  ).slice(0, 40);
+                const chosen = active?.chat;
+                // OpenRouter gets the catalogue treatment; the rest keep the
+                // plain listing, which is all their APIs offer.
+                if (s.kind === "openrouter" && routerModels) {
+                  const { rows } = routerModels;
+                  const shown = rows.slice(0, 60);
                   return (
-                    <section key={s.kind} className="model-role">
+                    <section key={s.kind} className="model-role cloud">
+                      <div className="cloud-head">
+                        <h3 className="section">
+                          {serverName(s.kind)}
+                          <span className="tag remote">leaves this machine</span>
+                        </h3>
+                        <p className="current">
+                          {chosen && chosen.kind === s.kind ? (
+                            <>Using <b>{chosen.model}</b></>
+                          ) : (
+                            "Nothing chosen yet"
+                          )}
+                        </p>
+                        {testRow(s, chosen?.kind === s.kind ? chosen.model : undefined)}
+                      </div>
+                      <div className="router-filters">
+                        <input
+                          className="field filter-input"
+                          placeholder="Filter models — claude, gpt, llama…"
+                          value={cloudQuery}
+                          onChange={(e) => setCloudQuery(e.target.value)}
+                        />
+                        <select
+                          className="field"
+                          value={routerProvider}
+                          onChange={(e) => setRouterProvider(e.target.value)}
+                          aria-label="Provider"
+                          data-tip="Which of OpenRouter's providers to list"
+                        >
+                          <option value="all">All providers</option>
+                          {routerPrefixes.map((p) => (
+                            <option key={p} value={p}>{p}</option>
+                          ))}
+                        </select>
+                        <select
+                          className="field"
+                          value={routerSort}
+                          onChange={(e) => setRouterSort(e.target.value as typeof routerSort)}
+                          aria-label="Sort"
+                        >
+                          <option value="newest">Newest first</option>
+                          <option value="price">Cheapest first</option>
+                          <option value="context">Biggest window</option>
+                          <option value="name">Name A–Z</option>
+                        </select>
+                        <button
+                          className={routerFree ? "btn on" : "btn"}
+                          data-tip="Only models that cost nothing per token"
+                          onClick={() => setRouterFree((v) => !v)}
+                        >
+                          Free
+                        </button>
+                        <select
+                          className="field"
+                          value={routerMaxPrice ?? ""}
+                          onChange={(e) =>
+                            setRouterMaxPrice(e.target.value === "" ? null : Number(e.target.value))
+                          }
+                          aria-label="Highest price"
+                          data-tip="Keep only models up to this price per million prompt tokens"
+                        >
+                          <option value="">Any price</option>
+                          <option value="0.25">≤ $0.25/M</option>
+                          <option value="1">≤ $1/M</option>
+                          <option value="3">≤ $3/M</option>
+                          <option value="10">≤ $10/M</option>
+                        </select>
+                        <select
+                          className="field"
+                          value={routerMinContext ?? ""}
+                          onChange={(e) =>
+                            setRouterMinContext(e.target.value === "" ? null : Number(e.target.value))
+                          }
+                          aria-label="Smallest window"
+                          data-tip="Keep only models that can hold this much"
+                        >
+                          <option value="">Any window</option>
+                          <option value="32768">≥ 32k</option>
+                          <option value="131072">≥ 128k</option>
+                          <option value="1000000">≥ 1M</option>
+                        </select>
+                      </div>
+                      <ul className="model-list compact">
+                        {shown.map((m) => {
+                          const id = m.id;
+                          const isChosen = chosen?.kind === s.kind && chosen?.model === id;
+                          return (
+                            <li key={id}>
+                              <button
+                                className={isChosen ? "model chosen" : "model"}
+                                disabled={busy !== null}
+                                onClick={() =>
+                                  void pick(s, { id, loaded: null, kind: "chat" })
+                                }
+                              >
+                                <span className="model-name">{m.id}</span>
+                                <span className="model-facts">
+                                  {"prompt_price" in m && (
+                                    <span
+                                      className="model-price"
+                                      data-tip={`$${m.prompt_price.toFixed(2)} per million in · $${m.completion_price.toFixed(2)} per million out`}
+                                    >
+                                      {priceLabel(m.prompt_price)}
+                                    </span>
+                                  )}
+                                  {"context" in m && m.context > 0 && (
+                                    <span className="model-window">
+                                      {m.context >= 1_000_000
+                                        ? `${Math.round(m.context / 10000) / 100}M`
+                                        : `${Math.round(m.context / 1000)}k`}
+                                    </span>
+                                  )}
+                                  {isChosen && <span className="tag ready">in use</span>}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      {rows.length > shown.length && (
+                        <p className="blurb">
+                          {rows.length - shown.length} more — narrow it with the filters above.
+                        </p>
+                      )}
+                      {catalogBusy && <p className="blurb">Reading the catalogue…</p>}
+                    </section>
+                  );
+                }
+                // Any other cloud provider: the plain list.
+                const all = [
+                  ...new Map(chatModels(s).map((m) => [m.id, m])).values(),
+                ].sort((a, b) => a.id.localeCompare(b.id));
+                const q = cloudQuery.trim().toLowerCase();
+                const models = (
+                  q ? all.filter((m) => m.id.toLowerCase().includes(q)) : all
+                ).slice(0, 40);
+                return (
+                  <section key={s.kind} className="model-role cloud">
+                    <div className="cloud-head">
                       <h3 className="section">
                         {serverName(s.kind)}
                         <span className="tag remote">leaves this machine</span>
@@ -393,53 +666,43 @@ export default function Models() {
                           "Nothing chosen yet"
                         )}
                       </p>
-                      {/* Directly over the list it filters. Above the section
-                          heading it read as page furniture — with the
-                          provider name and the current choice in between, it
-                          was not obvious it had anything to do with the three
-                          hundred rows below it. */}
-                      <input
-                        className="field filter-input"
-                        placeholder="Filter models — claude, gpt, llama…"
-                        value={cloudQuery}
-                        onChange={(e) => setCloudQuery(e.target.value)}
-                      />
-                      <ul className="model-list">
-                        {models.map((m) => {
-                          const isChosen = chosen?.kind === s.kind && chosen?.model === m.id;
-                          return (
-                            <li key={m.id}>
-                              <button
-                                className={isChosen ? "model chosen" : "model"}
-                                disabled={busy !== null}
-                                onClick={() => void pick(s, m)}
-                              >
-                                {/* The whole id, not `modelName`. That strips
-                                    everything before a slash, which is right
-                                    for a local model's file path and wrong
-                                    here: on OpenRouter the prefix is the
-                                    vendor, so stripping it turns
-                                    "anthropic/claude-sonnet-4.5" into a name
-                                    that "google/claude-…" could also produce. */}
-                                <span className="model-name">{m.id}</span>
-                                {isChosen && <span className="tag ready">in use</span>}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                      {all.length > models.length && (
-                        <p className="blurb">
-                          {all.length - models.length} more — narrow the filter above.
-                        </p>
-                      )}
-                    </section>
-                  );
+                      {testRow(s, chosen?.kind === s.kind ? chosen?.model : undefined)}
+                    </div>
+                    <input
+                      className="field filter-input"
+                      placeholder="Filter models"
+                      value={cloudQuery}
+                      onChange={(e) => setCloudQuery(e.target.value)}
+                    />
+                    <ul className="model-list compact">
+                      {models.map((m) => {
+                        const isChosen = chosen?.kind === s.kind && chosen?.model === m.id;
+                        return (
+                          <li key={m.id}>
+                            <button
+                              className={isChosen ? "model chosen" : "model"}
+                              disabled={busy !== null}
+                              onClick={() => void pick(s, m)}
+                            >
+                              <span className="model-name">{m.id}</span>
+                              {isChosen && <span className="tag ready">in use</span>}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {all.length > models.length && (
+                      <p className="blurb">
+                        {all.length - models.length} more — narrow the filter above.
+                      </p>
+                    )}
+                  </section>
+                );
               })}
             </>
           )}
 
-          {source === "cloud" && remote.length === 0 && (
+          {remote.length === 0 && (
             <p className="empty">
               <strong>No cloud model connected.</strong>
               <span className="empty-hint">
@@ -480,6 +743,7 @@ export default function Models() {
       ) : (
         (() => {
           const chosen = active?.chat;
+          const picked = servers.find((x) => x.kind === chosen?.kind);
           return (
             <section className="model-role">
               <p className="current">
@@ -492,6 +756,12 @@ export default function Models() {
                   "Nothing chosen yet"
                 )}
               </p>
+              {/* The same check the cloud pickers get: a list is what the
+                  server *has*, and only an answer says the model works. */}
+              {testRow(
+                picked ?? ({ kind: chosen?.kind, host: "", models: [] } as Detected),
+                chosen?.model,
+              )}
 
               {usable.map((s) => (
                 <div key={s.kind} className="model-server">

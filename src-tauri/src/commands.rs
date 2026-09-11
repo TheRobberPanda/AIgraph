@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
@@ -46,6 +46,12 @@ pub struct AppState {
     /// here is ever archived or extracted, so letting it share the live
     /// session would put a request for a TikTok script into the map.
     compose: Mutex<Option<Composing>>,
+    /// One revision thread per output, for the AI chat on the outputs page.
+    ///
+    /// Kept apart from `compose` — that one reads a folder; these read one
+    /// document each. Seeded with the document itself on first use, so "make
+    /// the second section shorter" has something to be about.
+    output_threads: Mutex<std::collections::HashMap<i64, Vec<crate::llm::types::Message>>>,
     active: Mutex<Option<Active>>,
     session: Mutex<Option<ActiveSession>>,
     store: Mutex<Store>,
@@ -87,6 +93,10 @@ pub struct AppState {
     /// The archived conversation being added to, if one was picked back up.
     /// Set by `continue_session` and cleared when the session ends.
     continuing: Mutex<Option<i64>>,
+    /// OpenRouter's model listing, with the time it was fetched. The pickers
+    /// re-read it on every open, and 400+ models is a download worth skipping
+    /// when it is less than a few minutes old.
+    router_catalog: Mutex<Option<(std::time::Instant, Vec<OpenRouterModel>)>>,
 }
 
 impl AppState {
@@ -94,9 +104,11 @@ impl AppState {
         db_path: &std::path::Path,
         md_dir: PathBuf,
     ) -> Result<Self, crate::store::StoreError> {
+        let settings = Settings::load(db_path.parent().unwrap_or(std::path::Path::new(".")));
         Ok(Self {
             conversation: Mutex::new(None),
             compose: Mutex::new(None),
+            output_threads: Mutex::new(Default::default()),
             active: Mutex::new(None),
             session: Mutex::new(None),
             store: Mutex::new(Store::open(db_path)?),
@@ -105,18 +117,19 @@ impl AppState {
             dictation: Mutex::new(None),
             embedder: Mutex::new(None),
             extractor: Mutex::new(None),
-            settings: Mutex::new(Settings::load(
-                db_path.parent().unwrap_or(std::path::Path::new(".")),
-            )),
+            settings: Mutex::new(settings.clone()),
             data_dir: db_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf(),
             embed_cache_dir: md_dir
                 .parent()
                 .unwrap_or(std::path::Path::new("."))
                 .join("embeddings"),
-            current_folder: Mutex::new(crate::store::ROOT_FOLDER),
-            continuing: Mutex::new(None),
+            // Where the app was last time: the folder scopes everything on
+            // screen, and opening in Root instead read as the work vanishing.
+            current_folder: Mutex::new(settings.current_folder),
             queue_progress: Mutex::new((0, 0)),
             stop_drain: Mutex::new(false),
+            continuing: Mutex::new(None),
+            router_catalog: Mutex::new(None),
             embedded: Mutex::new(crate::llm::embedded::Embedded::new(
                 db_path.parent().unwrap_or(std::path::Path::new(".")),
             )),
@@ -214,7 +227,7 @@ pub struct Selected {
 
 /// Probe for local servers and, when the choice is unambiguous, make it.
 #[tauri::command]
-pub async fn startup(state: State<'_, AppState>) -> Result<Startup, String> {
+pub async fn startup(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Startup, String> {
     let servers = detect::probe_local().await;
 
     // A saved choice wins over anything detected. Without this, picking a model
@@ -226,7 +239,9 @@ pub async fn startup(state: State<'_, AppState>) -> Result<Startup, String> {
             .iter()
             .any(|s| s.kind == choice.kind && s.models.iter().any(|m| m.id == choice.model));
         if still_there {
-            set_active(&state, choice.kind, &choice.host, &choice.model).await;
+            if let Some(a) = set_active(&state, choice.kind, &choice.host, &choice.model).await {
+                announce_archived(&app, &a);
+            }
             if let Some(ex) = &saved.extraction {
                 *state.extractor.lock().await = Some(Extractor {
                     provider: detect::extractor(ex.kind, &ex.host, &ex.model),
@@ -253,7 +268,9 @@ pub async fn startup(state: State<'_, AppState>) -> Result<Startup, String> {
     let selected = match detect::obvious_choice(&servers) {
         Some((server, model)) => {
             let (kind, host, id) = (server.kind, server.host.clone(), model.id.clone());
-            set_active(&state, kind, &host, &id).await;
+            if let Some(a) = set_active(&state, kind, &host, &id).await {
+                announce_archived(&app, &a);
+            }
             // Written down, not just applied. Leaving the file naming a server
             // that is gone means every later save tries to go back to it.
             remember_choice(&state, kind, &host, &id).await;
@@ -267,12 +284,15 @@ pub async fn startup(state: State<'_, AppState>) -> Result<Startup, String> {
 
 #[tauri::command]
 pub async fn select_provider(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     kind: LocalKind,
     host: String,
     model: String,
 ) -> Result<Selected, String> {
-    set_active(&state, kind, &host, &model).await;
+    if let Some(a) = set_active(&state, kind, &host, &model).await {
+        announce_archived(&app, &a);
+    }
     remember_choice(&state, kind, &host, &model).await;
     Ok(Selected { kind, label: kind.label().to_string(), model })
 }
@@ -291,7 +311,46 @@ async fn remember_choice(state: &State<'_, AppState>, kind: LocalKind, host: &st
     let _ = settings.save(&state.data_dir);
 }
 
-async fn set_active(state: &State<'_, AppState>, kind: LocalKind, host: &str, model: &str) {
+/// Make a model the one answering.
+///
+/// Returns the conversation it filed on the way, if switching models ended
+/// one — the caller has to tell the window, which is still showing it.
+async fn set_active(
+    state: &State<'_, AppState>,
+    kind: LocalKind,
+    host: &str,
+    model: &str,
+) -> Option<Archived> {
+    // The same model again is not a switch. `startup` runs every time the
+    // model picker opens or closes, and this used to start a clean
+    // conversation each time — throwing away the one on screen without a
+    // word, while the window went on showing it. The next reply then landed
+    // in the empty one and was filed alone, with nothing the person said in
+    // it to take an idea from.
+    let same = state
+        .active
+        .lock()
+        .await
+        .as_ref()
+        .map(|a| a.kind == kind && a.model == model)
+        .unwrap_or(false);
+
+    // A real switch still starts clean, so a transcript is written by one
+    // model — but what was being said is filed first, never dropped.
+    let mut archived = None;
+    let mut keep = same;
+    if !same {
+        match end_session_inner(state, EndReason::Done).await {
+            Ok(a) => archived = a,
+            Err(e) => {
+                // Could not be written. Keeping it under the new model is
+                // better than losing it to a model change.
+                tracing::warn!(error = %e, "could not file the conversation before switching models");
+                keep = true;
+            }
+        }
+    }
+
     *state.active.lock().await = Some(Active {
         provider: detect::chat_provider(kind, host, model),
         kind,
@@ -308,10 +367,23 @@ async fn set_active(state: &State<'_, AppState>, kind: LocalKind, host: &str, mo
             model: model.to_string(),
         });
     }
-    // Switching models mid-conversation would mean the transcript was written by
-    // two different models. Start clean instead.
-    *state.conversation.lock().await = Some(Conversation::new(model));
-    *state.session.lock().await = None;
+    let kept = {
+        let mut convo = state.conversation.lock().await;
+        match convo.as_mut() {
+            Some(c) if keep => {
+                c.set_model(model);
+                true
+            }
+            _ => {
+                *convo = Some(Conversation::new(model));
+                false
+            }
+        }
+    };
+    if !kept {
+        *state.session.lock().await = None;
+    }
+    archived
 }
 
 /// How many idea titles the chat is handed. Past a few hundred this stops
@@ -405,7 +477,9 @@ pub async fn send_message(
         Ok(reply) => reply,
         Err(e) => {
             if let Some(convo) = state.conversation.lock().await.as_mut() {
-                convo.drop_last_user();
+                if convo.awaits_reply_to(&text) {
+                    convo.drop_last_user();
+                }
             }
             return Err(e.to_string());
         }
@@ -418,8 +492,19 @@ pub async fn send_message(
     // than noise: the model reads its own past answers, and starts offering
     // to open things nobody asked to see.
     let archived = crate::chat::strip_markers(&reply);
-    if let Some(convo) = state.conversation.lock().await.as_mut() {
-        convo.push_assistant(&archived);
+    {
+        let mut guard = state.conversation.lock().await;
+        match guard.as_mut() {
+            Some(convo) if convo.awaits_reply_to(&text) => convo.push_assistant(&archived),
+            // Replaced while this was being written — a model switch filed
+            // the old one. Added to the new conversation it would stand there
+            // as an answer to nothing.
+            _ => {
+                return Err("The conversation was filed while this reply was being written, \
+                            so the reply was not added to it."
+                    .into());
+            }
+        }
     }
     if let Some(s) = state.session.lock().await.as_mut() {
         s.touch();
@@ -589,21 +674,19 @@ pub async fn end_session(
 ) -> Result<Option<Archived>, String> {
     let out = end_session_inner(&state, reason).await?;
     if let Some(a) = &out {
-        let _ = app.emit("session:archived", a.clone());
-
-        // Extraction runs in the background: it can take minutes on a local
-        // model, and the user should be free to start thinking again immediately
-        // rather than watching a spinner. The queue makes it safe to detach —
-        // if this task never finishes, the session is still marked pending and
-        // gets picked up later.
-        let handle = app.clone();
-        tauri::async_runtime::spawn(async move {
-            use tauri::Manager;
-            let state = handle.state::<AppState>();
-            drain_pending(&handle, &state).await;
-        });
+        announce_archived(&app, a);
     }
     Ok(out)
+}
+
+/// Tell the window a conversation was filed.
+///
+/// Deliberately does **not** start reading it back. Digesting costs minutes of
+/// a local model's time and produces ideas from the words; it begins only when
+/// the person confirms it, from the waiting-to-be-read page. `extract_now` is
+/// the one place that starts a drain.
+fn announce_archived(app: &tauri::AppHandle, a: &Archived) {
+    let _ = app.emit("session:archived", a.clone());
 }
 
 pub async fn is_session_idle(state: &AppState) -> bool {
@@ -960,6 +1043,28 @@ pub async fn pending_sessions(
     Ok(ids.iter().filter_map(|id| all.iter().find(|s| s.id == *id).cloned()).collect())
 }
 
+/// Conversations set aside before they were read.
+///
+/// Archiving is how a conversation is kept but not digested — the alternative
+/// to deleting something whose ideas have not been made yet. They are shown
+/// under Archived on the waiting-to-be-read page, and putting one back returns
+/// it to the queue.
+#[tauri::command]
+pub async fn archived_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::store::SessionSummary>, String> {
+    let all = state.store.lock().await.list_sessions(500, None).map_err(|e| e.to_string())?;
+    Ok(all.into_iter().filter(|s| s.archived && s.extract_state != "done").collect())
+}
+
+/// Ideas a re-read left with no evidence, kept rather than deleted.
+#[tauri::command]
+pub async fn archived_ideas(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::store::ArchivedIdea>, String> {
+    state.store.lock().await.archived_ideas().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn extraction_progress(state: State<'_, AppState>) -> Result<ExtractionProgress, String> {
     let mut p = state.progress.lock().await.clone();
@@ -1005,6 +1110,11 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
             Ok(n) => {
                 state.retry_after.lock().await.remove(&id);
                 tracing::info!(session = id, ideas = n, "extraction complete");
+                // Said per conversation, not once when the whole queue is done.
+                // A digest that has been going for an hour showed nothing until
+                // its last one landed — which from the Ideas tab looks exactly
+                // like the ideas never arriving at all.
+                let _ = app.emit("ideas:changed", ());
             }
             Err(e) => {
                 let mut backoff = state.retry_after.lock().await;
@@ -1038,7 +1148,19 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
     }
     set_queue(state, 0, 0).await;
     *state.stop_drain.lock().await = false;
-    state.progress.lock().await.stopping = false;
+    // Emitted once more after the flags clear. `finish` had already said the
+    // run was over — but with `stopping` still true, because the drain had not
+    // wound down yet — and nothing else ever said it wasn't. The button reads
+    // `disabled` off that snapshot, so it stayed dead until the app restarted,
+    // and a queue with anything left in it sat there unread.
+    {
+        let mut p = state.progress.lock().await;
+        p.stopping = false;
+        p.pending = state.store.lock().await.diagnostics().map(|d| d.sessions_pending).unwrap_or(0);
+        let snapshot = p.clone();
+        drop(p);
+        let _ = app.emit("extraction:progress", snapshot);
+    }
     let _ = app.emit("ideas:changed", ());
     release_model_if_asked(state).await;
 }
@@ -1051,6 +1173,18 @@ pub async fn stop_digest(app: tauri::AppHandle, state: State<'_, AppState>) -> R
     // for the life of the app — and the button, which is disabled while a stop
     // is pending, never came back.
     if state.progress.lock().await.running.is_none() {
+        // Nothing is running, but a stop asked for earlier may never have been
+        // answered — a drain that died between setting the flag and its own
+        // wind-down. Clearing it here is what lets the button come back
+        // without needing a restart to do it.
+        if state.progress.lock().await.stopping {
+            *state.stop_drain.lock().await = false;
+            let mut p = state.progress.lock().await;
+            p.stopping = false;
+            let snapshot = p.clone();
+            drop(p);
+            let _ = app.emit("extraction:progress", snapshot);
+        }
         return Ok(());
     }
     *state.stop_drain.lock().await = true;
@@ -1356,10 +1490,66 @@ pub async fn resolve_relation(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     relation_id: i64,
+    note: Option<String>,
 ) -> Result<(), String> {
-    state.store.lock().await.resolve_relation(relation_id).map_err(|e| e.to_string())?;
+    let note = note.as_deref().map(str::trim).filter(|n| !n.is_empty());
+    state.store.lock().await.resolve_relation(relation_id, note).map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
     Ok(())
+}
+
+/// Take a settled contradiction back.
+///
+/// Settling was a judgement, and this undoes the judgement. The link is drawn
+/// again on the map and comes back to the idea's file, where the same three
+/// answers are offered once more.
+#[tauri::command]
+pub async fn unresolve_relation(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    relation_id: i64,
+) -> Result<(), String> {
+    state.store.lock().await.unresolve_relation(relation_id).map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+/// Why two ideas cannot both stand, for the settling view.
+///
+/// The reason recorded when the link was drawn, where there is one. Links
+/// drawn before reasons were kept have none, and settling two claims without
+/// being told what is wrong between them means finding the conflict yourself
+/// — so the extraction model is asked, once, and its answer kept on the link.
+#[tauri::command]
+pub async fn explain_contradiction(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    relation_id: i64,
+) -> Result<String, String> {
+    let (a, b, reasoning) =
+        state.store.lock().await.contradiction_pair(relation_id).map_err(|e| e.to_string())?;
+    if let Some(why) = reasoning.filter(|r| !r.trim().is_empty()) {
+        return Ok(why);
+    }
+
+    let model = {
+        let guard = state.extractor.lock().await;
+        guard.as_ref().ok_or("no extraction model selected")?.provider.clone()
+    };
+    let why =
+        crate::extract::clash::run(model.as_ref(), &a, &b).await.map_err(|e| e.to_string())?;
+    if why.is_empty() {
+        return Err("the model could not say what the conflict is".into());
+    }
+
+    state
+        .store
+        .lock()
+        .await
+        .set_relation_reasoning(relation_id, &why)
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(why)
 }
 
 /// Reword an idea by hand.
@@ -1440,21 +1630,23 @@ pub async fn idea_view(state: State<'_, AppState>, idea_id: i64) -> Result<IdeaV
 #[derive(Serialize, Clone)]
 pub struct Cleared {
     pub evidence_removed: usize,
-    pub ideas_removed: usize,
+    /// Ideas left without evidence are archived, never deleted.
+    pub ideas_archived: usize,
 }
 
-/// Throw away a session's ideas and extract it again.
+/// Undo a session's extraction so it can be run again.
 ///
 /// The prompt changes as this project develops, and old sessions otherwise keep
 /// whatever the prompt of the day produced. This is also the recovery path for a
-/// run that went badly.
+/// run that went badly. Nothing is deleted: what the old read no longer
+/// supports is archived.
 #[tauri::command]
 pub async fn reextract_session(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: i64,
 ) -> Result<Cleared, String> {
-    let (evidence_removed, ideas_removed) =
+    let (evidence_removed, ideas_archived) =
         state.store.lock().await.clear_extraction(session_id).map_err(|e| e.to_string())?;
 
     let _ = app.emit("ideas:changed", ());
@@ -1465,7 +1657,7 @@ pub async fn reextract_session(
         drain_pending(&handle, &state).await;
     });
 
-    Ok(Cleared { evidence_removed, ideas_removed })
+    Ok(Cleared { evidence_removed, ideas_archived })
 }
 
 #[tauri::command]
@@ -1474,8 +1666,49 @@ pub async fn delete_session(
     state: State<'_, AppState>,
     session_id: i64,
 ) -> Result<(), String> {
-    state.store.lock().await.delete_session(session_id).map_err(|e| e.to_string())?;
+    state.store.lock().await.trash_session(session_id).map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+// ---------------------------------------------------------------- the bin
+
+/// What is sitting in the trash, newest first.
+#[tauri::command]
+pub async fn list_trash(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::store::TrashItem>, String> {
+    state.store.lock().await.trash_list().map_err(|e| e.to_string())
+}
+
+/// Put a binned thing back where it was.
+#[tauri::command]
+pub async fn restore_trash_item(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    trash_id: i64,
+) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .await
+        .trash_restore(trash_id, Some(&state.md_dir))
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+/// Drop a bin entry and its snapshot. The one delete that cannot be undone.
+#[tauri::command]
+pub async fn purge_trash_item(state: State<'_, AppState>, trash_id: i64) -> Result<(), String> {
+    state.store.lock().await.trash_purge(trash_id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Empty the bin.
+#[tauri::command]
+pub async fn empty_trash(state: State<'_, AppState>) -> Result<(), String> {
+    state.store.lock().await.trash_empty().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1959,6 +2192,26 @@ pub async fn compose_clear(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// The Make tab's answer, with whatever files its export command wrote.
+#[derive(Serialize)]
+pub struct ComposeReply {
+    pub reply: String,
+    /// Files the model asked to be written out, where each one went.
+    pub exports: Vec<ExportedFile>,
+    /// Why an export the model asked for did not land, if it did not. The
+    /// document still comes back — losing a finished document to a failed
+    /// file write would be the wrong trade.
+    pub export_error: Option<String>,
+}
+
+/// A revision, likewise, with the files it exported.
+#[derive(Serialize)]
+pub struct ReviseResult {
+    pub output: crate::store::MakeOutputRow,
+    pub exports: Vec<ExportedFile>,
+    pub export_error: Option<String>,
+}
+
 /// Ask for something, with the folder in front of the model.
 ///
 /// Streams on `compose:token`, separately from `chat:token`, so the two
@@ -1968,7 +2221,7 @@ pub async fn compose_send(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     instruction: String,
-) -> Result<String, String> {
+) -> Result<ComposeReply, String> {
     let instruction = instruction.trim().to_string();
     if instruction.is_empty() {
         return Err("nothing asked".into());
@@ -2015,13 +2268,32 @@ pub async fn compose_send(
 
     match streamed {
         Ok(reply) => {
+            // The Make tab's one command. The model may end the reply with
+            // `::export pdf a-book`; the line comes off, the document stays,
+            // and the file it names is written here with the app's own
+            // exporters — nothing the model says is ever executed.
+            let (document, directive) = crate::compose::split_export(&reply);
+            let mut exports = Vec::new();
+            let mut export_error = None;
+            if let Some(d) = directive {
+                match export_composed_file(&state, document, &d.format, &d.name).await {
+                    Ok(f) => exports.push(f),
+                    // A file that will not write is not a lost answer. It is
+                    // reported; the document goes on to be filed as an output,
+                    // and can be written out again from there.
+                    Err(e) => {
+                        tracing::warn!(error = %e, "export directive failed");
+                        export_error = Some(e);
+                    }
+                }
+            }
             if let Some(c) = state.compose.lock().await.as_mut() {
                 c.messages.push(crate::llm::types::Message {
                     role: crate::llm::types::Role::Assistant,
                     content: reply.clone(),
                 });
             }
-            Ok(reply)
+            Ok(ComposeReply { reply: document.to_string(), exports, export_error })
         }
         Err(e) => {
             // The question goes back with it, so asking again does not stack a
@@ -2060,6 +2332,216 @@ pub async fn save_document(
     Ok(path)
 }
 
+// ------------------------------------------------- keeping what was made
+
+/// Keep what the model just made, as something with a page of its own.
+///
+/// The title and the summary are cut from the text rather than asked for: a
+/// second model call to describe what the first one wrote doubles the cost
+/// and can disagree with its own document. The first heading and the first
+/// paragraph are the honest answer.
+#[tauri::command]
+pub async fn compose_save_output(
+    state: State<'_, AppState>,
+    content: String,
+    format: String,
+    prompt: String,
+    folder: Option<i64>,
+    sessions: Vec<i64>,
+) -> Result<crate::store::MakeOutputRow, String> {
+    let folder_id = match folder {
+        Some(id) => id,
+        None => *state.current_folder.lock().await,
+    };
+    let (title, summary) = crate::store::summarize_output(&content);
+    let id = state
+        .store
+        .lock()
+        .await
+        .save_make_output(folder_id, &title, &summary, &content, &format, prompt.trim(), &sessions)
+        .map_err(|e| e.to_string())?;
+    state
+        .store
+        .lock()
+        .await
+        .get_make_output(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "the output did not survive being saved".to_string())
+}
+
+/// Everything a folder has been made into, newest first. Null folder is all.
+#[tauri::command]
+pub async fn make_outputs(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+) -> Result<Vec<crate::store::MakeOutputRow>, String> {
+    state.store.lock().await.list_make_outputs(folder).map_err(|e| e.to_string())
+}
+
+/// One output, by id.
+#[tauri::command]
+pub async fn make_output(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<crate::store::MakeOutputRow, String> {
+    state
+        .store
+        .lock()
+        .await
+        .get_make_output(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no output {id}"))
+}
+
+/// Write an output's text back — typed by hand on the outputs page.
+///
+/// The revision thread is dropped along with it: the model's copy of the
+/// document is now wrong, and "make it shorter" pointing at words that are
+/// no longer there is worse than starting the chat over.
+#[tauri::command]
+pub async fn update_make_output(
+    state: State<'_, AppState>,
+    id: i64,
+    content: String,
+    title: Option<String>,
+) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .await
+        .update_make_output(id, &content, title.as_deref())
+        .map_err(|e| e.to_string())?;
+    state.output_threads.lock().await.remove(&id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_make_output(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    state.store.lock().await.trash_make_output(id).map_err(|e| e.to_string())?;
+    state.output_threads.lock().await.remove(&id);
+    Ok(())
+}
+
+/// Ask for a revision to something that was made, and keep the result.
+///
+/// The thread is per output and seeded with the document itself, so each
+/// instruction arrives as a refinement of the one before rather than as a
+/// fresh reading of a text the model has to be handed again. The model
+/// returns the whole revised document — partial edits from here would have
+/// to be merged somewhere, and nowhere merges prose well.
+#[tauri::command]
+pub async fn compose_revise_output(
+    state: State<'_, AppState>,
+    id: i64,
+    instruction: String,
+) -> Result<ReviseResult, String> {
+    let instruction = instruction.trim().to_string();
+    if instruction.is_empty() {
+        return Err("nothing asked".into());
+    }
+
+    let (provider, model) = {
+        let active = state.active.lock().await;
+        let a = active.as_ref().ok_or("no model selected yet")?;
+        (a.provider.clone(), a.model.clone())
+    };
+    let current = state
+        .store
+        .lock()
+        .await
+        .get_make_output(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no output {id}"))?;
+
+    let mut threads = state.output_threads.lock().await;
+    let thread = threads.entry(id).or_insert_with(|| {
+        vec![crate::llm::types::Message {
+            role: crate::llm::types::Role::Assistant,
+            content: current.content.clone(),
+        }]
+    });
+
+    let request = crate::llm::ChatRequest {
+        model,
+        messages: {
+            let mut m = thread.clone();
+            m.push(crate::llm::types::Message {
+                role: crate::llm::types::Role::User,
+                content: instruction.clone(),
+            });
+            m
+        },
+        system: Some(
+            "You are revising a document with the person who made it. The document \
+             is the first message in this conversation; each later message is an \
+             instruction for changing it.\n\n\
+             - Answer with the complete revised document and nothing else — no \
+             preamble, no summary of what you changed.\n\
+             - Keep its shape: if it was headings and prose, it stays headings \
+             and prose; if it was slides, it stays slides.\n\
+             - Change only what the instruction asks for.\n\
+             - The thinking the document was made from is theirs. Do not add \
+             positions that are not in it.\n\
+             - When the instruction asks for a file to be written out, end the \
+             reply with one export line, as the Make tab documents it: \
+             `::export <format> <file name>` with format one of pdf, docx, \
+             pptx, md — and nothing after it."
+                .to_string(),
+        ),
+        reasoning: state.settings.lock().await.reasoning,
+    };
+
+    match provider.chat_stream(&request, &|_, _| {}).await {
+        Ok(reply) => {
+            // The same one command the main Make thread has: a revision may end
+            // in `::export …`, and the file it names gets written here, from
+            // the revised document, so the chat's answer is a file too.
+            let (document, directive) = crate::compose::split_export(&reply);
+            let mut exports = Vec::new();
+            let mut export_error = None;
+            if let Some(d) = directive {
+                match export_composed_file(&state, document, &d.format, &d.name).await {
+                    Ok(f) => exports.push(f),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "export directive failed");
+                        export_error = Some(e);
+                    }
+                }
+            }
+            thread.push(crate::llm::types::Message {
+                role: crate::llm::types::Role::User,
+                content: instruction,
+            });
+            thread.push(crate::llm::types::Message {
+                role: crate::llm::types::Role::Assistant,
+                content: reply.clone(),
+            });
+            state
+                .store
+                .lock()
+                .await
+                .update_make_output(id, document, None)
+                .map_err(|e| e.to_string())?;
+            let output = state
+                .store
+                .lock()
+                .await
+                .get_make_output(id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "the revision did not survive being saved".to_string())?;
+            Ok(ReviseResult { output, exports, export_error })
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Throw away one output's revision thread, keeping the document.
+#[tauri::command]
+pub async fn clear_output_thread(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    state.output_threads.lock().await.remove(&id);
+    Ok(())
+}
+
 /// Put the Make tab's instructions back to what they shipped as.
 #[tauri::command]
 pub async fn reset_presets(
@@ -2072,6 +2554,21 @@ pub async fn reset_presets(
     *state.settings.lock().await = settings.clone();
     let _ = app.emit("settings:changed", settings.clone());
     Ok(settings)
+}
+
+/// Run one export command the Make tab's model wrote, by hand.
+///
+/// The directive loop runs inside `compose_send`, but a failed run should not
+/// mean asking the model all over again to get the same bytes — so the same
+/// file writer is reachable on its own.
+#[tauri::command]
+pub async fn export_composed(
+    state: State<'_, AppState>,
+    content: String,
+    format: String,
+    name: String,
+) -> Result<ExportedFile, String> {
+    export_composed_file(&state, &content, &format, &name).await
 }
 
 /// What came of an export, so the page can say more than "done".
@@ -2117,11 +2614,16 @@ pub async fn delete_folder(
     folder_id: i64,
 ) -> Result<(), String> {
     state.store.lock().await.delete_folder(folder_id).map_err(|e| e.to_string())?;
-    let mut current = state.current_folder.lock().await;
-    if *current == folder_id {
-        *current = crate::store::ROOT_FOLDER;
+    // Deleted the folder the app was standing in: go back to Root, and say so
+    // in the settings, or the next start would open where the folder used to be.
+    if *state.current_folder.lock().await == folder_id {
+        let mut settings = state.settings.lock().await.clone();
+        settings.current_folder = crate::store::ROOT_FOLDER;
+        settings.save(&state.data_dir).map_err(|e| e.to_string())?;
+        *state.settings.lock().await = settings.clone();
+        let _ = app.emit("settings:changed", settings);
+        *state.current_folder.lock().await = crate::store::ROOT_FOLDER;
     }
-    drop(current);
     let _ = app.emit("ideas:changed", ());
     Ok(())
 }
@@ -2132,8 +2634,22 @@ pub async fn current_folder(state: State<'_, AppState>) -> Result<i64, String> {
     Ok(*state.current_folder.lock().await)
 }
 
+/// File into this folder from here on — and remember it.
+///
+/// It used to live only in memory, so a restart opened Root again: everything
+/// on screen is scoped to one folder, and the folder's conversations, ideas,
+/// map and digest queue all looked gone until the folder was picked again.
 #[tauri::command]
-pub async fn set_current_folder(state: State<'_, AppState>, folder_id: i64) -> Result<(), String> {
+pub async fn set_current_folder(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    folder_id: i64,
+) -> Result<(), String> {
+    let mut settings = state.settings.lock().await.clone();
+    settings.current_folder = folder_id;
+    settings.save(&state.data_dir).map_err(|e| e.to_string())?;
+    *state.settings.lock().await = settings.clone();
+    let _ = app.emit("settings:changed", settings);
     *state.current_folder.lock().await = folder_id;
     Ok(())
 }
@@ -2191,7 +2707,7 @@ pub async fn delete_idea(
     state: State<'_, AppState>,
     idea_id: i64,
 ) -> Result<(), String> {
-    state.store.lock().await.delete_idea(idea_id).map_err(|e| e.to_string())?;
+    state.store.lock().await.trash_idea(idea_id).map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
     Ok(())
 }
@@ -2226,7 +2742,9 @@ pub async fn save_settings(
     // and the next message failed against a host nobody had chosen.
     if settings.chat != previous.chat {
         if let Some(choice) = &settings.chat {
-            set_active(&state, choice.kind, &choice.host, &choice.model).await;
+            if let Some(a) = set_active(&state, choice.kind, &choice.host, &choice.model).await {
+                announce_archived(&app, &a);
+            }
         }
     }
 
@@ -2288,7 +2806,11 @@ pub async fn choose_model(
     *state.settings.lock().await = settings.clone();
 
     match role.as_str() {
-        "chat" => set_active(&state, kind, &host, &model).await,
+        "chat" => {
+            if let Some(a) = set_active(&state, kind, &host, &model).await {
+                announce_archived(&app, &a);
+            }
+        }
         _ => {
             *state.extractor.lock().await = Some(Extractor {
                 provider: detect::extractor(kind, &host, &model),
@@ -2351,7 +2873,10 @@ pub async fn reextract_all(
     folder: Option<i64>,
 ) -> Result<usize, String> {
     // Scoped to a folder when one is given: re-reading everything to fix one
-    // line of thinking means paying for every other one too.
+    // line of thinking means paying for every other one too. Archived
+    // conversations are skipped — they were deliberately set aside, and
+    // clearing one would leave it pending but out of the queue, with its ideas
+    // hidden and nothing to read it.
     let sessions: Vec<i64> = state
         .store
         .lock()
@@ -2359,6 +2884,7 @@ pub async fn reextract_all(
         .list_sessions(1000, folder)
         .map_err(|e| e.to_string())?
         .into_iter()
+        .filter(|s| !s.archived)
         .map(|s| s.id)
         .collect();
 
@@ -2445,6 +2971,236 @@ pub async fn set_openrouter_key(key: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn clear_openrouter_key() -> Result<(), String> {
     crate::secrets::delete(crate::secrets::OPENROUTER).map_err(|e| e.to_string())
+}
+
+// ------------------------------------------------- checking a model answers
+
+/// What one model-versus-provider check came to.
+#[derive(Serialize)]
+pub struct ModelTest {
+    pub ok: bool,
+    /// The round trip, in milliseconds — "works" is worth a number, and a
+    /// working but minutes-slow model is worth knowing before the work starts.
+    pub ms: u64,
+    pub reply: String,
+    pub error: Option<String>,
+}
+
+/// Ask the chosen model, through its own provider, to say something.
+///
+/// The lists the pickers show come from the *server*, and they say nothing
+/// about whether a particular model answers: an OpenRouter id that key cannot
+/// route, a model on LM Studio that lists but is not loaded, a name the CLI
+/// does not recognise. The only honest check is a tiny real request.
+#[tauri::command]
+pub async fn test_model(kind: LocalKind, host: String, model: String) -> Result<ModelTest, String> {
+    let provider = detect::chat_provider(kind, &host, &model);
+    let request = crate::llm::ChatRequest {
+        model,
+        messages: vec![crate::llm::types::Message {
+            role: crate::llm::types::Role::User,
+            content: "This is a connection test. Reply with the single word OK.".to_string(),
+        }],
+        system: None,
+        reasoning: false,
+    };
+    let started = std::time::Instant::now();
+    let noop = |_: crate::llm::ChunkKind, _: &str| {};
+    // Generous on purpose: an embedded model loading its weights into memory is
+    // part of the cost the person is being asked to sit through, and a test
+    // that dies at 5s would report the best local setup as broken.
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        provider.chat_stream(&request, &noop).await
+    })
+    .await;
+    let ms = started.elapsed().as_millis() as u64;
+    Ok(match waited {
+        Ok(Ok(reply)) => {
+            ModelTest { ok: true, ms, reply: reply.trim().chars().take(120).collect(), error: None }
+        }
+        Ok(Err(e)) => ModelTest { ok: false, ms, reply: String::new(), error: Some(e.to_string()) },
+        Err(_) => ModelTest {
+            ok: false,
+            ms,
+            reply: String::new(),
+            error: Some("no answer within 60s".to_string()),
+        },
+    })
+}
+
+// ------------------------------------------------- the OpenRouter catalogue
+
+/// One model from OpenRouter's public listing, with the fields worth filtering
+/// by. Prices are per *million* tokens — the API quotes per single token, and
+/// the extra three zeroes every row would need to say so.
+#[derive(Clone, Serialize)]
+pub struct OpenRouterModel {
+    pub id: String,
+    pub name: String,
+    pub context: i64,
+    pub prompt_price: f64,
+    pub completion_price: f64,
+    /// Unix seconds; newest first is the order OpenRouter itself ships in.
+    pub created: i64,
+    /// Input kinds the model takes — "text" alone, or "text" plus "image".
+    pub modalities: Vec<String>,
+    pub tools: bool,
+    pub reasoning: bool,
+}
+
+const OPENROUTER_CATALOG_URL: &str = "https://openrouter.ai/api/v1/models";
+
+/// The catalogue, fresh from OpenRouter. No key is needed — the listing is
+/// public — and it is remembered for a few minutes so flipping filters is not
+/// a download each time.
+#[tauri::command]
+pub async fn openrouter_catalog(
+    state: State<'_, AppState>,
+) -> Result<Vec<OpenRouterModel>, String> {
+    const TTL: std::time::Duration = std::time::Duration::from_secs(600);
+    {
+        let cache = state.router_catalog.lock().await;
+        if let Some((at, models)) = cache.as_ref() {
+            if at.elapsed() < TTL {
+                return Ok(models.clone());
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct Listing {
+        data: Vec<Entry>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        id: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        context_length: i64,
+        #[serde(default)]
+        created: i64,
+        #[serde(default)]
+        pricing: Pricing,
+        #[serde(default)]
+        architecture: Architecture,
+        #[serde(default)]
+        supported_parameters: Vec<String>,
+    }
+    #[derive(Deserialize, Default)]
+    struct Pricing {
+        #[serde(default)]
+        prompt: String,
+        #[serde(default)]
+        completion: String,
+    }
+    #[derive(Deserialize, Default)]
+    struct Architecture {
+        #[serde(default)]
+        input_modalities: Vec<String>,
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let listing: Listing = client
+        .get(OPENROUTER_CATALOG_URL)
+        .send()
+        .await
+        .map_err(|e| format!("OpenRouter did not answer: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("OpenRouter refused the listing: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("OpenRouter's listing did not parse: {e}"))?;
+
+    let per_million = |s: &str| s.parse::<f64>().unwrap_or(0.0) * 1_000_000.0;
+    let models: Vec<OpenRouterModel> = listing
+        .data
+        .into_iter()
+        .map(|m| OpenRouterModel {
+            tools: m.supported_parameters.iter().any(|p| p == "tools"),
+            reasoning: m
+                .supported_parameters
+                .iter()
+                .any(|p| p == "reasoning" || p == "include_reasoning"),
+            modalities: if m.architecture.input_modalities.is_empty() {
+                vec!["text".to_string()]
+            } else {
+                m.architecture.input_modalities
+            },
+            prompt_price: per_million(&m.pricing.prompt),
+            completion_price: per_million(&m.pricing.completion),
+            context: m.context_length,
+            created: m.created,
+            name: m.name,
+            id: m.id,
+        })
+        .collect();
+
+    *state.router_catalog.lock().await = Some((std::time::Instant::now(), models.clone()));
+    Ok(models)
+}
+
+// ------------------------------------------------- the Make tab's exports
+
+/// One file the Make tab's model asked to have written.
+#[derive(Serialize)]
+pub struct ExportedFile {
+    pub path: String,
+    pub format: String,
+    pub name: String,
+}
+
+/// A safe, tiny command surface for the Make tab: turn the document the model
+/// wrote into a real file, here, without a save dialog.
+///
+/// The model never runs anything and names nothing outside this folder. The
+/// format is one of the four the app can write itself — the exporters are the
+/// same ones `save_document` uses for the button, so what lands on disk is
+/// exactly what the preview showed. Only the Make tab's commands can reach
+/// this, which is why it parses directives there and nowhere else.
+pub async fn export_composed_file(
+    state: &AppState,
+    content: &str,
+    format: &str,
+    name: &str,
+) -> Result<ExportedFile, String> {
+    let fmt = crate::settings::OutputFormat::from_name(format)
+        .ok_or_else(|| format!("unknown format {format}"))?;
+    let title = crate::store::summarize_output(content).0;
+    let bytes = crate::export::render(content, fmt, &title).map_err(|e| e.to_string())?;
+
+    let dir = state.data_dir.join("made");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not prepare {dir:?}: {e}"))?;
+
+    let ext = fmt.ext();
+    let base: String = name
+        .trim()
+        // Never valid in a filename, whatever the OS.
+        .replace(['/', '\\', '?', '%', '*', ':', '|', '"', '<', '>', '\x00'], "-")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .to_string();
+    let base = if base.is_empty() { title.trim().to_string() } else { base };
+    let base = if base.is_empty() { "made".to_string() } else { base };
+    let base: String = base.chars().take(80).collect();
+
+    let mut path = dir.join(format!("{base}.{ext}"));
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("{base} ({n}).{ext}"));
+        n += 1;
+    }
+    std::fs::write(&path, &bytes).map_err(|e| format!("could not write {path:?}: {e}"))?;
+    Ok(ExportedFile {
+        path: path.to_string_lossy().to_string(),
+        format: format.to_string(),
+        name: path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+    })
 }
 
 /// The long-form argument about an idea, generated on first open and kept.
@@ -2785,16 +3541,12 @@ pub async fn import_claude_conversation(
             .map_err(|e| e.to_string())?
     };
 
+    // Only filed, not read: imports wait in the queue with everything else
+    // until the person confirms they should be digested.
     let _ = app.emit(
         "session:archived",
         Archived { session_id, reason: EndReason::Done, turn_count: parsed.turns.len() },
     );
-
-    let handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let state = handle.state::<AppState>();
-        drain_pending(&handle, &state).await;
-    });
 
     Ok(session_id)
 }
@@ -2830,16 +3582,147 @@ pub async fn import_conversation(
             .map_err(|e| e.to_string())?
     };
 
+    // Only filed, not read: imports wait in the queue with everything else
+    // until the person confirms they should be digested.
     let _ = app.emit(
         "session:archived",
         Archived { session_id, reason: EndReason::Done, turn_count: parsed.turns.len() },
     );
 
-    let handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let state = handle.state::<AppState>();
-        drain_pending(&handle, &state).await;
-    });
+    Ok(session_id)
+}
+
+// ------------------------------------------------------- from an Obsidian vault
+
+/// One markdown note in a vault, as an import.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ObsidianNote {
+    pub path: String,
+    /// The file's name, which in a vault is the note's name.
+    pub title: String,
+    pub modified: String,
+    /// Rough size, so a wall of ten thousand words can be told from a stub.
+    pub chars: usize,
+}
+
+const OBSIDIAN_NOTE_CAP: usize = 800;
+
+/// List the markdown notes in a folder, as things that could be imported.
+///
+/// A vault is just a folder of markdown, so the walk is plain — but a vault
+/// also carries `.obsidian` (settings), `.trash` and plugin folders, which are
+/// the program's own plumbing and are skipped, as is everything else that
+/// starts with a dot.
+#[tauri::command]
+pub async fn list_obsidian_notes(path: String) -> Result<Vec<ObsidianNote>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = std::path::PathBuf::from(path.trim());
+        if !root.is_dir() {
+            return Err("that is not a folder".to_string());
+        }
+        let mut out: Vec<ObsidianNote> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    let hidden = p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with('.'))
+                        .unwrap_or(false);
+                    if !hidden {
+                        stack.push(p);
+                    }
+                    continue;
+                }
+                if p.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
+                if out.len() >= OBSIDIAN_NOTE_CAP {
+                    continue;
+                }
+                let title =
+                    p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let (modified, chars) = match entry.metadata() {
+                    Ok(m) => (
+                        m.modified()
+                            .ok()
+                            .map(|t| {
+                                let dt: chrono::DateTime<chrono::Local> = t.into();
+                                dt.to_rfc3339()
+                            })
+                            .unwrap_or_default(),
+                        m.len() as usize,
+                    ),
+                    Err(_) => (String::new(), 0),
+                };
+                out.push(ObsidianNote {
+                    path: p.to_string_lossy().to_string(),
+                    title,
+                    modified,
+                    chars,
+                });
+            }
+        }
+        out.sort_by(|a, b| b.modified.cmp(&a.modified));
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Import one note from a vault.
+///
+/// The note goes through the same preview parser the paste box uses, so a
+/// transcript pasted into Obsidian with `You:` / `Claude:` labels still lands
+/// with its roles known; a plain note arrives as one person's thinking, which
+/// is what it is.
+#[tauri::command]
+pub async fn import_obsidian_note(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    source: String,
+) -> Result<i64, String> {
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("could not read {path}: {e}"))?;
+    let text = crate::session::import::strip_frontmatter(&raw).trim().to_string();
+    if text.is_empty() {
+        return Err("that note is empty once its frontmatter is off".into());
+    }
+    let parsed = crate::session::import::parse(&text);
+    if parsed.turns.is_empty() {
+        return Err("nothing to import".into());
+    }
+
+    let messages = crate::session::import::to_messages(&parsed.turns);
+    let rendered = crate::session::transcript::render(&messages);
+    let stem = std::path::Path::new(&path)
+        .file_stem()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let label = if source.trim().is_empty() {
+        format!("imported/obsidian/{}", stem)
+    } else {
+        format!("imported/obsidian/{}/{}", source.trim(), stem)
+    };
+
+    let session_id = {
+        let mut store = state.store.lock().await;
+        store
+            .archive_session(&rendered, &label, chrono::Utc::now(), Some(&state.md_dir))
+            .map_err(|e| e.to_string())?
+    };
+
+    // Only filed, not read: imports wait in the queue with everything else
+    // until the person confirms they should be digested.
+    let _ = app.emit(
+        "session:archived",
+        Archived { session_id, reason: EndReason::Done, turn_count: parsed.turns.len() },
+    );
 
     Ok(session_id)
 }

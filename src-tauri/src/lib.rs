@@ -15,8 +15,8 @@ pub mod book;
 pub mod chat;
 pub mod commands;
 pub mod compose;
-pub mod export;
 pub mod embed;
+pub mod export;
 pub mod extract;
 pub mod llm;
 pub mod reconcile;
@@ -108,7 +108,8 @@ pub fn run() {
             commands::stop_digest,
             commands::extraction_trouble,
             commands::pending_sessions,
-            commands::pending_sessions,
+            commands::archived_sessions,
+            commands::archived_ideas,
             commands::source_view,
             commands::speech_model_status,
             commands::download_speech_model,
@@ -128,6 +129,10 @@ pub fn run() {
             commands::install_voice,
             commands::speak,
             commands::delete_session,
+            commands::list_trash,
+            commands::restore_trash_item,
+            commands::purge_trash_item,
+            commands::empty_trash,
             commands::embedded_status,
             commands::download_embedded_model,
             commands::start_embedded,
@@ -145,6 +150,13 @@ pub fn run() {
             commands::stop_generation,
             commands::save_text,
             commands::save_document,
+            commands::compose_save_output,
+            commands::make_outputs,
+            commands::make_output,
+            commands::update_make_output,
+            commands::delete_make_output,
+            commands::compose_revise_output,
+            commands::clear_output_thread,
             commands::reset_presets,
             commands::create_folder,
             commands::rename_folder,
@@ -171,6 +183,9 @@ pub fn run() {
             commands::clear_anthropic_key,
             commands::set_openrouter_key,
             commands::clear_openrouter_key,
+            commands::test_model,
+            commands::openrouter_catalog,
+            commands::export_composed,
             commands::idea_deep_dive,
             commands::answer_dispute,
             commands::digest_dispute_answer,
@@ -180,6 +195,10 @@ pub fn run() {
             commands::list_claude_imports,
             commands::import_claude_conversation,
             commands::import_conversation,
+            commands::list_obsidian_notes,
+            commands::import_obsidian_note,
+            commands::unresolve_relation,
+            commands::explain_contradiction,
         ])
         .setup(|app| {
             use tauri::Manager;
@@ -212,13 +231,16 @@ pub fn run() {
                         Ok(None) => {}
                         Err(e) => tracing::error!(error = %e, "failed to archive idle session"),
                     }
-                    commands::drain_pending(&handle, &handle.state::<commands::AppState>()).await;
+                    // Reading it back is the person's call, made from the
+                    // waiting-to-be-read page — an idle archive only files it.
                 }
             });
 
-            // Anything left unextracted from a previous run gets picked up now.
-            // Sessions interrupted mid-extraction are still marked `extracting`
-            // and would be skipped by the queue forever, so requeue those first.
+            // Anything left unextracted from a previous run is requeued so it
+            // is not lost, but reading does not begin on its own: the session
+            // waits under "waiting to be read" until asked for. Sessions
+            // interrupted mid-extraction are still marked `extracting` and
+            // would be skipped by the queue forever, so requeue those first.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<commands::AppState>();
@@ -227,7 +249,6 @@ pub fn run() {
                     Ok(_) => {}
                     Err(e) => tracing::error!(error = %e, "could not requeue extractions"),
                 }
-                commands::drain_pending(&handle, &state).await;
             });
 
             Ok(())

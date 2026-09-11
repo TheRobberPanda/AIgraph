@@ -64,8 +64,8 @@ fn pack(parts: Vec<Part>) -> Result<Vec<u8>, ExportError> {
     {
         let mut zip = ZipWriter::new(&mut buf);
         // Deflate: what every reader expects, and the only codec compiled in.
-        let options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         for part in parts {
             zip.start_file(part.name, options)?;
             zip.write_all(part.body.as_bytes())?;
@@ -153,11 +153,8 @@ pub fn docx(title: &str, blocks: &[Block]) -> Result<Vec<u8>, ExportError> {
 fn para(text: &str, style: &str, bullet: bool) -> String {
     // The list reference is what makes a bullet a bullet; the style alone
     // only indents it.
-    let numbering = if bullet {
-        r#"<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>"#
-    } else {
-        ""
-    };
+    let numbering =
+        if bullet { r#"<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>"# } else { "" };
     format!(
         r#"<w:p><w:pPr><w:pStyle w:val="{style}"/>{numbering}</w:pPr><w:r><w:t xml:space="preserve">{}</w:t></w:r></w:p>"#,
         esc(text)
@@ -502,7 +499,10 @@ mod tests {
 
     #[test]
     fn the_characters_a_person_actually_types_are_escaped() {
-        assert_eq!(esc("R&D <one> \"two\" 'three'"), "R&amp;D &lt;one&gt; &quot;two&quot; &apos;three&apos;");
+        assert_eq!(
+            esc("R&D <one> \"two\" 'three'"),
+            "R&amp;D &lt;one&gt; &quot;two&quot; &apos;three&apos;"
+        );
     }
 
     #[test]
@@ -514,21 +514,22 @@ mod tests {
     fn a_word_document_is_a_zip_with_the_parts_a_reader_looks_for() {
         let out = docx("A title", &[Block::Paragraph("some prose".into())]).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(out)).unwrap();
-        let names: Vec<String> = (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
-        for wanted in ["[Content_Types].xml", "_rels/.rels", "word/document.xml", "word/styles.xml"] {
+        let names: Vec<String> =
+            (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
+        for wanted in ["[Content_Types].xml", "_rels/.rels", "word/document.xml", "word/styles.xml"]
+        {
             assert!(names.contains(&wanted.to_string()), "{wanted} missing from {names:?}");
         }
     }
 
     #[test]
     fn a_deck_has_one_part_per_slide_plus_the_title_slide() {
-        let out = pptx(
-            "Deck",
-            &[("One".into(), vec!["a".into()]), ("Two".into(), vec!["b".into()])],
-        )
-        .unwrap();
+        let out =
+            pptx("Deck", &[("One".into(), vec!["a".into()]), ("Two".into(), vec!["b".into()])])
+                .unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(out)).unwrap();
-        let names: Vec<String> = (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
+        let names: Vec<String> =
+            (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
         let slides = names.iter().filter(|n| n.starts_with("ppt/slides/slide")).count();
         assert_eq!(slides, 3, "title slide plus two: {names:?}");
         assert!(names.contains(&"ppt/presentation.xml".to_string()));
@@ -540,7 +541,8 @@ mod tests {
         let many: Vec<String> = (0..14).map(|i| format!("line {i}")).collect();
         let out = pptx("Deck", &[("Long".into(), many)]).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(out)).unwrap();
-        let names: Vec<String> = (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
+        let names: Vec<String> =
+            (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
         let slides = names.iter().filter(|n| n.starts_with("ppt/slides/slide")).count();
         // Fourteen lines at six a slide is three, plus the title slide.
         assert_eq!(slides, 4, "{names:?}");

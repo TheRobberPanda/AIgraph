@@ -202,6 +202,32 @@ pub fn to_messages(turns: &[ImportedTurn]) -> Vec<Message> {
     turns.iter().map(|t| Message { role: t.role, content: t.text.clone() }).collect()
 }
 
+/// Take the YAML frontmatter off the front of a note, if there is one.
+///
+/// Obsidian notes open with a `---` block of metadata — tags, dates, aliases —
+/// which is filing, not something anyone said. Notes without one come back
+/// unchanged; a file that opens with `---` and never closes it is not
+/// frontmatter, it is a horizontal rule, and it stays.
+pub fn strip_frontmatter(text: &str) -> &str {
+    let body = text.strip_prefix("---\n").or_else(|| text.strip_prefix("---\r\n"));
+    let Some(rest) = body else { return text };
+    let mut closing = None;
+    for (at, _) in rest.match_indices('\n') {
+        if rest[at + 1..].starts_with("---") {
+            closing = Some(at + 1);
+            break;
+        }
+    }
+    match closing {
+        // Everything after the closing rule, minus its own leading newline.
+        Some(at) => rest[at..]
+            .trim_start_matches("---")
+            .trim_start_matches(['\r', '\n'])
+            .trim_start_matches('\n'),
+        None => text,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +300,22 @@ mod tests {
         // "Note:" appears once; only recurring labels are speakers.
         let out = parse("Me: thinking\n\nAI: replying\n\nMe: more\n\nAI: more back");
         assert_eq!(out.labels.len(), 2);
+    }
+
+    #[test]
+    fn frontmatter_is_filing_and_comes_off_the_front() {
+        let note = "---\ntags: thinking\ndate: 2026-09-01\n---\n\nThe note itself.";
+        assert_eq!(strip_frontmatter(note), "The note itself.");
+        // No frontmatter, nothing changes.
+        assert_eq!(strip_frontmatter("Just a note."), "Just a note.");
+        // A lone opening rule is a rule, not unclosed metadata.
+        let rule = "---\nthis never closes";
+        assert_eq!(strip_frontmatter(rule), rule);
+    }
+
+    #[test]
+    fn frontmatter_survives_windows_line_endings() {
+        let note = "---\r\ntags: x\r\n---\r\n\r\nThe note itself.";
+        assert_eq!(strip_frontmatter(note), "The note itself.");
     }
 }

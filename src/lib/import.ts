@@ -26,6 +26,22 @@ export function importConversation(
   return invoke<number>("import_conversation", { text, swapRoles, source });
 }
 
+/** One markdown note in an Obsidian vault, as an import. */
+export interface ObsidianNote {
+  path: string;
+  title: string;
+  modified: string;
+  chars: number;
+}
+
+export function listObsidianNotes(path: string): Promise<ObsidianNote[]> {
+  return invoke<ObsidianNote[]>("list_obsidian_notes", { path });
+}
+
+export function importObsidianNote(path: string, source: string): Promise<number> {
+  return invoke<number>("import_obsidian_note", { path, source });
+}
+
 /** One conversation Claude has already had on this machine. */
 export interface ClaudeImport {
   path: string;

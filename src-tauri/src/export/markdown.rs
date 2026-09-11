@@ -16,7 +16,10 @@
 pub enum Block {
     /// `level` is 1 for `#`, 2 for `##`, and so on, capped at 3 — past that a
     /// heading is not doing anything a paragraph would not.
-    Heading { level: u8, text: String },
+    Heading {
+        level: u8,
+        text: String,
+    },
     Paragraph(String),
     Bullet(String),
 }

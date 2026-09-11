@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
+import Sheet from "./Sheet";
 import {
   composeClear,
   composeLoad,
@@ -9,6 +10,7 @@ import {
   onComposeToken,
   saveDocument,
   stopGeneration,
+  type ExportedFile,
   type Packed,
   type Selectable,
 } from "../lib/compose";
@@ -22,10 +24,14 @@ import {
   type OutputFormat,
   type Preset,
 } from "../lib/settings";
+import { REASONING_REFUSED, wantsReasoning } from "../lib/chat";
 import PresetPreview from "./PresetPreview";
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
+import { composeSaveOutput, listMakeOutputs, type MakeOutput } from "../lib/outputs";
+import { onMaking, setMaking, takeMakeOpenRequest } from "../lib/making";
 import { useUndoable } from "../lib/undo";
 import Markdown from "./Markdown";
+import { DocThumb, ExportFiles, MakeOutputs, OutputFile } from "./Outputs";
 import { IconSend, IconPlus, IconChevron, IconStop } from "./Icons";
 
 /**
@@ -59,12 +65,25 @@ const SHAPE: Record<OutputFormat, string> = {
 
 interface Exchange {
   asked: string;
-  answer: string;
-  /** What this answer was asked to come out as, so saving it writes that kind
-   *  of file without asking again. A typed question is prose. */
   format: OutputFormat;
   /** The button it came from, for naming the file something recognisable. */
   name?: string;
+  /**
+   * The reply, streamed in whole but never shown here.
+   *
+   * A two-thousand-word document pasted into the conversation buried the next
+   * instruction under it and made the thread unreadable. What is shown is the
+   * archive card; the full text lives in the output, one click away.
+   */
+  answer: string;
+  /** Set once the reply has been filed as an output. */
+  output: MakeOutput | null;
+  /** Files the reply's own export command wrote. */
+  exports: ExportedFile[];
+  /** Why one of those exports did not land, when it did not. */
+  exportError?: string;
+  /** Filing the output failed. The raw reply is shown rather than lost. */
+  raw?: boolean;
 }
 
 /**
@@ -83,11 +102,30 @@ export default function Make({ folder, compact = false }: { folder: number | nul
   const [presets, setPresets] = useState<Preset[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [thread, setThread] = useState<Exchange[]>([]);
+  /** Which page of the tab is on: asking, or what has been made. */
+  const [page, setPage] = useState<"compose" | "outputs">("compose");
+  /** A document is open over the archive, so the page tabs step out of its way. */
+  const [outputOpen, setOutputOpen] = useState(false);
+  /** An output the nav bar asked this tab to open. */
+  const [requestedOutput, setRequestedOutput] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const undoDraft = useUndoable(draft, setDraft);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The ask that just failed, so an error that one switch fixes can also
+  // ask it again.
+  const failedAsk = useRef<{ text: string; format: OutputFormat; name?: string } | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  /** An output opened from an archive card, over this tab. */
+  const [opening, setOpening] = useState<MakeOutput | null>(null);
+  /** How much this folder has been made into — the number on the tab. */
+  const [outputCount, setOutputCount] = useState(0);
+
+  useEffect(() => {
+    void listMakeOutputs(folder)
+      .then((os) => setOutputCount(os.length))
+      .catch(() => {});
+  }, [folder]);
   /** What there is to choose from, and what is ticked. */
   const [tree, setTree] = useState<Selectable[]>([]);
   const [pickedSessions, setPickedSessions] = useState<Set<number>>(new Set());
@@ -118,6 +156,21 @@ export default function Make({ folder, compact = false }: { folder: number | nul
 
   useEffect(() => {
     void listFolders().then(setFolders);
+  }, []);
+
+  // The bar can ask for an output to be opened — the result of a make that
+  // finished while the person was looking at something else. The request is
+  // taken now if it is already waiting, and on every change after that.
+  useEffect(() => {
+    const apply = () => {
+      const id = takeMakeOpenRequest();
+      if (id !== null) {
+        setPage("outputs");
+        setRequestedOutput(id);
+      }
+    };
+    apply();
+    return onMaking(apply);
   }, []);
 
   // The instructions are settings, so they follow edits made in the other tab
@@ -182,6 +235,23 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [thread]);
 
+  /**
+   * The conversations this exchange is being made out of, for the record.
+   *
+   * Everything ticks by default, and "everything" means every conversation in
+   * the tree; a narrowed selection is itself, plus the conversations of any
+   * ideas ticked loose of their transcripts.
+   */
+  function sourceSessions(): number[] {
+    if (useAll) return tree.map((c) => c.session_id);
+    const ids = new Set(pickedSessions);
+    for (const c of tree) {
+      if (!pickedIdeas.size) break;
+      if (c.ideas.some((i) => pickedIdeas.has(i.idea_id))) ids.add(c.session_id);
+    }
+    return [...ids];
+  }
+
   const ask = useCallback(
     async (instruction: string, format: OutputFormat = "markdown", name?: string) => {
     const text = instruction.trim();
@@ -190,19 +260,60 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     setSaved(null);
     setBusy(true);
     setDraft("");
-    setThread((t) => [...t, { asked: text, answer: "", format, name }]);
+    const label = (name?.trim() || text).slice(0, 60);
+    setMaking({ name: label, status: "working", outputId: null, error: null });
+    setThread((t) => [
+      ...t,
+      { asked: text, answer: "", output: null, format, name, exports: [] },
+    ]);
     try {
       // The shape reaches the model, not just the file writer. A deck and an
       // essay are not the same text in two wrappers, and asking for one and
       // then wrapping the other is how you get an essay cut into slides.
-      const reply = await composeSend(text + SHAPE[format]);
-      setThread((t) => {
-        const next = [...t];
-        next[next.length - 1] = { ...next[next.length - 1], answer: reply };
-        return next;
-      });
+      const { reply, exports, export_error } = await composeSend(text + SHAPE[format]);
+      // The model may have run its own export line; those files are the
+      // answer's doing, shown under the card as soon as they land — or the
+      // reason one of them did not, which is not a lost document.
+      if (exports.length > 0 || export_error) {
+        setThread((t) => {
+          const next = [...t];
+          next[next.length - 1] = {
+            ...next[next.length - 1],
+            exports,
+            exportError: export_error ?? undefined,
+          };
+          return next;
+        });
+      }
+      // Filed as an output the moment it lands — that is the point of the
+      // tab. If the filing fails, the reply falls back to being shown here
+      // in full, which is worse than a card but better than losing it.
+      try {
+        const output = await composeSaveOutput(reply, format, text, folder, sourceSessions());
+        setOutputCount((n) => n + 1);
+        setThread((t) => {
+          const next = [...t];
+          next[next.length - 1] = { ...next[next.length - 1], output };
+          return next;
+        });
+        setMaking({ name: label, status: "done", outputId: output.id, error: null });
+      } catch {
+        setThread((t) => {
+          const next = [...t];
+          next[next.length - 1] = { ...next[next.length - 1], answer: reply, raw: true };
+          return next;
+        });
+        setMaking({
+          name: label,
+          status: "failed",
+          outputId: null,
+          error: "It came back but could not be filed.",
+        });
+      }
     } catch (e) {
+      failedAsk.current = { text, format, name };
       setError(String(e));
+      setMaking({ name: label, status: "failed", outputId: null, error: String(e) });
       // The question goes too — it never reached the model, and leaving it on
       // screen under an error reads as an answer that failed rather than one
       // that was never asked.
@@ -211,7 +322,10 @@ export default function Make({ folder, compact = false }: { folder: number | nul
       setBusy(false);
     }
   },
-    [],
+    // `sourceSessions` reads state that is current when the ask is made, not
+    // when the callback was first built.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [folder, tree, pickedSessions, pickedIdeas, useAll],
   );
 
   /** Push the current ticks to the backend and take the new context back. */
@@ -232,17 +346,6 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     [folder],
   );
 
-  /** Go back to the whole folder, deliberately. */
-  const takeEverything = useCallback(async () => {
-    setPickedSessions(new Set());
-    setPickedIdeas(new Set());
-    setUseAll(true);
-    try {
-      setPacked(await composeSelect(folder, [], []));
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [folder]);
 
   /** Ticking a conversation ticks everything in it: the transcript already
    *  carries those ideas, so the two cannot sensibly disagree. */
@@ -314,9 +417,9 @@ export default function Make({ folder, compact = false }: { folder: number | nul
   const allOn = tree.length > 0 && pickedSessions.size === tree.length;
 
   async function keep(x: Exchange) {
-    const format = x.format ?? "markdown";
+    const format = (x.output?.format as OutputFormat) ?? x.format ?? "markdown";
     const chosen = OUTPUT_FORMATS.find((f) => f.value === format);
-    const stem = `${here} — ${x.name ?? "made"}`.replace(/[/\\?%*:|"<>]/g, "-");
+    const stem = `${here} — ${x.output?.title ?? x.name ?? "made"}`.replace(/[/\\?%*:|"<>]/g, "-");
     const path = await save({
       title: "Save this",
       defaultPath: `${stem}.${formatExt(format)}`,
@@ -326,7 +429,14 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     });
     if (!path) return;
     try {
-      setSaved(`Saved to ${await saveDocument(path, x.answer, format, x.name ?? here)}`);
+      setSaved(
+        `Saved to ${await saveDocument(
+          path,
+          x.output?.content ?? x.answer,
+          format,
+          x.output?.title ?? x.name ?? here,
+        )}`,
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -337,47 +447,83 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     // edge and out of the reading column; the narrow advanced panel has no
     // right edge to speak of and keeps everything stacked.
     <div className={compact ? "pane-inner make" : "pane-inner make roomy"}>
-      {/* Two columns where there is room: what is being made on the left,
-          what it is being made from on the right, standing open. It used to
-          be a dropdown over the answers — which meant the material was
-          invisible unless you went looking, and covered the thing you were
+      {/* Two columns where there is room: the asking on the left with the
+          instructions in its header, what it is being made from on the right.
+          It used to be a dropdown over the answers — which meant the material
+          was invisible unless you went looking, and covered the thing you were
           reading when you did. */}
-      <div className="make-main">
+      {page === "outputs" ? (
+        <div className="make-main">
+          {/* The tabs belong to the archive, not the document: opening one
+              takes the page over, and a Make/Outputs switch floating above a
+              document being read is two things where there is one. */}
+          {!outputOpen && (
+            <div className="make-head">
+              <span className="make-views">
+                <button className="make-view" onClick={() => setPage("compose")}>
+                  Make
+                </button>
+                <button className="make-view on">
+                  Outputs{outputCount > 0 && ` · ${outputCount}`}
+                </button>
+              </span>
+            </div>
+          )}
+          <MakeOutputs
+            folder={folder}
+            compact={compact}
+            onOpenChange={setOutputOpen}
+            openId={requestedOutput}
+            onOpenConsumed={() => setRequestedOutput(null)}
+          />
+        </div>
+      ) : (
+      <>
+      <aside className="make-chat">
       <div className="make-head">
-        <span className="row-main">
-          Making something out of <strong>{here}</strong>
-        </span>
-      </div>
-
-      {/* The instructions, as buttons. Pressing one fills the box below with
-          its wording and sends it — nothing happens that you cannot see. */}
-      <div className="make-presets">
-        {presets.map((p) => (
+        {/* The instructions, at the top left of the chat. Pressing one fills
+            the box below with its wording and sends it — nothing happens that
+            you cannot see. */}
+        <div className="make-presets">
+          {presets.map((p) => (
+            <button
+              key={p.id}
+              className="btn"
+              disabled={busy || !packed || nothing}
+              data-tip={nothing ? "Nothing is chosen to make this out of" : p.prompt}
+              // Not straight to the model. What a button asks for is the thing
+              // most worth arguing with, and it used to be invisible until you
+              // opened Settings in another tab to read it.
+              onClick={() => setPreviewing(p)}
+            >
+              {p.name}
+              {/* What it will come out as, on the button that makes it. */}
+              <span className="make-format">{formatLabel(p.format ?? "markdown")}</span>
+            </button>
+          ))}
+          {/* One preset ships. This is how the rest arrive — written by whoever
+              is going to press them, which is the only way the wording ends up
+              sounding like anything in particular. */}
           <button
-            key={p.id}
-            className="btn"
-            disabled={busy || !packed || nothing}
-            data-tip={nothing ? "Nothing is chosen to make this out of" : p.prompt}
-            // Not straight to the model. What a button asks for is the thing
-            // most worth arguing with, and it used to be invisible until you
-            // opened Settings in another tab to read it.
-            onClick={() => setPreviewing(p)}
+            className={adding ? "icon-btn on" : "icon-btn"}
+            data-tip={adding ? "Cancel" : "Write another instruction"}
+            onClick={() => setAdding((v) => !v)}
           >
-            {p.name}
-            {/* What it will come out as, on the button that makes it. */}
-            <span className="make-format">{formatLabel(p.format ?? "markdown")}</span>
+            <IconPlus />
           </button>
-        ))}
-        {/* One preset ships. This is how the rest arrive — written by whoever
-            is going to press them, which is the only way the wording ends up
-            sounding like anything in particular. */}
-        <button
-          className={adding ? "icon-btn on" : "icon-btn"}
-          data-tip={adding ? "Cancel" : "Write another instruction"}
-          onClick={() => setAdding((v) => !v)}
-        >
-          <IconPlus />
-        </button>
+        </div>
+
+        {/* The way to the archive, at the top right. */}
+        <span className="make-views">
+          <button className="make-view on">Make</button>
+          <button
+            className="make-view"
+            data-tip="Everything this folder has been made into"
+            onClick={() => setPage("outputs")}
+          >
+            Outputs{outputCount > 0 && ` · ${outputCount}`}
+          </button>
+        </span>
       </div>
 
       {adding && (
@@ -416,7 +562,30 @@ export default function Make({ folder, compact = false }: { folder: number | nul
         </div>
       )}
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p className="error">
+          {wantsReasoning(error) ? REASONING_REFUSED : error}
+          {wantsReasoning(error) && (
+            <button
+              className="btn error-action"
+              onClick={async () => {
+                const again = failedAsk.current;
+                failedAsk.current = null;
+                try {
+                  await saveSettings({ ...(await getSettings()), reasoning: true });
+                } catch (e) {
+                  setError(String(e));
+                  return;
+                }
+                setError(null);
+                if (again) void ask(again.text, again.format, again.name);
+              }}
+            >
+              {failedAsk.current ? "Turn reasoning on and ask again" : "Turn reasoning on"}
+            </button>
+          )}
+        </p>
+      )}
       {saved && <p className="blurb">{saved}</p>}
 
       <div className="make-thread">
@@ -430,20 +599,52 @@ export default function Make({ folder, compact = false }: { folder: number | nul
         {thread.map((x, i) => (
           <div key={i} className="make-turn">
             <p className="make-asked">{x.asked}</p>
-            <div className="make-answer">
-              {x.answer ? <Markdown>{x.answer}</Markdown> : <span className="spinner" aria-hidden="true" />}
-            </div>
-            {x.answer && !busy && (
+            {x.output ? (
+              // The archive card, not the text: a miniature of the document
+              // itself, the way the outputs page draws it, rather than a title
+              // and a summary of what it says.
+              <button
+                className="make-output-card"
+                data-tip="Open it"
+                onClick={() => setOpening(x.output)}
+              >
+                <DocThumb
+                  content={x.output.content}
+                  format={x.output.format as OutputFormat}
+                  title={x.output.title || "Made something"}
+                />
+                <span className="make-output-title">{x.output.title || "Made something"}</span>
+                <span className="make-output-meta">
+                  {formatLabel(x.output.format as OutputFormat)} · from{" "}
+                  {x.output.sessions.length === 1
+                    ? "1 conversation"
+                    : `${x.output.sessions.length} conversations`}{" "}
+                  · open
+                </span>
+              </button>
+            ) : x.raw ? (
+              // Filing failed; the reply is shown rather than lost.
+              <div className="make-answer">
+                <Markdown>{x.answer}</Markdown>
+              </div>
+            ) : (
+              <div className="make-answer">
+                {x.answer ? (
+                  <span className="muted">Filing what came back…</span>
+                ) : (
+                  <span className="spinner" aria-hidden="true" />
+                )}
+              </div>
+            )}
+            {/* Files the model's own export command wrote. A file is the
+                point of the ask; it is named where it went, and opens with
+                whatever the system opens PDFs and decks with. */}
+            {x.exportError && <p className="error">{x.exportError}</p>}
+            <ExportFiles files={x.exports} />
+            {x.output && !busy && (
               <div className="row">
-                <button
-                  className="btn"
-                  data-tip="Copy the whole answer"
-                  onClick={() => void navigator.clipboard.writeText(x.answer)}
-                >
-                  Copy
-                </button>
                 <button className="btn" onClick={() => void keep(x)}>
-                  Save as {formatLabel(x.format ?? "markdown")}
+                  Save as {formatLabel(x.output.format as OutputFormat)}
                 </button>
               </div>
             )}
@@ -457,7 +658,7 @@ export default function Make({ folder, compact = false }: { folder: number | nul
           value={draft}
           placeholder={
             nothing
-              ? "Nothing is chosen — tick something on the right"
+              ? "Nothing is chosen — tick something on the left"
               : packed
                 ? "Or ask for something else"
                 : "Loading the folder…"
@@ -508,7 +709,7 @@ export default function Make({ folder, compact = false }: { folder: number | nul
           )}
         </div>
       </div>
-      </div>
+      </aside>
 
       <aside className="make-side">
       {/* What the model will actually be reading. A count alone asks to be
@@ -568,12 +769,6 @@ export default function Make({ folder, compact = false }: { folder: number | nul
                   }}
                 >
                   {allOn ? "Deselect all" : "Select all"}
-                </button>
-                {/* Always here, whatever is ticked. It used to be hidden
-                    whenever nothing was — which is exactly the state you
-                    reach it from. */}
-                <button className="link" disabled={everything} onClick={() => void takeEverything()}>
-                  Use everything again
                 </button>
               </div>
               <ul className="pick-tree">
@@ -647,6 +842,8 @@ export default function Make({ folder, compact = false }: { folder: number | nul
       )}
 
       </aside>
+      </>
+      )}
 
       {previewing && (
         <PresetPreview
@@ -658,6 +855,19 @@ export default function Make({ folder, compact = false }: { folder: number | nul
             void ask(prompt, format, name);
           }}
         />
+      )}
+
+      {opening && (
+        <Sheet onClose={() => setOpening(null)}>
+          <OutputFile
+            output={opening}
+            compact={compact}
+            onClose={() => {
+              setOpening(null);
+              void listMakeOutputs(folder).then((os) => setOutputCount(os.length)).catch(() => {});
+            }}
+          />
+        </Sheet>
       )}
     </div>
   );

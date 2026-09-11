@@ -76,6 +76,23 @@ export async function sendMessage(
   }
 }
 
+/**
+ * Whether a failure is the model refusing to answer with reasoning off.
+ *
+ * Some models behind OpenRouter cannot think less than they do — "Reasoning is
+ * mandatory for this endpoint and cannot be disabled." The fix is one setting,
+ * so the error offers it rather than sending anyone to find it.
+ */
+export const REASONING_REFUSED =
+  "This model will not answer with reasoning switched off.";
+
+export function wantsReasoning(error: string): boolean {
+  return (
+    /reasoning/i.test(error) &&
+    /mandatory|cannot be disabled|must be enabled|is required|required for this/i.test(error)
+  );
+}
+
 /** Remove one turn from the conversation still being had. */
 export function deleteTurn(index: number): Promise<void> {
   return invoke("delete_turn", { index });
