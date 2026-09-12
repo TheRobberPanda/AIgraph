@@ -43,6 +43,14 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run build
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --no-default-features -- -D warnings
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
+      # Run cargo from src-tauri, not with --manifest-path from the root:
+      # cargo reads .cargo/config.toml from the working directory up, never
+      # from the manifest's, so from the root it misses the $ORIGIN rpath and
+      # the test binary dies with "libsherpa-onnx-c-api.so: cannot open
+      # shared object file" (exit 127).
+      - run: cargo fmt -- --check
+        working-directory: src-tauri
+      - run: cargo clippy --no-default-features -- -D warnings
+        working-directory: src-tauri
+      - run: cargo test --no-default-features
+        working-directory: src-tauri
