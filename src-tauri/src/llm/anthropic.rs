@@ -6,6 +6,7 @@
 //! structured outputs, and the refusal stop reason.
 
 use async_trait::async_trait;
+use base64::Engine;
 use futures_util::StreamExt;
 use serde::Deserialize;
 
@@ -285,6 +286,65 @@ impl Anthropic {
         }
         Ok(text)
     }
+
+    /// Ask a document-capable model to transcribe a PDF.
+    ///
+    /// Anthropic takes the bytes inline as a `document` content block — there
+    /// is no upload step — so this is one stateless request, the same shape as
+    /// `structured` minus the schema.
+    async fn read_document(&self, media_type: &str, bytes: &[u8]) -> Result<String, LlmError> {
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let body = serde_json::json!({
+            "model": self.model,
+            "max_tokens": EXTRACT_MAX_TOKENS,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data,
+                        },
+                    },
+                    { "type": "text", "text": super::DOCUMENT_READ_PROMPT },
+                ],
+            }],
+        });
+
+        let resp = self
+            .post("/messages")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::Transport(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(Self::error_for(resp).await);
+        }
+
+        let completion: Completion =
+            resp.json().await.map_err(|e| LlmError::BadOutput(e.to_string()))?;
+
+        if completion.stop_reason.as_deref() == Some("refusal") {
+            return Err(LlmError::BadOutput("the model declined to read this document".into()));
+        }
+
+        let text: String = completion
+            .content
+            .iter()
+            .filter(|b| b.kind == "text")
+            .filter_map(|b| b.text.clone())
+            .collect();
+
+        if text.trim().is_empty() {
+            return Err(LlmError::BadOutput(
+                "the model read the document and returned no text — it may be images only".into(),
+            ));
+        }
+        Ok(text)
+    }
 }
 
 #[async_trait]
@@ -305,6 +365,17 @@ impl IdeaExtractor for Anthropic {
 
     async fn judge(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError> {
         self.structured(prompt, schema).await
+    }
+
+    async fn document_text(
+        &self,
+        _filename: &str,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> Result<String, LlmError> {
+        // Claude reads PDFs natively; there is nothing to check the filename
+        // against, since the bytes and their type are the whole request.
+        self.read_document(media_type, bytes).await
     }
 
     fn model_id(&self) -> String {

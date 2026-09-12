@@ -202,6 +202,16 @@ CREATE TABLE IF NOT EXISTS dispute_answers (
     created_at  TEXT NOT NULL
 );
 
+-- Replies to the AI's notes on a whole conversation. No single claim for the
+-- answer to hang from, so it is filed against the session rather than an idea.
+CREATE TABLE IF NOT EXISTS session_dispute_answers (
+    id         INTEGER PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    challenge  TEXT NOT NULL,
+    answer     TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS embeddings (
     idea_id INTEGER PRIMARY KEY REFERENCES ideas(id) ON DELETE CASCADE,
     dims    INTEGER NOT NULL,
@@ -253,6 +263,9 @@ CREATE TABLE IF NOT EXISTS make_outputs (
     -- The conversations that were in front of the model, as a JSON array of
     -- session ids. Resolved to titles on read, so renames are picked up.
     sessions   TEXT NOT NULL DEFAULT '[]',
+    -- Put out of the way without being thrown away. Archived outputs stay on
+    -- disk and can be brought back; only the bin destroys anything.
+    archived   INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -413,6 +426,19 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
           CREATE INDEX IF NOT EXISTS idx_answers_idea ON dispute_answers(idea_id);",
     )?;
 
+    // Replies to the AI's notes on a whole conversation. Created here as well
+    // as in the schema so a database made before them gains the table.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS session_dispute_answers (
+             id         INTEGER PRIMARY KEY,
+             session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+             challenge  TEXT NOT NULL,
+             answer     TEXT NOT NULL,
+             created_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_session_answers ON session_dispute_answers(session_id);",
+    )?;
+
     // Things a folder was made into. Same treatment: created here as well as
     // in the schema so an older database gains the table on open.
     conn.execute_batch(
@@ -425,11 +451,22 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
              format     TEXT NOT NULL DEFAULT 'markdown',
              prompt     TEXT NOT NULL DEFAULT '',
              sessions   TEXT NOT NULL DEFAULT '[]',
+             archived   INTEGER NOT NULL DEFAULT 0,
              created_at TEXT NOT NULL,
              updated_at TEXT NOT NULL
          );
          CREATE INDEX IF NOT EXISTS idx_outputs_folder ON make_outputs(folder_id);",
     )?;
+
+    let output_cols: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('make_outputs')")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !output_cols.iter().any(|c| c == "archived") {
+        conn.execute_batch(
+            "ALTER TABLE make_outputs ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
 
     // The trash bin. Created here as well as in the schema so a database made
     // before it gains the table on open.

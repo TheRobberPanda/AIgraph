@@ -13,6 +13,11 @@ import type { ExportedFile } from "./compose";
 export interface MakeOutputSource {
   session_id: number;
   title: string;
+  /** active | archived | trashed | missing — what has become of the
+   *  conversation since this output was made from it. */
+  status: "active" | "archived" | "trashed" | "missing";
+  /** The bin entry to restore, when the conversation is in the trash. */
+  trash_id: number | null;
 }
 
 export interface MakeOutput {
@@ -25,6 +30,8 @@ export interface MakeOutput {
   format: string;
   prompt: string;
   sessions: MakeOutputSource[];
+  /** Put out of the way without being thrown away. */
+  archived: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -75,6 +82,11 @@ export function exportComposed(
 
 export function deleteMakeOutput(id: number): Promise<void> {
   return invoke("delete_make_output", { id });
+}
+
+/** Put an output out of the way, or bring it back. */
+export function setMakeOutputArchived(id: number, archived: boolean): Promise<void> {
+  return invoke("set_make_output_archived", { id, archived });
 }
 
 /** What a revision came back with: the document, and any files it exported. */

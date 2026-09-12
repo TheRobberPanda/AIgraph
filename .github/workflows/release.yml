@@ -66,9 +66,19 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # See check.yml: the speech libraries live in the user cache, and a
+      # restored `target` without them does not link.
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
+          prefix-key: "v1-with-speech-libs"
+          cache-directories: |
+            ~/.cache/sherpa-rs
+            ~/.cache/ort.pyke.io
+            ~/Library/Caches/sherpa-rs
+            ~/Library/Caches/ort.pyke.io
+            ~/AppData/Local/sherpa-rs
+            ~/AppData/Local/ort.pyke.io
 
       - uses: actions/setup-node@v4
         with:

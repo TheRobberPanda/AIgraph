@@ -12,16 +12,22 @@ import {
   deleteMakeOutput,
   listMakeOutputs,
   reviseMakeOutput,
+  setMakeOutputArchived,
   updateMakeOutput,
   clearOutputThread,
   type MakeOutput,
+  type MakeOutputSource,
 } from "../lib/outputs";
 import { formatExt, formatLabel, type OutputFormat } from "../lib/settings";
 import { saveDocument, stopGeneration, type ExportedFile } from "../lib/compose";
+import { setSessionArchived } from "../lib/chat";
+import { restoreTrashed } from "../lib/trash";
 import { parseBlocks, toDeck } from "../lib/document";
 import { useUndoable } from "../lib/undo";
 import Markdown from "./Markdown";
 import Sheet from "./Sheet";
+import ContextMenu from "./ContextMenu";
+import Confirm from "./Confirm";
 import { ConversationFile } from "./Deep";
 import { IconClose, IconMaximize, IconSend, IconStop } from "./Icons";
 
@@ -114,6 +120,9 @@ export function MakeOutputs({
   onOpenChange,
   openId,
   onOpenConsumed,
+  onRetry,
+  showArchived,
+  onCounts,
 }: {
   folder: number | null;
   compact?: boolean;
@@ -122,11 +131,25 @@ export function MakeOutputs({
   /** An output the bar asked to open, once. */
   openId?: number | null;
   onOpenConsumed?: () => void;
+  /** Ask again with the same prompt, filing the result as a new output. */
+  onRetry?: (output: MakeOutput) => void;
+  /** Whether the archived ones are showing. Owned by the page, so the toggle
+   *  can sit up beside the Make/Outputs buttons rather than floating over the
+   *  grid. */
+  showArchived: boolean;
+  /** How many are archived, so the toggle can say so where it now lives. */
+  onCounts?: (counts: { archived: number; current: number }) => void;
 }) {
   const [outputs, setOutputs] = useState<MakeOutput[]>([]);
   const [error, setError] = useState<string | null>(null);
   /** The one being worked on. */
   const [open, setOpen] = useState<number | null>(null);
+  /** Right-clicked tile, and where. */
+  const [menu, setMenu] = useState<{ x: number; y: number; output: MakeOutput } | null>(null);
+  /** The title being renamed in place. */
+  const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
+  /** The one waiting on a delete confirmation. */
+  const [deleting, setDeleting] = useState<MakeOutput | null>(null);
 
   const refresh = useCallback(() => {
     void listMakeOutputs(folder)
@@ -135,6 +158,15 @@ export function MakeOutputs({
   }, [folder]);
 
   useEffect(refresh, [refresh]);
+
+  const shown = outputs.filter((o) => o.archived === showArchived);
+  const archivedCount = outputs.filter((o) => o.archived).length;
+  const currentCount = outputs.filter((o) => !o.archived).length;
+
+  // Report the counts up so the page's toggle can describe them.
+  useEffect(() => {
+    onCounts?.({ archived: archivedCount, current: currentCount });
+  }, [archivedCount, currentCount, onCounts]);
 
   // Opened on request from the bar — the result of a make that finished while
   // this tab was elsewhere. The list may not have loaded yet; `openOutput`
@@ -162,53 +194,138 @@ export function MakeOutputs({
     );
   }
 
+  async function commitRename(id: number) {
+    const edit = renaming;
+    setRenaming(null);
+    const name = edit?.value.trim();
+    if (!edit || !name) return;
+    const output = outputs.find((o) => o.id === id);
+    if (!output || name === output.title) return;
+    try {
+      await updateMakeOutput(id, output.content, name);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   return (
     <div className="pane-inner outputs-page">
       {error && <p className="error">{error}</p>}
-      {outputs.length === 0 ? (
+      {shown.length === 0 ? (
         <p className="empty">
-          <strong>Nothing made yet.</strong>
+          <strong>{showArchived ? "Nothing archived." : "Nothing made yet."}</strong>
           <span className="muted">
-            What comes out of a request on the Make tab is kept here, with the
-            conversations it came from.
+            {showArchived
+              ? "Outputs you put out of the way turn up here."
+              : "What comes out of a request on the Make tab is kept here, with the conversations it came from."}
           </span>
         </p>
       ) : (
         <ul className="outputs-grid">
-          {outputs.map((o) => (
+          {shown.map((o) => (
             <li key={o.id}>
-              <button
-                className="output-tile"
-                onClick={() => {
-                  onOpenChange?.(true);
-                  setOpen(o.id);
-                }}
-              >
-                <span className="output-thumb">
-                  <DocThumb
-                    content={o.content}
-                    format={o.format as OutputFormat}
-                    title={o.title || "Untitled"}
-                  />
-                </span>
-                <span className="output-tile-name">{o.title || "Untitled"}</span>
-                <span className="output-tile-meta">
-                  {[
-                    o.created_at &&
-                      new Date(o.created_at).toLocaleDateString(undefined, {
-                        day: "numeric",
-                        month: "short",
-                      }),
-                    o.sessions.length > 0 &&
-                      `from ${o.sessions.length === 1 ? "1 conversation" : `${o.sessions.length} conversations`}`,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </span>
-              </button>
+              {renaming?.id === o.id ? (
+                <input
+                  className="field output-tile-rename"
+                  autoFocus
+                  aria-label="Rename this output"
+                  value={renaming.value}
+                  onChange={(e) => setRenaming({ id: o.id, value: e.target.value })}
+                  onBlur={() => void commitRename(o.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setRenaming(null);
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void commitRename(o.id);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  className={o.archived ? "output-tile archived" : "output-tile"}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, output: o });
+                  }}
+                  onClick={() => {
+                    onOpenChange?.(true);
+                    setOpen(o.id);
+                  }}
+                >
+                  <span className="output-thumb">
+                    <DocThumb
+                      content={o.content}
+                      format={o.format as OutputFormat}
+                      title={o.title || "Untitled"}
+                    />
+                  </span>
+                  <span className="output-tile-name">{o.title || "Untitled"}</span>
+                  <span className="output-tile-meta">
+                    {[
+                      o.created_at &&
+                        new Date(o.created_at).toLocaleDateString(undefined, {
+                          day: "numeric",
+                          month: "short",
+                        }),
+                      o.sessions.length > 0 &&
+                        `from ${o.sessions.length === 1 ? "1 conversation" : `${o.sessions.length} conversations`}`,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                  {o.archived && <span className="output-tile-tag">archived</span>}
+                </button>
+              )}
             </li>
           ))}
         </ul>
+      )}
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            {
+              label: "Rename",
+              onSelect: () => setRenaming({ id: menu.output.id, value: menu.output.title || "" }),
+            },
+            {
+              // The same instruction, asked again from scratch: the reply is
+              // filed as a new output rather than written over this one.
+              label: "Re-try — make a new file",
+              onSelect: () => onRetry?.(menu.output),
+            },
+            {
+              label: menu.output.archived ? "Unarchive" : "Archive",
+              onSelect: () =>
+                void setMakeOutputArchived(menu.output.id, !menu.output.archived)
+                  .then(refresh)
+                  .catch((e) => setError(String(e))),
+            },
+            {
+              label: "Delete",
+              danger: true,
+              confirm: "Yes, move it to the trash",
+              onSelect: () => setDeleting(menu.output),
+            },
+          ]}
+        />
+      )}
+
+      {deleting && (
+        <Confirm
+          title="Move this output to the trash?"
+          danger
+          onConfirm={() => {
+            const id = deleting.id;
+            setDeleting(null);
+            void deleteMakeOutput(id).then(refresh).catch((e) => setError(String(e)));
+          }}
+          onCancel={() => setDeleting(null)}
+        />
       )}
     </div>
   );
@@ -258,10 +375,13 @@ function withExcerpts(said: string, excerpts: string[]): string {
 function HeadMenu({
   label,
   tip,
+  wide = false,
   children,
 }: {
   label: string;
   tip?: string;
+  /** Give the trigger and its panel more room — the prompt needs it. */
+  wide?: boolean;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -284,7 +404,9 @@ function HeadMenu({
   return (
     <div className="pick" ref={ref}>
       <button
-        className={open ? "pick-head open" : "pick-head"}
+        className={
+          (open ? "pick-head open" : "pick-head") + (wide ? " pick-head-wide" : "")
+        }
         onClick={() => setOpen((o) => !o)}
         data-tip={tip}
         aria-haspopup="true"
@@ -337,10 +459,14 @@ export function OutputFile({
   const skipRename = useRef(false);
   /** A conversation this was made out of, opened whole over the file. */
   const [source, setSource] = useState<number | null>(null);
-  /** Passages pointed at, waiting to go with the next instruction. */
+  /** A source that is archived or in the trash, waiting on a decision to
+   *  bring it back before it can be opened. */
+  const [recover, setRecover] = useState<MakeOutputSource | null>(null);
+  /** Passages pointed at, in the order they were selected, waiting to go with
+   *  the next instruction. Multiple selections made before it is sent are all
+   *  affected by the same change; once it is sent this empties, so the next
+   *  selection begins the next change. */
   const [excerpts, setExcerpts] = useState<string[]>([]);
-  /** A selection just made, and where to offer to add it. */
-  const [pick, setPick] = useState<{ text: string; x: number; y: number } | null>(null);
   const [log, setLog] = useState<Said[]>([]);
   const viewerRef = useRef<HTMLDivElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -352,7 +478,6 @@ export function OutputFile({
     setEditing(false);
     setExcerpts([]);
     setLog([]);
-    setPick(null);
   }, [output]);
 
   useEffect(() => {
@@ -416,8 +541,9 @@ export function OutputFile({
     const using = excerpts;
     setBusy(true);
     setDraft("");
+    // The passages pointed at are handed to this change and to nothing after
+    // it: the next selection begins a new change, in its own order.
     setExcerpts([]);
-    setPick(null);
     setLog((l) => [...l, { you: said, excerpts: using, outcome: "working" }]);
     const settle = (outcome: string, files?: ExportedFile[], exportError?: string | null) =>
       setLog((l) =>
@@ -479,17 +605,41 @@ export function OutputFile({
   }
 
   /**
-   * Offer the passage just selected, beside where the pointer let go.
+   * Put a source conversation back, then open it.
    *
-   * Read a frame later: at the moment the button comes up the selection is
+   * An archived conversation only needs un-archiving; one in the trash is
+   * restored from its bin entry. Only after it is back on its feet is the
+   * reader dropped into it, since a file fetched for a session that does not
+   * exist yet would show nothing.
+   */
+  async function recoverSource(s: MakeOutputSource) {
+    try {
+      if (s.status === "archived") await setSessionArchived(s.session_id, false);
+      else if (s.status === "trashed" && s.trash_id !== null) await restoreTrashed(s.trash_id);
+      setRecover(null);
+      setSource(s.session_id);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /**
+   * Point at the passage just selected.
+   *
+   * Selecting is the act: the passage joins the change being built, in the
+   * order it was selected, and the instruction typed next is scoped to it.
+   * There is no "add to chat" step to remember — a selection that is not
+   * wanted is taken back off the chip row.
+   *
+   * Read a frame later: at the moment the pointer comes up the selection is
    * not always final yet, and a drag read too early offered nothing.
    */
   function noticeSelection(e: ReactMouseEvent) {
-    const at = { x: e.clientX, y: e.clientY, inField: e.target === editRef.current };
+    const at = { inField: e.target === editRef.current };
     requestAnimationFrame(() => readSelection(at));
   }
 
-  function readSelection(at: { x: number; y: number; inField: boolean }) {
+  function readSelection(at: { inField: boolean }) {
     const box = viewerRef.current;
     if (!box) return;
     let picked = "";
@@ -503,22 +653,11 @@ export function OutputFile({
       }
     }
     picked = picked.trim();
-    if (!picked) {
-      setPick(null);
-      return;
-    }
-    const r = box.getBoundingClientRect();
-    setPick({
-      text: picked,
-      x: Math.min(at.x - r.left + box.scrollLeft, box.clientWidth - 70),
-      y: at.y - r.top + box.scrollTop,
-    });
-  }
-
-  function addExcerpt(t: string) {
-    setExcerpts((xs) => (xs.includes(t) ? xs : [...xs, t]));
-    setPick(null);
-    window.getSelection()?.removeAllRanges();
+    if (!picked) return;
+    // Appended, not replaced: several parts pointed at before an instruction
+    // is sent are all affected by it, and they keep the order they were
+    // selected in.
+    setExcerpts((xs) => (xs.includes(picked) ? xs : [...xs, picked]));
   }
 
   return (
@@ -580,16 +719,39 @@ export function OutputFile({
                 {current.sessions.map((s) => (
                   <button
                     key={s.session_id}
-                    className="pick-option"
-                    onClick={() => setSource(s.session_id)}
+                    className={`pick-option source-${s.status}`}
+                    aria-disabled={s.status === "missing"}
+                    data-tip={
+                      s.status === "missing"
+                        ? "This conversation can no longer be found and cannot be recovered"
+                        : s.status === "archived"
+                          ? "This conversation was archived — open it or recover it"
+                          : s.status === "trashed"
+                            ? "This conversation was deleted — open it or recover it"
+                            : undefined
+                    }
+                    onClick={() => {
+                      if (s.status === "missing") return;
+                      if (s.status === "active") setSource(s.session_id);
+                      else setRecover(s);
+                    }}
                   >
-                    {s.title}
+                    <span className="pick-label">{s.title}</span>
+                    {s.status !== "active" && (
+                      <span className={`source-state ${s.status}`}>
+                        {s.status === "archived"
+                          ? "archived"
+                          : s.status === "trashed"
+                            ? "deleted"
+                            : "not found"}
+                      </span>
+                    )}
                   </button>
                 ))}
               </HeadMenu>
             )}
             {current.prompt && (
-              <HeadMenu label="What was asked for it" tip="The instruction behind this">
+              <HeadMenu label="Prompt used" tip="The instruction behind this" wide>
                 <div className="output-prompt-body">
                   <Markdown>{current.prompt}</Markdown>
                 </div>
@@ -604,10 +766,7 @@ export function OutputFile({
             {editable && (
               <button
                 className={editing ? "btn on" : "btn"}
-                onClick={() => {
-                  setEditing((v) => !v);
-                  setPick(null);
-                }}
+                onClick={() => setEditing((v) => !v)}
               >
                 {editing ? "Reading view" : "Edit text"}
               </button>
@@ -636,7 +795,6 @@ export function OutputFile({
           <div
             ref={viewerRef}
             className={`doc-viewer${deck ? " doc-viewer-deck" : ""}`}
-            onMouseDown={() => setPick(null)}
             onMouseUp={noticeSelection}
           >
             {deck ? (
@@ -676,22 +834,6 @@ export function OutputFile({
                 <Markdown>{text}</Markdown>
               </article>
             )}
-
-            {pick && (
-              <button
-                className="doc-pick"
-                style={{ left: pick.x, top: pick.y + 12 }}
-                onMouseDown={(e) => {
-                  // Keep the selection, and keep the viewer from clearing this.
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-                onMouseUp={(e) => e.stopPropagation()}
-                onClick={() => addExcerpt(pick.text)}
-              >
-                + Add to chat
-              </button>
-            )}
           </div>
         </div>
 
@@ -699,9 +841,10 @@ export function OutputFile({
           <div className="output-log">
             {log.length === 0 ? (
               <p className="blurb output-hint">
-                Tell the model what to change. To point at part of the document,
-                select it and press <em>Add to chat</em> — as many parts as you
-                like before sending.
+                Tell the model what to change. Select a passage and it joins the
+                change in the order it was picked — point at as many parts as you
+                like before sending. Once sent, the next selection starts the
+                next change.
               </p>
             ) : (
               log.map((s, i) => (
@@ -710,7 +853,10 @@ export function OutputFile({
                     {s.excerpts.length > 0 && (
                       <div className="output-quotes">
                         {s.excerpts.map((x, j) => (
-                          <blockquote key={j}>{clip(x)}</blockquote>
+                          <blockquote key={j}>
+                            <span className="output-quote-no">{j + 1}</span>
+                            {clip(x)}
+                          </blockquote>
                         ))}
                       </div>
                     )}
@@ -747,6 +893,7 @@ export function OutputFile({
               <div className="output-chips">
                 {excerpts.map((x, i) => (
                   <span key={i} className="output-chip" title={x}>
+                    <i className="output-chip-no">{i + 1}</i>
                     <span>{clip(x, 60)}</span>
                     <button
                       aria-label="Take this passage out"
@@ -807,6 +954,33 @@ export function OutputFile({
           </div>
         </aside>
       </div>
+
+      {recover && (
+        <div className="modal-overlay" onClick={() => setRecover(null)}>
+          <div className="modal source-recover" onClick={(e) => e.stopPropagation()}>
+            <h2 className="section">
+              {recover.status === "archived"
+                ? "This conversation was archived"
+                : "This conversation was deleted"}
+            </h2>
+            <p className="blurb">
+              {recover.status === "archived"
+                ? "It is still filed away. Open it and it comes back to the current ones."
+                : "It is still in the trash. Nothing has been destroyed, and it can be put back."}
+            </p>
+            <div className="modal-actions">
+              <button className="btn subtle" onClick={() => setRecover(null)}>
+                Leave it
+              </button>
+              <button className="btn on" onClick={() => void recoverSource(recover)}>
+                {recover.status === "archived"
+                  ? "Unarchive and open"
+                  : "Recover from trash and open"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {source !== null && (
         <Sheet depth={1} onClose={() => setSource(null)}>

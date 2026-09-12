@@ -2422,6 +2422,16 @@ pub async fn delete_make_output(state: State<'_, AppState>, id: i64) -> Result<(
     Ok(())
 }
 
+/// Put an output out of the way, or bring it back.
+#[tauri::command]
+pub async fn set_make_output_archived(
+    state: State<'_, AppState>,
+    id: i64,
+    archived: bool,
+) -> Result<(), String> {
+    state.store.lock().await.set_make_output_archived(id, archived).map_err(|e| e.to_string())
+}
+
 /// Ask for a revision to something that was made, and keep the result.
 ///
 /// The thread is per output and seeded with the document itself, so each
@@ -2623,6 +2633,29 @@ pub async fn delete_folder(
         *state.settings.lock().await = settings.clone();
         let _ = app.emit("settings:changed", settings);
         *state.current_folder.lock().await = crate::store::ROOT_FOLDER;
+    }
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+/// Fold one folder into another, moving everything it holds across.
+#[tauri::command]
+pub async fn merge_folders(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    from: i64,
+    into: i64,
+) -> Result<(), String> {
+    state.store.lock().await.merge_folders(from, into).map_err(|e| e.to_string())?;
+    // Standing in the folder that just went away: follow its contents.
+    if *state.current_folder.lock().await == from {
+        let target = if into == 0 { crate::store::ROOT_FOLDER } else { into };
+        let mut settings = state.settings.lock().await.clone();
+        settings.current_folder = target;
+        settings.save(&state.data_dir).map_err(|e| e.to_string())?;
+        *state.settings.lock().await = settings.clone();
+        let _ = app.emit("settings:changed", settings);
+        *state.current_folder.lock().await = target;
     }
     let _ = app.emit("ideas:changed", ());
     Ok(())
@@ -3331,6 +3364,30 @@ pub async fn delete_dispute_answer(
     Ok(())
 }
 
+/// Save a reply to one of the AI's notes on a whole conversation.
+///
+/// No read-back and no digest: there is no single claim for the answer to hang
+/// from, so nothing appears on the map for it. It is kept with the conversation,
+/// which is where the note was raised.
+#[tauri::command]
+pub async fn answer_session_dispute(
+    state: State<'_, AppState>,
+    session_id: i64,
+    challenge: String,
+    answer: String,
+) -> Result<i64, String> {
+    let answer = answer.trim().to_string();
+    if answer.is_empty() {
+        return Err("nothing was written".into());
+    }
+    state
+        .store
+        .lock()
+        .await
+        .add_session_dispute_answer(session_id, challenge.trim(), &answer)
+        .map_err(|e| e.to_string())
+}
+
 // ------------------------------------------------------------ import
 
 /// Read a pasted conversation without committing to it.
@@ -3492,6 +3549,18 @@ pub async fn list_claude_imports() -> Result<Vec<ClaudeImport>, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// File an import into the folder the import happened in.
+///
+/// Ending a live conversation files it where you are standing; an import is
+/// the same kind of arrival and belongs to the same folder. Imports that went
+/// anywhere else used to land in Root, wherever you were — a document about
+/// one folder's subjects filed among another folder's noise.
+async fn file_import_into_current_folder(state: &AppState, session_id: i64) {
+    let folder = *state.current_folder.lock().await;
+    let mut store = state.store.lock().await;
+    let _ = store.set_session_folder(session_id, folder);
+}
+
 /// Import one of those conversations, through the same preview-then-keep
 /// pipeline the paste box runs. The text is laid out with labels the parser
 /// knows, so the roles arrive recognised rather than guessed.
@@ -3540,6 +3609,7 @@ pub async fn import_claude_conversation(
             .archive_session(&rendered, &label, chrono::Utc::now(), Some(&state.md_dir))
             .map_err(|e| e.to_string())?
     };
+    file_import_into_current_folder(&state, session_id).await;
 
     // Only filed, not read: imports wait in the queue with everything else
     // until the person confirms they should be digested.
@@ -3581,6 +3651,7 @@ pub async fn import_conversation(
             .archive_session(&rendered, &label, chrono::Utc::now(), Some(&state.md_dir))
             .map_err(|e| e.to_string())?
     };
+    file_import_into_current_folder(&state, session_id).await;
 
     // Only filed, not read: imports wait in the queue with everything else
     // until the person confirms they should be digested.
@@ -3589,6 +3660,137 @@ pub async fn import_conversation(
         Archived { session_id, reason: EndReason::Done, turn_count: parsed.turns.len() },
     );
 
+    Ok(session_id)
+}
+
+// ------------------------------------------------------------- learning mode
+
+/// Split a document into turns the extractor can quote from.
+///
+/// A whole essay as one turn gives the model a wall it cannot cite a sentence
+/// out of cleanly, and on a local model it overruns the context. Paragraph
+/// boundaries are where meaning already breaks, so they are where the turns
+/// break, regrouped up to a readable size.
+fn chunk_document(text: &str) -> Vec<String> {
+    const TARGET: usize = 1800;
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for para in text.split("\n\n") {
+        let para = para.trim();
+        if para.is_empty() {
+            continue;
+        }
+        if !current.is_empty() && current.len() + para.len() + 2 > TARGET {
+            chunks.push(std::mem::take(&mut current));
+        }
+        // A single paragraph longer than the target is split on its own lines,
+        // so one enormous block cannot defeat the limit.
+        if para.len() > TARGET {
+            if !current.is_empty() {
+                chunks.push(std::mem::take(&mut current));
+            }
+            let mut line_buf = String::new();
+            for line in para.lines() {
+                if !line_buf.is_empty() && line_buf.len() + line.len() + 1 > TARGET {
+                    chunks.push(std::mem::take(&mut line_buf));
+                }
+                if !line_buf.is_empty() {
+                    line_buf.push('\n');
+                }
+                line_buf.push_str(line);
+            }
+            if !line_buf.is_empty() {
+                chunks.push(line_buf);
+            }
+            continue;
+        }
+        if !current.is_empty() {
+            current.push_str("\n\n");
+        }
+        current.push_str(para);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// Take a document meant to be an output and read it back into a map.
+///
+/// The inverse of the Make tab. There, thinking is turned into a document;
+/// here a document is turned into the thinking under it — imported as a
+/// conversation whose one speaker is the document, then filed like any other
+/// import: waiting in the queue until the reading is asked for, not read the
+/// moment it lands.
+#[tauri::command]
+pub async fn learn_document(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<i64, String> {
+    let name = std::path::Path::new(&path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "document".into());
+    // A PDF is binary: its bytes cannot be read as text, and no quote could be
+    // verified against them. If the chosen model accepts documents, it is
+    // asked to lay the text out; if it does not, `document_text` says so in
+    // words rather than this failing as an unreadable file.
+    let looks_like_pdf = std::path::Path::new(&path)
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(false);
+    let read_path = path.clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let p = std::path::Path::new(&read_path);
+        if !p.is_file() {
+            return Err("that is not a file".into());
+        }
+        std::fs::read(p).map_err(|e| format!("could not read that document: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let text = if looks_like_pdf || bytes.starts_with(b"%PDF") {
+        let provider = {
+            let guard = state.extractor.lock().await;
+            guard.as_ref().ok_or("choose a model before adding a document")?.provider.clone()
+        };
+        provider.document_text(&name, "application/pdf", &bytes).await.map_err(|e| e.to_string())?
+    } else {
+        String::from_utf8(bytes).map_err(|_| {
+            "that file is not text — add Markdown, plain text, or a PDF a model can read"
+                .to_string()
+        })?
+    };
+
+    let chunks = chunk_document(&text);
+    if chunks.is_empty() {
+        return Err("that document was empty".into());
+    }
+    let messages: Vec<crate::llm::types::Message> = chunks
+        .into_iter()
+        .map(|content| crate::llm::types::Message { role: crate::llm::types::Role::User, content })
+        .collect();
+    let rendered = crate::session::transcript::render(&messages);
+
+    let session_id = {
+        let mut store = state.store.lock().await;
+        store
+            .archive_session(
+                &rendered,
+                &format!("learned/{name}"),
+                chrono::Utc::now(),
+                Some(&state.md_dir),
+            )
+            .map_err(|e| e.to_string())?
+    };
+    let _ = app.emit(
+        "session:archived",
+        Archived { session_id, reason: EndReason::Done, turn_count: rendered.spans.len() },
+    );
+
+    file_import_into_current_folder(&state, session_id).await;
     Ok(session_id)
 }
 
@@ -3716,6 +3918,7 @@ pub async fn import_obsidian_note(
             .archive_session(&rendered, &label, chrono::Utc::now(), Some(&state.md_dir))
             .map_err(|e| e.to_string())?
     };
+    file_import_into_current_folder(&state, session_id).await;
 
     // Only filed, not read: imports wait in the queue with everything else
     // until the person confirms they should be digested.

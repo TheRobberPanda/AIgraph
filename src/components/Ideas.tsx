@@ -17,6 +17,7 @@ import { ConversationFile, IdeaFile } from "./Deep";
 import { categoryColor } from "../lib/categories";
 import { ROOT_FOLDER } from "../lib/folders";
 import { longDate } from "../lib/format";
+import { repeatedAmong } from "../lib/similarity";
 import {
   extractionProgress,
   listIdeas,
@@ -102,6 +103,9 @@ export default function Ideas({
   const [showArchived, setShowArchived] = useState(false);
   const [adding, setAdding] = useState(false);
   const [binOpen, setBinOpen] = useState(false);
+  /** Conversations that were read and yielded nothing are kept out of the way
+   *  rather than gone — this is the drawer they wait in. */
+  const [showEmpty, setShowEmpty] = useState(false);
   // Re-renders once a second purely so the elapsed counter advances between
   // phase events — which can be minutes apart on a local model.
   const [, tick] = useState(0);
@@ -133,6 +137,18 @@ export default function Ideas({
   const shown = useMemo(
     () => (subjects.size === 0 ? ideas : ideas.filter((i) => subjects.has(i.category))),
     [ideas, subjects],
+  );
+
+  // Where a thought is likely the same one said twice. Ideas are matched on
+  // their claim and title; conversations on their title and opening. The map
+  // is id -> the id of its closest match, when there is one worth pointing at.
+  const ideaRepeats = useMemo(
+    () => repeatedAmong(shown, (i) => i.id, (i) => `${i.title} ${i.claim}`, 0.62),
+    [shown],
+  );
+  const sessionRepeats = useMemo(
+    () => repeatedAmong(sessions, (s) => s.id, (s) => `${s.title} ${s.opening}`, 0.6),
+    [sessions],
   );
 
   const groups = useMemo(() => {
@@ -211,10 +227,16 @@ export default function Ideas({
         });
       }
     }
+    // Conversations that came out with nothing filed under them. In the
+    // current view only — the archive is the conversations themselves, so
+    // there they are already listed — and only ones the filter keeps, so the
+    // drawer narrows with the list above it.
+    const empty = visible.filter((s) => !bySession.has(s.id));
+
     // One folder is shown at a time, so the list is flat: no folder headings,
     // and no group for a conversation filed elsewhere. This tab is the folder
     // it is scoped to, and nothing outside it belongs on the page.
-    return { rows, orphaned };
+    return { rows, orphaned, empty };
   }, [shown, sessions, query, showArchived]);
 
   function toggle(sessionId: number) {
@@ -450,6 +472,17 @@ export default function Ideas({
                     >
                       {sessionIdeas.length}
                     </span>
+                    {sessionRepeats.has(session.id) && (
+                      <button
+                        type="button"
+                        className="repeat-mark"
+                        data-tip="You likely repeated this conversation somewhere — click to go there"
+                        aria-label="Likely repeated elsewhere"
+                        onClick={() => openConversation(sessionRepeats.get(session.id)!)}
+                      >
+                        !
+                      </button>
+                    )}
                     <span className="chat-actions">
                       <button
                         className="icon-btn"
@@ -506,6 +539,17 @@ export default function Ideas({
                               </span>
                             )}
                           </button>
+                          {ideaRepeats.has(idea.id) && (
+                            <button
+                              type="button"
+                              className="repeat-mark"
+                              data-tip="You likely repeated this idea somewhere — click to go there"
+                              aria-label="Likely repeated elsewhere"
+                              onClick={() => openIdea(ideaRepeats.get(idea.id)!)}
+                            >
+                              !
+                            </button>
+                          )}
                         </li>
                       );
                     })}
@@ -514,6 +558,73 @@ export default function Ideas({
               </div>
             );
           })}
+
+          {/* Read, and nothing came out. Same list, folded away: a conversation
+              that yielded no ideas is still a conversation, and hiding it
+              entirely made it look deleted. Opening one closes the drawer first,
+              so the panel it opens is not drawn over by the list it came from. */}
+          {!showArchived && groups.empty.length > 0 && (
+            <div className="tree-group empty-convos">
+              <button
+                className="tree-head empty-head"
+                aria-expanded={showEmpty}
+                onClick={() => setShowEmpty((v) => !v)}
+              >
+                <span className={`tree-caret${showEmpty ? "" : " closed"}`} aria-hidden="true" />
+                <span className="tree-title muted">
+                  {groups.empty.length} conversation{groups.empty.length === 1 ? "" : "s"} with no
+                  ideas
+                </span>
+              </button>
+              {showEmpty && (
+                <ul className="list tree-children">
+                  {groups.empty.map((session) => {
+                    const label = session.title || session.opening || `Conversation ${session.id}`;
+                    return (
+                      <li key={session.id} className="chat-line">
+                        <button
+                          className="row-btn"
+                          onClick={() => {
+                            setShowEmpty(false);
+                            openConversation(session.id);
+                          }}
+                        >
+                          <span className="dot" aria-hidden="true" />
+                          <span className="row-main">{shortTitle(label)}</span>
+                          <span className="row-meta">{session.turn_count} turns</span>
+                        </button>
+                        <span className="chat-actions">
+                          <button
+                            className="icon-btn"
+                            data-tip="Re-read this conversation for ideas"
+                            onClick={() => void reextractSession(session.id).then(refresh)}
+                          >
+                            <IconRewind />
+                          </button>
+                          <button
+                            className="icon-btn"
+                            data-tip={session.archived ? "Unarchive" : "Archive"}
+                            onClick={() =>
+                              void setSessionArchived(session.id, !session.archived).then(refresh)
+                            }
+                          >
+                            <IconArchive />
+                          </button>
+                          <button
+                            className="icon-btn"
+                            data-tip="Delete"
+                            onClick={() => setDeleting(session.id)}
+                          >
+                            <IconTrash />
+                          </button>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
 
           {groups.orphaned.length > 0 && (
             <div className="tree-group">

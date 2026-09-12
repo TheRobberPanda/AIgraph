@@ -235,6 +235,12 @@ impl Embedded {
         // releases do — pinning would reintroduce exactly the problem, and it
         // did: the pinned build could not read the model it was fetched for.
         let tag = latest_build().unwrap_or_else(|| PINNED_BUILD.to_string());
+        // Linux publishes no prebuilt CUDA archive. Rather than leave the
+        // button off, build one here from the same tagged source — the machine
+        // already has the toolkit, or the option would not have been offered.
+        if flavour == "cuda" && cfg!(target_os = "linux") {
+            return self.build_cuda_from_source(&tag, on_progress);
+        }
         let asset = server_asset(&tag, flavour).ok_or(
             "no prebuilt llama-server for this platform — build llama.cpp and put llama-server on PATH",
         )?;
@@ -297,6 +303,124 @@ impl Embedded {
         std::fs::write(dir.join("build.txt"), format!("{tag} · {flavour}"))
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// Build a CUDA `llama-server` from source, on the machine.
+    ///
+    /// Linux is the one hole in llama.cpp's prebuilt matrix — there is a
+    /// Vulkan archive for every vendor, and no CUDA one at all. Where the
+    /// toolkit is present this fetches the tagged source, configures it with
+    /// `GGML_CUDA=ON`, and compiles it into the engine directory the same way
+    /// a downloaded archive would land there. The whole build runs in a
+    /// scratch directory, so an interrupted compile never leaves a broken
+    /// `llama-server` looking installed.
+    fn build_cuda_from_source(
+        &self,
+        tag: &str,
+        on_progress: &(dyn Fn(DownloadProgress) + Send + Sync),
+    ) -> Result<(), String> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (tag, on_progress);
+            return Err(
+                "building a CUDA llama-server from source is only supported on Linux".into()
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use std::process::Command;
+
+            if which_on_path("cmake").is_none() {
+                return Err(
+                    "the CUDA install needs cmake and the CUDA toolkit (nvcc) on PATH".into()
+                );
+            }
+
+            let work = self.root.join("engine-build");
+            let _ = std::fs::remove_dir_all(&work);
+            std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+
+            let archive = work.join("llama-src.tar.gz");
+            crate::stt::model::download_to(
+                &format!("https://github.com/ggml-org/llama.cpp/archive/refs/tags/{tag}.tar.gz"),
+                &archive,
+                "llama.cpp source",
+                40_000_000,
+                on_progress,
+            )
+            .map_err(|e| e.to_string())?;
+
+            let unpacked = work.join("src");
+            std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
+            unpack(&archive, &unpacked)?;
+            let _ = std::fs::remove_file(&archive);
+
+            // The tarball nests everything under `llama.cpp-<tag>`.
+            let source = std::fs::read_dir(&unpacked)
+                .map_err(|e| e.to_string())?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .find(|p| p.is_dir())
+                .ok_or("the source archive was empty")?;
+
+            // The UI watches this channel for the readout; "compiling" is not
+            // a byte count, so it is a word rather than a percentage.
+            on_progress(DownloadProgress { what: "compiling".into(), received: 0, total: 0 });
+
+            let build = work.join("build");
+            let jobs =
+                std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).to_string();
+            let configure = Command::new("cmake")
+                .arg("-S")
+                .arg(&source)
+                .arg("-B")
+                .arg(&build)
+                .arg("-DCMAKE_BUILD_TYPE=Release")
+                .arg("-DGGML_CUDA=ON")
+                .arg("-DLLAMA_CURL=OFF")
+                .arg("-DLLAMA_BUILD_TESTS=OFF")
+                .arg("-DLLAMA_BUILD_EXAMPLES=OFF")
+                .arg("-DLLAMA_BUILD_SERVER=ON")
+                .output()
+                .map_err(|e| format!("could not run cmake: {e}"))?;
+            if !configure.status.success() {
+                return Err(format!(
+                    "cmake could not configure the CUDA build:\n{}",
+                    tail_of(&configure.stderr)
+                ));
+            }
+
+            let compile = Command::new("cmake")
+                .arg("--build")
+                .arg(&build)
+                .arg("--config")
+                .arg("Release")
+                .arg("-j")
+                .arg(&jobs)
+                .output()
+                .map_err(|e| format!("could not run the compiler: {e}"))?;
+            if !compile.status.success() {
+                return Err(format!("the CUDA build failed:\n{}", tail_of(&compile.stderr)));
+            }
+
+            let dir = self.engine_dir();
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            copy_dir_contents(&build.join("bin"), &dir)?;
+
+            let bin = dir.join(server_name());
+            if !bin.is_file() {
+                return Err("the build finished but produced no llama-server".into());
+            }
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755));
+            }
+            std::fs::write(dir.join("build.txt"), format!("{tag} · cuda (built here)"))
+                .map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_dir_all(&work);
+            Ok(())
+        }
     }
 
     /// Where an engine we installed lives. Its own directory, apart from the
@@ -652,13 +776,15 @@ pub fn cuda_runtime_asset() -> Option<String> {
 
 /// Whether a CUDA build exists for this platform at all.
 ///
-/// Windows only, and not because of a choice made here: llama.cpp publishes
-/// `win-cuda` and, for Linux, cpu, vulkan, rocm, sycl and openvino — no CUDA.
-/// Offering it on Linux would mean building llama.cpp from source with the
-/// toolchain that implies. Vulkan gets most of the way there on every vendor,
-/// and a self-built CUDA `llama-server` on PATH is used ahead of ours.
+/// Windows gets a prebuilt archive. Linux has none upstream, so there the
+/// option means "build one here" — and is only real when the toolkit to do it
+/// is already on the machine. Vulkan still gets most of the way there on every
+/// vendor, and a self-built CUDA `llama-server` on PATH is used ahead of ours.
 pub fn cuda_available() -> bool {
-    server_asset("b0", "cuda").is_some()
+    if server_asset("b0", "cuda").is_some() {
+        return true;
+    }
+    cfg!(target_os = "linux") && which_on_path("nvcc").is_some() && which_on_path("cmake").is_some()
 }
 
 fn server_asset(tag: &str, flavour: &str) -> Option<String> {
@@ -867,6 +993,35 @@ fn explain(tail: &[String], code: Option<i32>) -> String {
         "llama-server exited immediately:\n{}",
         last.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
     )
+}
+
+/// The last few lines of a command's stderr, for a build failure worth reading.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn tail_of(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let lines: Vec<&str> = text.lines().rev().take(15).collect();
+    lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
+/// Move everything out of one directory into another, leaving the source.
+///
+/// A CMake build drops `llama-server` and every shared library it loads beside
+/// it into `bin/`. They have to travel together: the binary resolves its
+/// libraries from its own directory, so taking only the executable gives a
+/// server that cannot start.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn copy_dir_contents(from: &Path, into: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(from).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        let dest = into.join(entry.file_name());
+        if path.is_dir() {
+            std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+            copy_dir_contents(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 /// Look for a binary on PATH without pulling in a crate for it.

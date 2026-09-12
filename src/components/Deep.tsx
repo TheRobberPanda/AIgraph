@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import Markdown from "./Markdown";
 import SpeakInto from "./SpeakInto";
 import { useUndoable } from "../lib/undo";
@@ -10,6 +10,7 @@ import { categoryColor } from "../lib/categories";
 import { getSettings, onSettingsChanged, type ChatStance } from "../lib/settings";
 import {
   answerDispute,
+  answerSessionDispute,
   conversationView,
   digestDisputeAnswer,
   ideaDeepDive,
@@ -18,8 +19,10 @@ import {
   type ConversationView,
   type DisputeAnswer,
   type Segment,
+  type SessionDisputeAnswer,
   type IdeaView,
 } from "../lib/views";
+import { isImportConversation } from "../lib/import";
 
 /**
  * Group a turn's runs into paragraphs.
@@ -55,16 +58,20 @@ function paragraphs(segments: Segment[]): Segment[][] {
  */
 function Dispute({
   ideaId,
+  sessionId,
   challenge,
   answers,
   startOpen,
   asked,
   onAnswered,
 }: {
-  ideaId: number;
+  ideaId?: number;
+  /** Set when the note is on a whole conversation rather than one idea: the
+   *  reply is filed against the session, and there is no claim to read back. */
+  sessionId?: number;
   challenge: string;
   /** Replies already recorded against this exact note. */
-  answers: DisputeAnswer[];
+  answers: { id: number; answer: string; claim?: string }[];
   /** Set when this dispute is the one that was clicked to get here — the
    *  chat is scrolled to it, since a file several screens long does not show
    *  the bottom by default. */
@@ -94,6 +101,13 @@ function Dispute({
     setBusy(true);
     setError(null);
     try {
+      if (sessionId !== undefined) {
+        await answerSessionDispute(sessionId, challenge, text);
+        setDraft("");
+        onAnswered();
+        return;
+      }
+      if (ideaId === undefined) return;
       const id = await answerDispute(ideaId, challenge, text);
       setDraft("");
       onAnswered();
@@ -129,7 +143,10 @@ function Dispute({
         <p key={a.id} className="dispute-answered">
           <span className="badge you">You</span>
           {a.answer}
-          {!a.claim && <span className="tag">not read back yet</span>}
+          {/* A conversation-level answer is never read back into a claim — it
+              has no idea to hang from — so it is only the idea's answers that
+              can be waiting on that. */}
+          {ideaId !== undefined && !a.claim && <span className="tag">not read back yet</span>}
         </p>
       ))}
 
@@ -196,29 +213,29 @@ function Dispute({
 function Nudges({
   strong,
   weak,
-  about,
   ideaId,
+  sessionId,
   answers,
+  sessionAnswers,
   onAnswered,
 }: {
   strong: string[];
   weak: string[];
-  /** What the question should be about — the idea's own claim. */
-  about?: string;
   /** Set only in an idea's own file. On a conversation's file the notes are
    *  about the whole session, and there is no single idea to hang a moon
-   *  from — so they stay observations there. */
+   *  from — so they are answered against the conversation instead. */
   ideaId?: number;
+  /** Set only in a conversation's own file. */
+  sessionId?: number;
   answers?: DisputeAnswer[];
+  sessionAnswers?: SessionDisputeAnswer[];
   onAnswered?: () => void;
 }) {
-  const [askWhy, setAskWhy] = useState(true);
   const [stance, setStance] = useState<ChatStance>("neutral");
   useEffect(() => {
     let alive = true;
     const take = (s: { ask_why: boolean; chat_stance: ChatStance }) => {
       if (!alive) return;
-      setAskWhy(s.ask_why);
       setStance(s.chat_stance);
     };
     void getSettings().then(take);
@@ -257,17 +274,18 @@ function Nudges({
       {weakShown.length > 0 && (
         <section>
           <div className="notes">
-            {weakShown.map((t, i) =>
-              // A doubt you can answer, where there is an idea for the answer
-              // to belong to. Elsewhere — a whole conversation's notes — it
-              // stays what it was, an observation with nowhere to hang a
-              // reply.
-              ideaId !== undefined && onAnswered ? (
+            {weakShown.map((t, i) => {
+              // A doubt you can answer, against the idea it is about or the
+              // conversation it was raised on. A box with a mic, either way —
+              // an argument made out loud comes out in your own words.
+              const recorded = sessionAnswers ?? answers ?? [];
+              return (ideaId !== undefined || sessionId !== undefined) && onAnswered ? (
                 <Dispute
                   key={i}
                   ideaId={ideaId}
+                  sessionId={sessionId}
                   challenge={t}
-                  answers={(answers ?? []).filter((a) => a.challenge === t)}
+                  answers={recorded.filter((a) => a.challenge === t)}
                   onAnswered={onAnswered}
                 />
               ) : (
@@ -275,48 +293,13 @@ function Nudges({
                   <span className="badge">AI</span>
                   {t}
                 </p>
-              ),
-            )}
+              );
+            })}
           </div>
         </section>
       )}
-      {/* A question, not another note — and deliberately not in the AI's
-          voice. The notes above say what the model observed; this asks the
-          one thing an observation cannot answer for you. Switched off in
-          Settings by anyone who finds it presumptuous.
-          
-          And answerable, like the doubts are. It was the one thing on the
-          page addressed directly to the reader with nowhere to reply: a
-          question that cannot be answered is a rhetorical question, which
-          is not what this was for. */}
-      {askWhy && (strongShown.length > 0 || weakShown.length > 0) && (
-        ideaId !== undefined && onAnswered ? (
-          <Dispute
-            asked
-            ideaId={ideaId}
-            challenge={askWhyText(about)}
-            answers={(answers ?? []).filter((a) => a.challenge === askWhyText(about))}
-            onAnswered={onAnswered}
-          />
-        ) : (
-          <p className="ask-why">{askWhyText(about)}</p>
-        )
-      )}
     </div>
   );
-}
-
-/** The question put to the reader, worded once so the answer recorded against
- *  it still matches after a re-render. */
-function askWhyText(about?: string): string {
-  return `Why would ${about ? shortenClaim(about) : "this"} be so?`;
-}
-
-/** A claim, cut to something that fits inside a sentence. */
-function shortenClaim(claim: string): string {
-  const one = claim.trim().replace(/\s+/g, " ").replace(/[.!?]+$/, "");
-  const lower = one.charAt(0).toLowerCase() + one.slice(1);
-  return lower.length > 70 ? `${lower.slice(0, 70).trimEnd()}…` : lower;
 }
 
 /**
@@ -332,6 +315,7 @@ export function ConversationFile({
   highlightIdea,
   onTrace,
   onClose,
+  repeatWarning = false,
 }: {
   sessionId: number;
   /** An idea whose words to go straight to and flash — set when this file was
@@ -341,6 +325,9 @@ export function ConversationFile({
   /** Pointing at one of these picks it out on the map behind the panel. */
   onTrace?: (ideaId: number | null) => void;
   onClose: () => void;
+  /** Opened from the repeat warning: tint it, so it is clear this file is being
+   *  shown as a suspected duplicate rather than as the one you picked. */
+  repeatWarning?: boolean;
 }) {
   const [view, setView] = useState<ConversationView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -425,10 +412,15 @@ export function ConversationFile({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, highlightIdea]);
 
+  const load = useCallback(
+    () => conversationView(sessionId).then(setView).catch((e) => setError(String(e))),
+    [sessionId],
+  );
+
   useEffect(() => {
     setView(null);
-    conversationView(sessionId).then(setView).catch((e) => setError(String(e)));
-  }, [sessionId]);
+    void load();
+  }, [load]);
 
   // Closing the file must not leave a node lit on the map behind it. Held in a
   // ref because the caller passes an inline function: depending on it directly
@@ -438,11 +430,67 @@ export function ConversationFile({
   traceRef.current = onTrace;
   useEffect(() => () => traceRef.current?.(null), []);
 
+  // The list of what was taken from this one. Shared by the transcript view and
+  // the document view — an import is read back as a document, but what came out
+  // of it is the same list either way.
+  const aside = view && (
+    <aside className="deep-aside">
+      <h2 className="taken-head">Extracted ideas</h2>
+      {taken.length === 0 ? (
+        <p className="blurb">Nothing was recorded from this one.</p>
+      ) : (
+        <ul className="list" onMouseLeave={() => onTrace?.(null)}>
+          {taken.map((t) => (
+            <li key={t.ideaId}>
+              <button
+                className="row-btn"
+                onClick={() => setOpenIdea(t.ideaId)}
+                onMouseEnter={() => {
+                  setTrace(t.ideaId);
+                  onTrace?.(t.ideaId);
+                  show(t.ideaId);
+                }}
+                onMouseLeave={() => {
+                  setTrace(null);
+                  onTrace?.(null);
+                }}
+              >
+                <span className="dot" />
+                <span className="row-main">
+                  {t.title}
+                  {trace === t.ideaId && (
+                    <span className="trace">
+                      {/* The quote alone rarely says why it was recorded —
+                          the crystallisation is the part that does. Two
+                          blocks, not two inline spans: run together on one
+                          line the words that were said read as the tail of
+                          the sentence explaining them. */}
+                      {t.reasoning && <em className="trace-why">{t.reasoning}</em>}
+                      <span className="trace-quote">“{t.quote}”</span>
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <Nudges
+        strong={view.strong}
+        weak={view.weak}
+        sessionId={sessionId}
+        sessionAnswers={view.answers}
+        onAnswered={() => void load()}
+      />
+    </aside>
+  );
+
   return (
     // Its own scroll regions rather than one for the whole file: the
     // transcript and the list of what came out of it are two things read
     // against each other, and moving one must not move the other.
-    <div className="pane-inner deep-file">
+    <div className={repeatWarning ? "pane-inner deep-file repeat-file" : "pane-inner deep-file"}>
       <header className="head">
         <button className="btn" onClick={onClose}>← Back</button>
         {view && (
@@ -453,6 +501,27 @@ export function ConversationFile({
       {error && <p className="error">{error}</p>}
       {!view ? (
         <p className="muted">Loading…</p>
+      ) : isImportConversation(view.model) ? (
+        // An import reads as the document it came from, not as a transcript of
+        // a conversation that never happened — markdown, in one column, with
+        // what was read out of it beside it.
+        <div className="deep-split">
+          <div className="deep-main">
+            <div className="deep-doc">
+              <p className="doc-label muted">
+                {view.model.startsWith("learned")
+                  ? "A document, imported and read back for ideas."
+                  : "Brought in from outside — imported, not lived."}
+              </p>
+              {view.turns.map((turn) => (
+                <Markdown key={turn.id}>
+                  {turn.segments.map((s) => s.text).join("")}
+                </Markdown>
+              ))}
+            </div>
+          </div>
+          {aside}
+        </div>
       ) : (
         <>
           {/* The conversation first, as it happened. What was taken from it sits
@@ -485,6 +554,22 @@ export function ConversationFile({
                             "--tag-color": categoryColor(seg.category ?? ""),
                           } as CSSProperties
                         }
+                        onMouseEnter={(e) => {
+                          // Whether the why-hint opens right or left is
+                          // decided at the moment it is asked for: opening
+                          // right from a mark near the transcript's edge
+                          // would run the hint across the boundary where the
+                          // extracted-ideas panel sits, and the transcript's
+                          // scroll region cuts it off there.
+                          const mark = e.currentTarget;
+                          const column = mark.closest<HTMLElement>(".deep-main");
+                          if (!column) return;
+                          const m = mark.getBoundingClientRect();
+                          const c = column.getBoundingClientRect();
+                          const root =
+                            parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+                          mark.classList.toggle("flip", m.left + root * 28 > c.right);
+                        }}
                         onClick={() => seg.idea_id && setOpenIdea(seg.idea_id)}
                       >
                         {seg.text}
@@ -512,50 +597,7 @@ export function ConversationFile({
 
           </div>
 
-          <aside className="deep-aside">
-          <h2 className="taken-head">Extracted ideas</h2>
-          {taken.length === 0 ? (
-            <p className="blurb">Nothing was recorded from this one.</p>
-          ) : (
-            <ul className="list" onMouseLeave={() => onTrace?.(null)}>
-              {taken.map((t) => (
-                <li key={t.ideaId}>
-                  <button
-                    className="row-btn"
-                    onClick={() => setOpenIdea(t.ideaId)}
-                    onMouseEnter={() => {
-                      setTrace(t.ideaId);
-                      onTrace?.(t.ideaId);
-                      show(t.ideaId);
-                    }}
-                    onMouseLeave={() => {
-                      setTrace(null);
-                      onTrace?.(null);
-                    }}
-                  >
-                    <span className="dot" />
-                    <span className="row-main">
-                      {t.title}
-                      {trace === t.ideaId && (
-                        <span className="trace">
-                          {/* The quote alone rarely says why it was recorded —
-                              the crystallisation is the part that does. Two
-                              blocks, not two inline spans: run together on one
-                              line the words that were said read as the tail of
-                              the sentence explaining them. */}
-                          {t.reasoning && <em className="trace-why">{t.reasoning}</em>}
-                          <span className="trace-quote">“{t.quote}”</span>
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <Nudges strong={view.strong} weak={view.weak} />
-          </aside>
+          {aside}
           </div>
         </>
       )}
@@ -857,7 +899,7 @@ export function IdeaFile({
                     })
                   }
                 >
-                  Settle it
+                  Resolve it
                 </button>
               </div>
             ))}
@@ -889,7 +931,7 @@ export function IdeaFile({
                       .finally(() => setBusyUnsettle(null));
                   }}
                 >
-                  Settle it again
+                  Resolve it again
                 </button>
               </div>
             ))}
@@ -901,7 +943,6 @@ export function IdeaFile({
           <Nudges
             strong={view.strong}
             weak={view.weak}
-            about={view.claim}
             ideaId={view.id}
             answers={view.answers}
             onAnswered={load}

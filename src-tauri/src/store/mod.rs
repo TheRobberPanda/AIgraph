@@ -184,6 +184,8 @@ pub struct ConversationView {
     pub turns: Vec<ViewTurn>,
     pub strong: Vec<String>,
     pub weak: Vec<String>,
+    /// Replies to the AI's notes on this whole conversation.
+    pub answers: Vec<SessionDisputeAnswer>,
     /// The AI settings this conversation ran under, where they were recorded.
     /// An open map rather than a named field per setting: what the model was
     /// told is going to grow, and the screen can show whatever is in here
@@ -274,6 +276,18 @@ pub struct DisputeAnswer {
     /// which is also what "not yet a moon on the map" means.
     pub claim: String,
     pub title: String,
+    pub created_at: String,
+}
+
+/// An answer to one of the AI's notes on a whole conversation.
+///
+/// There is no idea here for the answer to hang from, so it has no claim and
+/// no moon on the map — it is kept with the conversation, where the note was.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionDisputeAnswer {
+    pub id: i64,
+    pub challenge: String,
+    pub answer: String,
     pub created_at: String,
 }
 
@@ -1231,6 +1245,7 @@ impl Store {
             turns,
             strong,
             weak,
+            answers: self.session_dispute_answers(session_id)?,
             ai_profile,
         })
     }
@@ -1414,6 +1429,45 @@ impl Store {
 
     pub fn delete_dispute_answer(&self, answer_id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM dispute_answers WHERE id = ?1", [answer_id])?;
+        Ok(())
+    }
+
+    /// Record a reply to one of the AI's notes on a whole conversation.
+    pub fn add_session_dispute_answer(
+        &self,
+        session_id: i64,
+        challenge: &str,
+        answer: &str,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO session_dispute_answers (session_id, challenge, answer, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![session_id, challenge, answer, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Every reply recorded against a conversation's notes, oldest first.
+    pub fn session_dispute_answers(&self, session_id: i64) -> Result<Vec<SessionDisputeAnswer>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, challenge, answer, created_at
+             FROM session_dispute_answers WHERE session_id = ?1 ORDER BY created_at, id",
+        )?;
+        let rows = stmt
+            .query_map([session_id], |r| {
+                Ok(SessionDisputeAnswer {
+                    id: r.get(0)?,
+                    challenge: r.get(1)?,
+                    answer: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn delete_session_dispute_answer(&self, answer_id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM session_dispute_answers WHERE id = ?1", [answer_id])?;
         Ok(())
     }
 
@@ -1640,8 +1694,7 @@ impl Store {
                     s.title
              FROM sessions s
              WHERE s.archived = 0
-               AND (?1 IS NULL OR s.folder_id = ?1)
-               AND EXISTS (SELECT 1 FROM evidence e WHERE e.session_id = s.id)",
+               AND (?1 IS NULL OR s.folder_id = ?1)",
         )?;
         for row in sessions.query_map([folder], |r| {
             let id: i64 = r.get(0)?;
@@ -1685,11 +1738,15 @@ impl Store {
                -- on the map without a quote behind it: a pair added by hand to
                -- try the settling UI with has no transcript, and leaving it off
                -- the map would hide the very link the button was pressed for.
-               OR EXISTS (
+               -- Only on the all-folders map, though: a relation carries no
+               -- folder, so on a folder's map it would drag in the other side
+               -- of the pair from wherever it happens to live — a node from
+               -- another folder, connected by a line to this one's.
+               OR (?1 IS NULL AND EXISTS (
                  SELECT 1 FROM relations r
                  WHERE r.kind = 'contradicts' AND r.resolved_at IS NULL
                    AND (r.idea_a = i.id OR r.idea_b = i.id)
-               )
+               ))
              )",
         )?;
         for row in ideas.query_map([folder], |r| {
@@ -1774,10 +1831,19 @@ impl Store {
             });
         }
 
+        // Which nodes actually made it onto this map, so an edge can be
+        // checked against them. Computed before any edge is added: a link that
+        // points at a node which was never added draws as a line to nowhere,
+        // and on a folder's map the unfiltered queries below reach ideas and
+        // conversations in other folders.
+        let here: std::collections::HashSet<String> =
+            g.nodes.iter().map(|n| n.id.clone()).collect();
+
         // A conversation links to every idea it produced. An idea supported by
         // two conversations therefore joins them — which is the whole point of
         // the shape: shared ideas are the only thing connecting one stretch of
-        // thinking to another.
+        // thinking to another. Filtered against `here` so only links between
+        // nodes that are actually on this map survive.
         let mut from = self.conn.prepare("SELECT DISTINCT session_id, idea_id FROM evidence")?;
         for row in from.query_map([], |r| {
             let (s, i): (i64, i64) = (r.get(0)?, r.get(1)?);
@@ -1790,13 +1856,11 @@ impl Store {
                 reasoning: None,
             })
         })? {
-            g.edges.push(row?);
+            let edge = row?;
+            if here.contains(&edge.source) && here.contains(&edge.target) {
+                g.edges.push(edge);
+            }
         }
-
-        // Which nodes actually made it onto this map, so an edge can be
-        // checked against them.
-        let here: std::collections::HashSet<String> =
-            g.nodes.iter().map(|n| n.id.clone()).collect();
 
         // Faint links between ideas judged related but not the same. Without
         // these a conservative merge threshold leaves the map with no structure
@@ -1839,8 +1903,17 @@ impl Store {
         let by_category: Vec<(i64, String)> = cat_stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
+        // Only ideas that are on this map take part in a chain. Leaving an
+        // off-map idea in would break the chain at every folder boundary: the
+        // next on-map idea would be linked to a node that is not there, and
+        // the link would be dropped, stranding the rest of the subject.
+        let on_map_ideas: std::collections::HashSet<i64> =
+            g.nodes.iter().filter_map(|n| n.idea_id).collect();
         let mut prev: Option<(i64, String)> = None;
         for (id, category) in by_category {
+            if !on_map_ideas.contains(&id) {
+                continue;
+            }
             if let Some((prev_id, prev_cat)) = &prev {
                 if *prev_cat == category {
                     g.edges.push(GraphEdge {
@@ -2883,7 +2956,46 @@ impl Store {
             "UPDATE sessions SET folder_id = ?2 WHERE folder_id = ?1",
             params![folder_id, ROOT_FOLDER],
         )?;
+        // Things made from the folder go back to Root too, rather than being
+        // left pointing at a folder that no longer exists.
+        tx.execute(
+            "UPDATE make_outputs SET folder_id = ?2 WHERE folder_id = ?1",
+            params![folder_id, ROOT_FOLDER],
+        )?;
         tx.execute("DELETE FROM folders WHERE id = ?1", [folder_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Fold one folder into another.
+    ///
+    /// Everything filed in `from` — its conversations and everything made out
+    /// of them — moves into `into`, and `from` goes away. Deliberately not a
+    /// delete: nothing is destroyed, and the two lines of thinking end up
+    /// beside each other where they can be told apart again by hand.
+    pub fn merge_folders(&mut self, from: i64, into: i64) -> Result<()> {
+        // Root cannot be absorbed, and a folder cannot be merged into itself.
+        if from == into || from == ROOT_FOLDER {
+            return Ok(());
+        }
+        // A folder deleted in the meantime is not a target; land in Root.
+        let into = if self
+            .conn
+            .query_row("SELECT 1 FROM folders WHERE id = ?1", [into], |_| Ok(()))
+            .optional()?
+            .is_some()
+        {
+            into
+        } else {
+            ROOT_FOLDER
+        };
+        let tx = self.conn.transaction()?;
+        tx.execute("UPDATE sessions SET folder_id = ?2 WHERE folder_id = ?1", params![from, into])?;
+        tx.execute(
+            "UPDATE make_outputs SET folder_id = ?2 WHERE folder_id = ?1",
+            params![from, into],
+        )?;
+        tx.execute("DELETE FROM folders WHERE id = ?1", [from])?;
         tx.commit()?;
         Ok(())
     }
@@ -2969,7 +3081,7 @@ impl Store {
     pub fn list_make_outputs(&self, folder: Option<i64>) -> Result<Vec<MakeOutputRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, folder_id, title, summary, content, format, prompt, sessions,
-                    created_at, updated_at
+                    archived, created_at, updated_at
              FROM make_outputs
              WHERE (?1 IS NULL OR folder_id = ?1)
              ORDER BY id DESC",
@@ -2985,8 +3097,9 @@ impl Store {
                     r.get::<_, String>(5)?,
                     r.get::<_, String>(6)?,
                     r.get::<_, String>(7)?,
-                    r.get::<_, String>(8)?,
+                    r.get::<_, i64>(8)?,
                     r.get::<_, String>(9)?,
+                    r.get::<_, String>(10)?,
                 ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -3001,6 +3114,7 @@ impl Store {
                     format,
                     prompt,
                     sessions,
+                    archived,
                     created_at,
                     updated_at,
                 )| {
@@ -3013,12 +3127,22 @@ impl Store {
                         format,
                         prompt,
                         sessions: self.output_sources(&sessions)?,
+                        archived: archived != 0,
                         created_at,
                         updated_at,
                     })
                 },
             )
             .collect()
+    }
+
+    /// Put an output out of the way, or bring it back. Nothing is destroyed.
+    pub fn set_make_output_archived(&mut self, id: i64, archived: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE make_outputs SET archived = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, archived as i64, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
     }
 
     /// One output, by id.
@@ -3054,7 +3178,8 @@ impl Store {
         Ok(())
     }
 
-    /// Resolve a stored JSON id list into the conversations' current names.
+    /// Resolve a stored JSON id list into the conversations' current names,
+    /// and what state each one is in now.
     fn output_sources(&self, json: &str) -> Result<Vec<MakeOutputSource>> {
         let ids: Vec<i64> = serde_json::from_str(json).unwrap_or_default();
         if ids.is_empty() {
@@ -3062,19 +3187,58 @@ impl Store {
         }
         let mut out = Vec::new();
         for id in ids {
-            let title: Option<String> = self
+            // Still a live conversation: name it and say whether it is current
+            // or archived.
+            let live: Option<(String, i64)> = self
                 .conn
                 .query_row(
-                    "SELECT COALESCE(NULLIF(title, ''), substr(transcript, 1, 60))
+                    "SELECT COALESCE(NULLIF(title, ''), substr(transcript, 1, 60)), archived
                      FROM sessions WHERE id = ?1",
                     [id],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
-                .ok();
-            out.push(MakeOutputSource {
-                session_id: id,
-                title: title.unwrap_or_else(|| format!("Conversation {id}")),
-            });
+                .optional()?;
+            if let Some((title, archived)) = live {
+                out.push(MakeOutputSource {
+                    session_id: id,
+                    title,
+                    status: if archived != 0 { "archived".into() } else { "active".into() },
+                    trash_id: None,
+                });
+                continue;
+            }
+            // Gone from the table. It may be recoverable from the bin — the
+            // snapshot stores the session under `payload.session.id` — or it
+            // may be genuinely lost.
+            let binned: Option<(i64, String)> = self
+                .conn
+                .query_row(
+                    "SELECT id, label FROM trash
+                     WHERE kind = 'session'
+                       AND json_extract(payload, '$.session.id') = ?1
+                     ORDER BY id DESC LIMIT 1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            match binned {
+                Some((trash_id, label)) => out.push(MakeOutputSource {
+                    session_id: id,
+                    title: if label.trim().is_empty() {
+                        format!("Conversation {id}")
+                    } else {
+                        label
+                    },
+                    status: "trashed".into(),
+                    trash_id: Some(trash_id),
+                }),
+                None => out.push(MakeOutputSource {
+                    session_id: id,
+                    title: format!("Conversation {id}"),
+                    status: "missing".into(),
+                    trash_id: None,
+                }),
+            }
         }
         Ok(out)
     }
@@ -3096,6 +3260,8 @@ pub struct MakeOutputRow {
     pub format: String,
     pub prompt: String,
     pub sessions: Vec<MakeOutputSource>,
+    /// Put out of the way without being thrown away.
+    pub archived: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -3105,6 +3271,13 @@ pub struct MakeOutputRow {
 pub struct MakeOutputSource {
     pub session_id: i64,
     pub title: String,
+    /// active | archived | trashed | missing. The output remembers the
+    /// conversations it was made from; what has since happened to them is
+    /// what this says, so the page can offer to bring them back.
+    pub status: String,
+    /// The bin entry, when the conversation is sitting in it — the handle for
+    /// putting it back.
+    pub trash_id: Option<i64>,
 }
 
 /// Cut a title and a summary out of the text itself.
@@ -3819,12 +3992,15 @@ mod tests {
     }
 
     #[test]
-    fn a_conversation_with_no_ideas_is_not_drawn() {
-        // An empty star would be noise: nothing came out of it, so it says
-        // nothing about the person's thinking.
+    fn a_conversation_with_no_ideas_is_kept_for_the_galaxy() {
+        // It has nothing to hang a tree or an orbit from, but the galaxy draws
+        // it as a failed star, so the store keeps it and the frontend drops it
+        // from the arrangements that have no place for it.
         let mut store = Store::open_in_memory().unwrap();
         session_with(&mut store, "just saying hello");
-        assert!(store.graph(None).unwrap().nodes.is_empty());
+        let g = store.graph(None).unwrap();
+        assert_eq!(g.nodes.len(), 1);
+        assert_eq!(g.nodes[0].weight, 0);
     }
 
     #[test]
@@ -4377,5 +4553,33 @@ mod tests {
 
         store.trash_make_output(id).unwrap();
         assert!(store.list_make_outputs(None).unwrap().is_empty());
+    }
+
+    /// An output remembers the conversations it was made from. Once one of
+    /// them is binned the output must still resolve it — and say where it went,
+    /// so the page can offer to bring it back rather than showing a dead name.
+    #[test]
+    fn an_output_source_in_the_bin_is_found_and_named() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO sessions (id, started_at, transcript, model, title)
+                 VALUES (1, '2024-01-01T00:00:00Z', 'USER: hi', 'test', 'A talk')",
+                [],
+            )
+            .unwrap();
+        let id = store
+            .save_make_output(1, "Made", "summary", "# Made", "markdown", "write", &[1])
+            .unwrap();
+
+        store.trash_session(1).unwrap();
+
+        let listed = store.list_make_outputs(None).unwrap();
+        let output = listed.iter().find(|o| o.id == id).unwrap();
+        assert_eq!(output.sessions.len(), 1);
+        assert_eq!(output.sessions[0].status, "trashed");
+        assert!(output.sessions[0].trash_id.is_some());
+        assert_eq!(output.sessions[0].title, "A talk");
     }
 }

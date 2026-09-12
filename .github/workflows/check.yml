@@ -23,9 +23,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      # The speech bindings download their prebuilt libraries into the user
+      # cache, not into `target`. Restoring `target` alone marks their build
+      # scripts as already run, so nothing re-downloads and the link fails
+      # with `unable to find library -lsherpa-onnx-c-api` / `-lonnxruntime`.
+      # Cache the downloads with the build; the prefix bump retires the
+      # entries saved without them.
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
+          prefix-key: "v1-with-speech-libs"
+          cache-directories: |
+            ~/.cache/sherpa-rs
+            ~/.cache/ort.pyke.io
       - uses: actions/setup-node@v4
         with:
           node-version: 20

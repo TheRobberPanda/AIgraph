@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   deleteSession,
   listSessions,
@@ -9,11 +9,14 @@ import {
 import { onIdeasChanged, reextractSession } from "../lib/ideas";
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
+import { repeatedAmong } from "../lib/similarity";
 import { ConversationFile } from "./Deep";
 import Sheet from "./Sheet";
-import { IconArrowRight } from "./Icons";
+import MoveTo from "./MoveTo";
+import { IconArrowRight, IconBook } from "./Icons";
 import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
+import { isImportConversation } from "../lib/import";
 
 /**
  * The folder's conversations, beside the one being had.
@@ -35,11 +38,18 @@ export default function ConversationsRail({
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [open, setOpen] = useState<number | null>(null);
+  /** Whether the open conversation was reached from the repeat warning, so its
+   *  file can say so and offer to delete it. */
+  const [openRepeat, setOpenRepeat] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Right-clicked, and where. */
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionSummary } | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
+  /** A bulk delete of everything with no ideas, waiting on confirmation. */
+  const [confirmEmpty, setConfirmEmpty] = useState(false);
+  /** The conversation being filed somewhere else, or somewhere new. */
+  const [moving, setMoving] = useState<number | null>(null);
   /** Archived ones are out of the way, not gone — one toggle brings them back. */
   const [showArchived, setShowArchived] = useState(false);
 
@@ -67,11 +77,47 @@ export default function ConversationsRail({
   const here = folders.find((f) => f.id === (folder ?? ROOT_FOLDER))?.name ?? "this folder";
   const shown = (sessions ?? []).filter((s) => s.archived === showArchived);
   const archivedCount = (sessions ?? []).filter((s) => s.archived).length;
+  // Conversations that are likely the same thinking said twice, so the rail can
+  // point from one to the other.
+  const repeats = useMemo(
+    () =>
+      repeatedAmong(
+        sessions ?? [],
+        (s) => s.id,
+        (s) => `${s.title} ${s.opening}`,
+        0.6,
+      ),
+    [sessions],
+  );
+  // Conversations that produced nothing. Worth clearing in one go, since they
+  // are clutter that costs a read each to find out nothing was in them.
+  const emptyOnes = shown.filter((s) => s.idea_count === 0);
+
+  async function deleteEmpty() {
+    setConfirmEmpty(false);
+    try {
+      for (const s of emptyOnes) await deleteSession(s.id);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   return (
     <aside className="rail">
       <div className="rail-head">
         <span className="rail-title">{here}</span>
+        {emptyOnes.length > 0 && (
+          <button
+            className="rail-toggle rail-clear"
+            data-tip={`Delete the ${emptyOnes.length} conversation${
+              emptyOnes.length === 1 ? "" : "s"
+            } here with no ideas`}
+            onClick={() => setConfirmEmpty(true)}
+          >
+            no ideas ({emptyOnes.length})
+          </button>
+        )}
         {(archivedCount > 0 || showArchived) && (
           <button
             className={showArchived ? "rail-toggle on" : "rail-toggle"}
@@ -116,12 +162,41 @@ export default function ConversationsRail({
                   }}
                 />
               ) : (
-                <button className="rail-row" onClick={() => setOpen(s.id)}>
-                  <span className="rail-name">{s.title || s.opening || `Conversation ${s.id}`}</span>
+                <button
+                  className={isImportConversation(s.model) ? "rail-row imported" : "rail-row"}
+                  onClick={() => {
+                    setOpenRepeat(false);
+                    setOpen(s.id);
+                  }}
+                >
+                  <span className="rail-name">
+                    {isImportConversation(s.model) && (
+                      <span className="rail-import-mark" data-tip="Imported — a document or transcript brought in, not a conversation that was lived">
+                        <IconBook />
+                      </span>
+                    )}
+                    {s.title || s.opening || `Conversation ${s.id}`}
+                  </span>
                   <span className="rail-meta">
                     {s.started_at ? longDate(s.started_at) : ""} · {s.turn_count} turns ·{" "}
-                    {s.idea_count} {s.idea_count === 1 ? "idea" : "ideas"}
+                    <span className={s.idea_count === 0 ? "rail-ideas none" : "rail-ideas"}>
+                      {s.idea_count} {s.idea_count === 1 ? "idea" : "ideas"}
+                    </span>
                   </span>
+                </button>
+              )}
+              {repeats.has(s.id) && (
+                <button
+                  type="button"
+                  className="repeat-mark"
+                  data-tip="You likely repeated this conversation somewhere — click to go there"
+                  aria-label="Likely repeated elsewhere"
+                  onClick={() => {
+                    setOpenRepeat(true);
+                    setOpen(repeats.get(s.id)!);
+                  }}
+                >
+                  !
                 </button>
               )}
               <button
@@ -173,6 +248,11 @@ export default function ConversationsRail({
                   .catch((e) => setError(String(e))),
             },
             {
+              // File it in another folder, or a new one made on the spot.
+              label: "Move to folder…",
+              onSelect: () => setMoving(menu.session.id),
+            },
+            {
               label: "Delete",
               danger: true,
               onSelect: () => setDeleting(menu.session.id),
@@ -194,9 +274,59 @@ export default function ConversationsRail({
         />
       )}
 
+      {confirmEmpty && (
+        <Confirm
+          title={`Move ${emptyOnes.length} conversation${
+            emptyOnes.length === 1 ? "" : "s"
+          } with no ideas to the trash?`}
+          danger
+          onConfirm={() => void deleteEmpty()}
+          onCancel={() => setConfirmEmpty(false)}
+        />
+      )}
+
+      {moving !== null && (
+        <MoveTo
+          sessionId={moving}
+          onDone={refresh}
+          onClose={() => setMoving(null)}
+        />
+      )}
+
       {open !== null && (
-        <Sheet onClose={() => setOpen(null)}>
-          <ConversationFile sessionId={open} onClose={() => setOpen(null)} />
+        <Sheet
+          onClose={() => {
+            setOpen(null);
+            setOpenRepeat(false);
+          }}
+        >
+          {openRepeat && (
+            <div className="repeat-banner">
+              <span className="repeat-banner-text">
+                <strong>Likely repeated.</strong> This reads like something already filed — delete
+                it if it was said twice.
+              </span>
+              <button
+                className="btn danger"
+                onClick={() => {
+                  const id = open;
+                  setOpen(null);
+                  setOpenRepeat(false);
+                  deleteSession(id).then(refresh).catch((e) => setError(String(e)));
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          )}
+          <ConversationFile
+            sessionId={open}
+            repeatWarning={openRepeat}
+            onClose={() => {
+              setOpen(null);
+              setOpenRepeat(false);
+            }}
+          />
         </Sheet>
       )}
     </aside>

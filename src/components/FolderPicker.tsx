@@ -5,6 +5,7 @@ import {
   deleteFolder,
   folderColor,
   listFolders,
+  mergeFolders,
   ROOT_FOLDER,
   type Folder,
 } from "../lib/folders";
@@ -41,6 +42,8 @@ export default function FolderPicker({
    * take a very long time and it is almost never the answer.
    */
   const [rereading, setRereading] = useState<number | null>(null);
+  /** The folder being merged into another, so the target can be chosen. */
+  const [merging, setMerging] = useState<number | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
   const refresh = () => listFolders().then(setFolders).catch((e) => setError(String(e)));
@@ -50,6 +53,18 @@ export default function FolderPicker({
   }, []);
 
   useEffect(() => onEscapeLayer(onClose), [onClose]);
+
+  async function doMerge(from: number, into: number) {
+    setMerging(null);
+    try {
+      await mergeFolders(from, into);
+      await refresh();
+      // Standing in the folder that just went away: follow its contents.
+      if (current === from) onPick(into);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -115,6 +130,15 @@ export default function FolderPicker({
                   ↻
                 </button>
               )}
+              {f.id !== ROOT_FOLDER && (
+                <button
+                  className="icon-btn folder-remove"
+                  data-tip={`Merge ${f.name} into another folder — nothing is deleted`}
+                  onClick={() => setMerging((m) => (m === f.id ? null : f.id))}
+                >
+                  ⇄
+                </button>
+              )}
               {f.id !== ROOT_FOLDER &&
                 (arming === f.id ? (
                   <button
@@ -136,6 +160,25 @@ export default function FolderPicker({
                     ×
                   </button>
                 ))}
+              {merging === f.id && (
+                <div className="merge-targets">
+                  <span className="row-meta">Merge {f.name} into</span>
+                  {folders
+                    .filter((t) => t.id !== f.id)
+                    .map((t) => (
+                      <button
+                        key={t.id}
+                        className="btn"
+                        onClick={() => void doMerge(f.id, t.id)}
+                      >
+                        {t.name}
+                      </button>
+                    ))}
+                  <button className="btn subtle" onClick={() => setMerging(null)}>
+                    Cancel
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>

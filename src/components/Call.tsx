@@ -166,6 +166,15 @@ export default function Call({
         )}
 
         <div className="row call-actions">
+          {/* A way to send whenever something has been heard and nothing is
+              on its way. In a call with the wait turned off there is no
+              countdown to carry the button, and "held" used to leave the
+              status saying "or send" with nothing to press. */}
+          {heard && !thinking && sendingIn === null && (
+            <button className="btn on" onClick={onSendNow}>
+              Send now
+            </button>
+          )}
           {/* Only while there is something to stop. A dead button for the
               other ninety per cent of a call is worse than no button. */}
           {talking && (

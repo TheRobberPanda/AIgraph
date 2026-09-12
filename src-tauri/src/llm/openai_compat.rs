@@ -7,6 +7,7 @@
 //! both are just a local server behind the same two traits.
 
 use async_trait::async_trait;
+use base64::Engine;
 use futures_util::StreamExt;
 use serde::Deserialize;
 
@@ -671,6 +672,81 @@ impl OpenAiCompat {
 }
 
 impl OpenAiCompat {
+    /// Ask a document-capable model to transcribe a PDF.
+    ///
+    /// Only the router is asked. Its catalogue is where PDF-capable models
+    /// live, and it speaks the OpenAI `file` content part; a local server
+    /// commonly does not accept one at all, and sending it there produced a
+    /// failure in the server's own vocabulary rather than an explanation.
+    async fn read_document(
+        &self,
+        filename: &str,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> Result<String, LlmError> {
+        if self.label != "openrouter" {
+            return Err(LlmError::Unavailable(
+                "this model does not read PDFs — turn the document into Markdown or plain \
+                 text, or choose a model that accepts PDFs"
+                    .into(),
+            ));
+        }
+        let data = format!(
+            "data:{media_type};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        );
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": { "filename": filename, "file_data": data },
+                    },
+                    { "type": "text", "text": super::DOCUMENT_READ_PROMPT },
+                ],
+            }],
+            "max_tokens": CLOUD_EXTRACT_MAX_TOKENS,
+            "stream": false,
+        });
+
+        let resp = self
+            .post("/chat/completions")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| self.connect_error(&e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let detail = resp.text().await.unwrap_or_default();
+            return Err(http_error(status, detail));
+        }
+
+        // A router that cannot take a document answers 200 with the failure in
+        // the body, the same as it does for a rejected schema.
+        let raw = resp.text().await.map_err(|e| LlmError::Transport(e.to_string()))?;
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(said) = error_in(&v) {
+                return Err(LlmError::Transport(said));
+            }
+        }
+        let completion: Completion =
+            serde_json::from_str(&raw).map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        crate::llm::meter::record(completion.timings.as_ref());
+        let Some(choice) = completion.choices.first() else {
+            return Err(LlmError::BadOutput("no choices in response".into()));
+        };
+        let text = choice.message.content.trim();
+        if text.is_empty() {
+            return Err(LlmError::BadOutput(
+                "the model read the document and returned no text — it may be images only".into(),
+            ));
+        }
+        Ok(choice.message.content.clone())
+    }
+
     async fn extract_once(
         &self,
         transcript: &str,
@@ -931,6 +1007,15 @@ impl IdeaExtractor for OpenAiCompat {
 
     async fn judge(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError> {
         self.attempt(prompt, schema).await
+    }
+
+    async fn document_text(
+        &self,
+        filename: &str,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> Result<String, LlmError> {
+        self.read_document(filename, media_type, bytes).await
     }
 
     fn model_id(&self) -> String {

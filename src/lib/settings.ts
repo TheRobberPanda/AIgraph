@@ -56,6 +56,12 @@ export interface Settings {
   /** Whether an idea's notes are followed by a question about them. */
   ask_why: boolean;
   map_style: MapStyle;
+  /** A hidden extra for the galaxy: nodes drawn as textured worlds. */
+  secret_galaxy: boolean;
+  /** A hidden extra for the forest: mixed species instead of one fir. */
+  secret_trees: boolean;
+  /** The inverse workflow: read a document back into ideas and a map. */
+  learning_mode: boolean;
   /** How hard the map's nodes push each other apart. */
   map_spread: MapSpread;
   /** Whether the map's nodes can be dragged out of place. */
@@ -141,20 +147,21 @@ export type Layout = "simple" | "advanced";
  * where nodes go. Nothing is ever hidden by one — a style that dropped nodes
  * would be a filter wearing an appearance setting's clothes.
  */
-export type MapStyle = "nodes" | "forest" | "galaxy";
+export type MapStyle = "nodes" | "forest" | "sunflower" | "galaxy" | "simplified";
 
 /**
- * How much room the map's nodes claim from each other.
+ * How widely the map's ideas are spaced apart.
  *
  * Separate from the arrangement, which decides *where* things go. This decides
- * how insistently they push apart once they are there.
+ * the spacing between ideas once they are there — in every arrangement, not
+ * just the force layout.
  */
 export type MapSpread = "loose" | "balanced" | "tight";
 
 export const MAP_SPREADS: { value: MapSpread; label: string; blurb: string }[] = [
-  { value: "loose", label: "Roomy", blurb: "Nothing overlaps. The map gets large." },
-  { value: "balanced", label: "Balanced", blurb: "The default." },
-  { value: "tight", label: "Close", blurb: "The whole shape without panning." },
+  { value: "loose", label: "Roomy", blurb: "Wide spacing between ideas. The map gets large." },
+  { value: "balanced", label: "Balanced", blurb: "The default spacing." },
+  { value: "tight", label: "Close", blurb: "Ideas sit close together; the shape stays compact." },
 ];
 
 export const MAP_STYLES: { value: MapStyle; label: string; blurb: string }[] = [
@@ -162,6 +169,11 @@ export const MAP_STYLES: { value: MapStyle; label: string; blurb: string }[] = [
     value: "forest",
     label: "Forest",
     blurb: "A tree per conversation, side by side, with its ideas as the roots beneath it.",
+  },
+  {
+    value: "sunflower",
+    label: "Sunflower",
+    blurb: "A sunflower per conversation; its ideas are flowers in the grass around it, joined by drifting pollen.",
   },
   {
     value: "nodes",
@@ -175,6 +187,11 @@ export const MAP_STYLES: { value: MapStyle; label: string; blurb: string }[] = [
     value: "galaxy",
     label: "Galaxy",
     blurb: "Ideas orbit the conversation they came from. Ideas linked to each other share a ring.",
+  },
+  {
+    value: "simplified",
+    label: "Simplified",
+    blurb: "Each conversation with its ideas on a circle around it, set out in rows. Nothing moves.",
   },
 ];
 export type Voice = "off" | "system" | "neural";
@@ -404,8 +421,8 @@ export interface EmbeddedStatus {
   server_build?: string | null;
   /** Whether a vendor-neutral GPU build exists for this platform. */
   vulkan_available?: boolean;
-  /** Whether a prebuilt CUDA llama-server exists for this platform. Windows
-   *  only — llama.cpp publishes no CUDA archive for Linux. */
+  /** Whether a CUDA llama-server can be installed: a prebuilt archive on
+   *  Windows, or — on Linux — a build from source when the toolkit is here. */
   cuda_available?: boolean;
   model_ready: boolean;
   server_ready: boolean;

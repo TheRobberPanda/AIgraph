@@ -21,6 +21,18 @@ pub mod types;
 use async_trait::async_trait;
 pub use types::*;
 
+/// What a model that accepts documents is asked to do with one.
+///
+/// Plain transcription, not summary or extraction: the transcript is archived
+/// and quoted from, so it has to be what the document says rather than the
+/// model's reading of it. The ideas are drawn from this text afterwards by the
+/// ordinary pipeline, which is why nothing here shapes an idea.
+pub const DOCUMENT_READ_PROMPT: &str = "\
+Transcribe this document's text, preserving its paragraphs and headings. \
+Output only the text as it appears, in the document's own words — no summary, \
+no commentary, and no preamble. If a passage is unreadable, leave it out \
+rather than guessing at it.";
+
 /// What a streamed chunk is.
 ///
 /// Reasoning models emit their scratchpad on a separate channel. The two must
@@ -75,6 +87,27 @@ pub trait IdeaExtractor: Send + Sync {
     /// matters: reasoning disabled, temperature zero, schema-constrained, and —
     /// most importantly — a context with nothing of the user's chat in it.
     async fn judge(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError>;
+
+    /// Read a document the app cannot decode itself — a PDF — through a model
+    /// that accepts one, and hand back what it says as plain text.
+    ///
+    /// Refused by default. Most models here read text, and a server that has
+    /// never heard of a document content block should say so rather than be
+    /// sent one and fail in its own vocabulary. Providers with a real
+    /// document path override this.
+    async fn document_text(
+        &self,
+        filename: &str,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> Result<String, LlmError> {
+        let _ = (filename, media_type, bytes);
+        Err(LlmError::Unavailable(
+            "this model does not read PDFs — turn the document into Markdown or plain text, \
+             or choose a model that accepts PDFs"
+                .into(),
+        ))
+    }
 
     fn model_id(&self) -> String;
 }

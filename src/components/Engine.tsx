@@ -16,7 +16,9 @@ import {
 export default function Engine({ onChanged }: { onChanged?: () => void }) {
   const [status, setStatus] = useState<EmbeddedStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [fetching, setFetching] = useState<{ received: number; total: number } | null>(null);
+  const [fetching, setFetching] = useState<{ what: string; received: number; total: number } | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -59,11 +61,18 @@ export default function Engine({ onChanged }: { onChanged?: () => void }) {
         <div className="row">
         <span className="spinner" aria-hidden="true" />
         <span>
-          Fetching the {busy === "vulkan" ? "GPU" : "CPU"} build
-          {pct !== null ? ` — ${pct}%` : "…"}
+          {busy === "cuda" && fetching?.what === "compiling"
+            ? "Compiling the CUDA build — this takes a few minutes"
+            : `Fetching the ${
+                busy === "vulkan" ? "GPU" : busy === "cuda" ? "CUDA" : "CPU"
+              } build${pct !== null ? ` — ${pct}%` : "…"}`}
         </span>
         <span className="row-meta">
-          {fetching ? `${(fetching.received / 1e6).toFixed(0)} MB` : "starting"}
+          {busy === "cuda" && fetching?.what === "compiling"
+            ? "building"
+            : fetching
+              ? `${(fetching.received / 1e6).toFixed(0)} MB`
+              : "starting"}
         </span>
         </div>
         <div className="bar-track">
@@ -107,7 +116,7 @@ export default function Engine({ onChanged }: { onChanged?: () => void }) {
         <button
           className={busy === "cuda" ? "btn busy" : "btn"}
           disabled={busy !== null}
-          data-tip="Fastest on an Nvidia card. Downloads the CUDA runtime with it."
+          data-tip="Fastest on an Nvidia card. On Linux this compiles llama.cpp with CUDA here; on Windows it fetches the ready build."
           onClick={() => install("cuda")}
         >
           {busy === "cuda" && <span className="spinner" aria-hidden="true" />}
@@ -117,9 +126,10 @@ export default function Engine({ onChanged }: { onChanged?: () => void }) {
     </div>
     {!status?.cuda_available && status?.vulkan_available && (
       <p className="blurb">
-        Vulkan works on AMD, Nvidia and Intel alike. CUDA is faster on Nvidia
-        but is published for Windows only — build <code>llama-server</code>
-        yourself and a copy on your PATH is used ahead of this one.
+        Vulkan works on AMD, Nvidia and Intel alike. CUDA is faster on Nvidia —
+        install the CUDA toolkit and cmake and the button to build it here
+        appears. A self-built <code>llama-server</code> on your PATH is used
+        ahead of this one either way.
       </p>
     )}
     <p className="blurb">

@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.5.0
+
+### The map, drawn as one picture
+
+Every arrangement is now laid out once, in map units, and drawn under a
+single zoom — trees, roots, grass, petals and the gaps between them all grow
+and shrink together. Before, each piece was rebuilt in screen pixels with its
+own size limits, so spacing never showed once a map was framed and petals
+drifted off their flowers. What is drawn, what answers to the pointer and
+what the spacing setting moves are now the same shapes.
+
+- **Forest.** Each tree has a real root system: a few roots leave the trunk
+  and divide into the roots that end at its ideas, and none cross. Relation
+  lines run in lanes under the deepest roots instead of over the grass and
+  through other trees. A tree's size says how much came out of its
+  conversation — a seed, a sprout, a sapling, a young tree, a full-grown one —
+  and conversations nothing came out of yet are seeds on the ground. Pointing
+  at a tree lights the tree, not a disc laid over it.
+- **Secret woodland.** A hidden forest setting, beside the galaxy's: each
+  conversation grows its own species — acacia, baobab, oak, birch or fir.
+- **Sunflower.** The ideas are the flower's petals, attached under its disc.
+  Titles sit above the heads. Pollen is a loose stream of grains on the wind,
+  not a line. A flower can be picked up by its stem and carried along the
+  ground.
+- **Galaxy.** No more decorative planets that looked like nodes, and no grey
+  spots on the suns or smudges on the worlds.
+- **Neuron.** Ideas sit close to their conversation, and spacing moves each
+  conversation and its ideas apart as a whole.
+- **Simplified.** A new arrangement: each conversation with its ideas on a
+  ring around it, set out in rows, titles above.
+- Spacing now changes the gap between trees, flowers and systems; the things
+  either side of it keep their size.
+- Contradictions can be pointed at and settled at any zoom. A hovered title
+  shrinks as a whole when zoomed out instead of squashing into a column.
+- Switching tabs or arrangements no longer freezes the app: the map stops
+  drawing while it is off screen, and settles its layout over a few frames
+  rather than in one blocking pass.
+
+### Reading documents in
+
+The Think tab's **Import** reads a finished document back into ideas, filed
+in the folder you are in. PDFs are read through a model that accepts
+documents — Claude, or one routed through OpenRouter — and a model that
+cannot is said to be unable rather than failing in its own words. Imports
+read as documents in their file, not as transcripts. Learning mode itself is
+parked; see TODO.md.
+
+### Answering the notes on a whole conversation
+
+The AI's notes on a conversation can be answered, typed or spoken, and the
+reply is kept with the conversation.
+
+### Folders, outputs and clutter
+
+- A folder can be merged into another; nothing is destroyed. A new folder can
+  be made from the Move dialog.
+- Outputs can be archived, renamed in place and asked again as a fresh
+  output. Several passages can be pointed at before an instruction, and an
+  output whose sources were archived or binned offers to bring them back.
+- Conversations that yielded nothing wait in their own drawer, and can be
+  cleared in one go. Likely repeats — the same thinking said twice — are
+  pointed out in the rail and the Ideas list.
+- A folder's map only links nodes that are actually on it.
+
+### A CUDA engine on Linux
+
+llama.cpp ships no prebuilt CUDA server for Linux. Where the CUDA toolkit is
+installed, the app now builds one from the tagged source instead of leaving
+the option off.
+
+### Check passes again
+
+The speech libraries are downloaded into the user cache, not the build
+directory, so the CI cache restored a build that could not link them. They
+are cached together now.
+
 ## 0.4.0
 
 ### A trash bin, so a delete can be taken back

@@ -325,7 +325,7 @@ export default function Resolve({
               disabled={busy || !stand.trim()}
               onClick={() => run(() => resolveRelation(relationId, stand.trim()))}
             >
-              Settle it
+              Resolve it
             </button>
             <span className="spacer" />
             {/* The dismissal. Sometimes right — a pair that was never really in

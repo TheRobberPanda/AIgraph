@@ -29,10 +29,22 @@ export interface ConversationView {
   turns: ViewTurn[];
   strong: string[];
   weak: string[];
+  /** Replies to the AI's notes on this whole conversation. */
+  answers: SessionDisputeAnswer[];
   /** The AI settings this conversation ran under. An open map on purpose:
    *  what the model is told will grow, and the screen can show whatever is
    *  in here without another change to the schema. */
   ai_profile: Record<string, string | undefined>;
+}
+
+/** A reply to one of the AI's notes on a whole conversation. */
+export interface SessionDisputeAnswer {
+  id: number;
+  /** The note being answered, verbatim. */
+  challenge: string;
+  /** What was written or spoken. */
+  answer: string;
+  created_at: string;
 }
 
 export interface IdeaEvidence {
@@ -150,6 +162,15 @@ export function answerDispute(
 /** Read a saved answer back as one claim, which is what puts it on the map. */
 export function digestDisputeAnswer(answerId: number): Promise<string> {
   return invoke<string>("digest_dispute_answer", { answerId });
+}
+
+/** Record a reply to one of the AI's notes on a whole conversation. */
+export function answerSessionDispute(
+  sessionId: number,
+  challenge: string,
+  answer: string,
+): Promise<number> {
+  return invoke<number>("answer_session_dispute", { sessionId, challenge, answer });
 }
 
 export function deleteDisputeAnswer(answerId: number): Promise<void> {

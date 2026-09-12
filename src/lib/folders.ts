@@ -49,6 +49,12 @@ export function deleteFolder(folderId: number): Promise<void> {
   return invoke("delete_folder", { folderId });
 }
 
+/** Fold one folder into another: everything it holds moves across, then it
+ *  is gone. Nothing is destroyed. */
+export function mergeFolders(from: number, into: number): Promise<void> {
+  return invoke("merge_folders", { from, into });
+}
+
 /** Which folder the conversation being had now will be filed into. */
 export function currentFolder(): Promise<number> {
   return invoke<number>("current_folder");

@@ -116,6 +116,21 @@ pub struct Settings {
     pub ask_why: bool,
     /// How the map arranges itself.
     pub map_style: MapStyle,
+    /// Whether the galaxy draws its nodes as textured worlds.
+    ///
+    /// A hidden extra, off by default and offered only in Settings: no node
+    /// ever stops being its subject's colour, and nothing is added or removed
+    /// from the map. It is a way of looking, not a different map.
+    pub secret_galaxy: bool,
+    /// Whether the forest grows mixed species — acacia, baobab, oak, birch —
+    /// instead of one kind of fir. The same hidden kind of extra as the galaxy's.
+    pub secret_trees: bool,
+    /// The inverse workflow: a document is taken as an output and read back
+    /// into ideas, instead of ideas being talked out and made into documents.
+    ///
+    /// Off. It changes what the app is for, so it is a mode rather than a
+    /// setting quietly altered under somebody who came here to think.
+    pub learning_mode: bool,
     /// How hard the map's nodes push each other apart.
     pub map_spread: MapSpread,
     /// Whether the map's nodes can be dragged out of place.
@@ -280,6 +295,12 @@ pub enum MapStyle {
     /// Ideas linked to each other share an orbit, so a ring is a set of
     /// thoughts that belong together.
     Galaxy,
+    /// A sunflower per conversation, its ideas the flowers in the grass around
+    /// it, joined by pollen. The forest grown outward instead of down.
+    Sunflower,
+    /// Each conversation with its ideas on a circle around it, the
+    /// conversations set out in rows. Nothing moves; the plainest picture.
+    Simplified,
 }
 
 /// How much of the app is on screen at once.
@@ -534,6 +555,9 @@ impl Default for Settings {
             show_explanations: false,
             ask_why: true,
             map_style: MapStyle::default(),
+            secret_galaxy: false,
+            secret_trees: false,
+            learning_mode: false,
             map_spread: MapSpread::default(),
             map_lock_nodes: false,
             advanced_swap: false,

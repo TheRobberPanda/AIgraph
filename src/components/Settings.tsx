@@ -259,6 +259,44 @@ export default function Settings() {
               ))}
             </div>
 
+            {/* The galaxy's hidden layer. Offered here and nowhere else —
+                the map's own arrange panel keeps the three arrangements it is
+                for, and this is the sort of thing found in Settings. */}
+            {s.map_style === "galaxy" && (
+              <>
+                <Section
+                  hint="A quiet extra for the galaxy: each node is drawn as a world, lit from one side, with bands or craters. The colour is still the subject's."
+                >
+                  The secret one
+                </Section>
+                <div className="row">
+                  <button
+                    className={s.secret_galaxy ? "btn on" : "btn"}
+                    onClick={() => void update({ secret_galaxy: !s.secret_galaxy })}
+                  >
+                    {s.secret_galaxy ? "Worlds, lit" : "Plain points"}
+                  </button>
+                </div>
+              </>
+            )}
+            {s.map_style === "forest" && (
+              <>
+                <Section
+                  hint="A quiet extra for the forest: each conversation grows its own kind of tree — acacia, baobab, oak, birch or fir."
+                >
+                  The secret one
+                </Section>
+                <div className="row">
+                  <button
+                    className={s.secret_trees ? "btn on" : "btn"}
+                    onClick={() => void update({ secret_trees: !s.secret_trees })}
+                  >
+                    {s.secret_trees ? "Mixed woodland" : "Firs only"}
+                  </button>
+                </div>
+              </>
+            )}
+
             <Section
               hint="Locked, nothing on the map can be dragged out of place. Clicking still opens a node."
             >
@@ -475,9 +513,10 @@ export default function Settings() {
             <Section
               hint={
                 <>
-                  Call mode keeps answers to a few sentences and reads them out.
-                  Reading aloud is off unless you ask; a call turns it on for
-                  its length and hanging up leaves this where you left it.
+                  Call mode is like a call with your ideas: answers stay a few
+                  sentences long and are read out. Reading aloud is off unless
+                  you ask; a call turns it on for its length and hanging up
+                  leaves this where you left it.
                 </>
               }
             >
@@ -511,7 +550,7 @@ export default function Settings() {
                   ref={silenceRef}
                   type="range"
                   className="scale-slider"
-                  min={1}
+                  min={0}
                   max={15}
                   step={1}
                   value={s.call_silence_seconds}
@@ -519,10 +558,13 @@ export default function Settings() {
                   onMouseUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
                   onKeyUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
                 />
-                <span className="knob-value">{s.call_silence_seconds}s</span>
+                <span className="knob-value">
+                  {s.call_silence_seconds > 0 ? `${s.call_silence_seconds}s` : "off"}
+                </span>
                 <span className="knob-hint">
                   How long a call waits after you stop talking before it sends what
-                  you said. Thinking out loud has pauses in it.
+                  you said. Thinking out loud has pauses in it. At zero nothing
+                  sends itself — what you said waits for Send.
                 </span>
               </div>
             </div>

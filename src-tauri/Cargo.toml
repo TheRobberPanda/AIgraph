@@ -1,6 +1,6 @@
 [package]
 name = "aigraph"
-version = "0.4.0"
+version = "0.5.0"
 description = "Think out loud, get a map back"
 authors = ["AIgraph contributors"]
 license = "AGPL-3.0-or-later"
@@ -24,6 +24,9 @@ serde = { version = "1", features = ["derive"] }
 # bearing: a field the model must fill before it writes anything else is how
 # you get it to commit to a decision — see `extract::prompt::json_schema`.
 serde_json = { version = "1", features = ["preserve_order"] }
+# PDFs are sent to document-capable models as base64, which is the only shape
+# every provider that accepts one agrees on.
+base64 = "0.22"
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
 futures-util = "0.3"

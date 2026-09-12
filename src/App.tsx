@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
+import { open as pickDocument } from "@tauri-apps/plugin-dialog";
 import {
   IconThink,
   IconMap,
@@ -13,9 +14,8 @@ import {
   IconMinimize,
   IconMaximize,
   IconClose,
-  IconCall,
-  IconClock,
   IconSpeaker,
+  IconCall,
   IconChevron,
 } from "./components/Icons";
 import { ConversationFile, IdeaFile } from "./components/Deep";
@@ -45,7 +45,14 @@ import Ideas from "./components/Ideas";
 import Models from "./components/Models";
 import Boundary from "./components/Boundary";
 import SettingsPanel from "./components/Settings";
-import { applyAccent, applyTheme, applyUiScale, getSettings, saveSettings } from "./lib/settings";
+import {
+  applyAccent,
+  applyTheme,
+  applyUiScale,
+  getSettings,
+  saveSettings,
+} from "./lib/settings";
+import { learnDocument } from "./lib/import";
 import Markdown from "./components/Markdown";
 import { thinkingMessage } from "./lib/waiting";
 import {
@@ -195,6 +202,34 @@ function WindowControls() {
   );
 }
 
+/**
+ * Call mode, framed as a call rather than a switch: a handset beside what it
+ * does. It sits quietly in the middle of the conversation — someone who did
+ * not come for it should not have to step over it, and someone who did can
+ * find it without hunting the composer bar. Pressing it opens the microphone
+ * and reads replies aloud for as long as the call lasts.
+ */
+function CallToggle({ on, onToggle }: { on: boolean; onToggle: (next: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      className={on ? "learn-switch call-switch on" : "learn-switch call-switch"}
+      role="switch"
+      aria-checked={on}
+      data-tip={on ? tr("call_button_on") : tr("call_button_off")}
+      onClick={() => onToggle(!on)}
+    >
+      <span className="learn-switch-icon" aria-hidden="true">
+        <IconCall />
+      </span>
+      <span className="learn-switch-copy">
+        <span className="learn-switch-label">Call mode</span>
+        <span className="learn-switch-hint">Like a call with your ideas — short answers, read aloud</span>
+      </span>
+    </button>
+  );
+}
+
 export default function App() {
   // Re-renders whenever the app's own language changes, so the tab names and
   // tooltips built with `tr()` above pick up the new one immediately rather
@@ -302,10 +337,9 @@ export default function App() {
    *  the rest of them are read. */
   const [callMode, setCallMode] = useState(false);
   const voiceOn = voiceSetting || callMode;
-  const [idleMinutes, setIdleMinutes] = useState(10);
-  const [autoFile, setAutoFile] = useState(false);
   const [micTimeout, setMicTimeout] = useState(0);
-  const [idleOpen, setIdleOpen] = useState(false);
+  /** A document being read back into ideas from the Think tab. */
+  const [importingDoc, setImportingDoc] = useState(false);
   /** Which workspace panel is filling the pane, if any. */
   const [expanded, setExpanded] = useState<"make" | "conversations" | null>(null);
   /** Map and Ideas in advanced mode: popups over the workspace, not panels. */
@@ -324,7 +358,6 @@ export default function App() {
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const idleRef = useRef<HTMLDivElement>(null);
 
   // Apply the saved theme before anything is looked at.
   useEffect(() => {
@@ -338,8 +371,6 @@ export default function App() {
       // preference — and restoring it opened the microphone and covered the
       // screen with the call view before anyone had asked for either. Every
       // reload did it again, which is what the blank window turned out to be.
-      setIdleMinutes(s.idle_minutes);
-      setAutoFile(s.auto_file);
       setMicTimeout(s.mic_timeout_seconds);
       setLayout(s.layout);
       setAdvancedSwap(s.advanced_swap);
@@ -370,18 +401,6 @@ export default function App() {
     document.addEventListener("contextmenu", onContextMenu);
     return () => document.removeEventListener("contextmenu", onContextMenu);
   }, []);
-
-  // Close the idle-timeout dropdown when clicking elsewhere, the same as the
-  // app's other dropdowns do — without this it stayed open after clicking
-  // away, a stray menu floating over the conversation.
-  useEffect(() => {
-    if (!idleOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (idleRef.current && !idleRef.current.contains(e.target as Node)) setIdleOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [idleOpen]);
 
   useEffect(() => {
     void currentFolder().then(setFolderId).catch(() => {});
@@ -649,7 +668,14 @@ export default function App() {
   /** Start (or restart) the countdown to sending what has been heard. */
   function armSend() {
     window.clearTimeout(quietRef.current);
-    const total = Math.max(1, callSilence);
+    // A wait of zero is not a fast wait, it is no wait at all: nothing sends
+    // itself, and what was heard goes when Send is pressed. The words stay on
+    // screen until then.
+    if (callSilence <= 0) {
+      setSendingIn(null);
+      return;
+    }
+    const total = callSilence;
     setSendingIn(total);
     quietRef.current = window.setTimeout(() => flushCall(), total * 1000);
   }
@@ -856,6 +882,40 @@ export default function App() {
     else setView("chat");
   }
 
+  /**
+   * Add a finished document to this folder and read the ideas back out.
+   *
+   * The reading path is the one Learning mode used, kept here as a plain
+   * import rather than a mode: a document is archived as a conversation whose
+   * one speaker is the document, then extracted like any other. Only formats
+   * the chosen model can actually read are offered — a text model is not
+   * handed a PDF it will fail on.
+   */
+  async function importDocument() {
+    setError(null);
+    const picked = await pickDocument({
+      multiple: false,
+      title: "Choose a document to read",
+      // PDFs included: the backend reads them through a model that accepts
+      // documents, and says so plainly when the chosen model cannot.
+      filters: [
+        {
+          name: "Documents",
+          extensions: ["md", "markdown", "txt", "text", "rst", "org", "pdf"],
+        },
+      ],
+    });
+    if (typeof picked !== "string") return;
+    setImportingDoc(true);
+    try {
+      await learnDocument(picked);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setImportingDoc(false);
+    }
+  }
+
   /** Flip one setting from the composer, without leaving the conversation. */
   async function patchSetting(patch: Record<string, unknown>) {
     try {
@@ -992,6 +1052,7 @@ export default function App() {
             <div className="topbar-tabs">
               {MAIN.map((t) => {
                 const Icon = TAB_ICONS[t];
+                const label = tabName(t);
                 return (
                   <button
                     key={t}
@@ -1000,10 +1061,10 @@ export default function App() {
                       setDeep(null);
                       setView(t);
                     }}
-                    data-tip={tabName(t)}
+                    data-tip={label}
                   >
                     <Icon className="nav-icon" />
-                    <span className="nav-label">{tabName(t)}</span>
+                    <span className="nav-label">{label}</span>
                   </button>
                 );
               })}
@@ -1016,14 +1077,16 @@ export default function App() {
             under the tabs when the bar gets crowded. Still where you reach
             for it while thinking: after a bad answer, usually, and a settings
             tab for it means leaving the thing that prompted the question. */}
-        <button
-          className={`model-chip topbar-model${showModels ? " on" : provider ? "" : " missing"}`}
-          data-tip={provider ? "Which model is answering" : "Nothing to talk to yet — pick a model"}
-          onClick={() => setShowModels((v) => !v)}
-        >
-          <IconModels className="nav-icon" />
-          <span>{provider ? modelName(provider.model) : "No model — pick one"}</span>
-        </button>
+        <div className="topbar-center">
+          <button
+            className={`model-chip topbar-model${showModels ? " on" : provider ? "" : " missing"}`}
+            data-tip={provider ? "Which model is answering" : "Nothing to talk to yet — pick a model"}
+            onClick={() => setShowModels((v) => !v)}
+          >
+            <IconModels className="nav-icon" />
+            <span>{provider ? modelName(provider.model) : "No model — pick one"}</span>
+          </button>
+        </div>
 
         <div className="topbar-right" data-tauri-drag-region>
           {/* In advanced mode the map and the ideas are popups, not panels —
@@ -1233,11 +1296,24 @@ export default function App() {
         <div className="ws-center">
       <div className={turns.length === 0 && !justArchived ? "think opening" : "think"}>
       <div className="think-main">
+      {/* Import a finished document, at the top left where it is out of the
+          way of the thinking but always in reach. */}
+      <button
+        type="button"
+        className={importingDoc ? "icon-btn think-import on" : "icon-btn think-import"}
+        data-tip={importingDoc ? "Reading the document…" : "Import a document"}
+        disabled={importingDoc}
+        onClick={() => void importDocument()}
+      >
+        {importingDoc ? <span className="spinner" aria-hidden="true" /> : <IconBook />}
+        <span className="think-import-label">Import</span>
+      </button>
       <div className="stream">
         {turns.length === 0 && !justArchived && (
-          <p className="empty">
+          <div className="empty">
             <strong>Think out loud.</strong>
-          </p>
+            <CallToggle on={callMode} onToggle={(next) => void toggleCall(next)} />
+          </div>
         )}
 
         {turns.length === 0 && justArchived && (
@@ -1441,13 +1517,6 @@ export default function App() {
               <IconSpeaker />
             </button>
           )}
-          <button
-            className={callMode ? "icon-btn on" : "icon-btn"}
-            data-tip={callMode ? tr("call_button_on") : tr("call_button_off")}
-            onClick={() => void toggleCall(!callMode)}
-          >
-            <IconCall />
-          </button>
 
           {turns.length > 0 && (
             <button
@@ -1462,52 +1531,6 @@ export default function App() {
           )}
           <span className="spacer" />
 
-          {/* Opens upward: it lives at the bottom of the window, and a menu
-              that drops off the screen is no menu at all. */}
-          <div className="idle-pick" ref={idleRef}>
-            <button
-              className="icon-btn"
-              data-tip={
-                autoFile
-                  ? `Filed after ${idleMinutes} minutes of quiet`
-                  : "Filed when you press Done, never on its own"
-              }
-              onClick={() => setIdleOpen((o) => !o)}
-            >
-              <IconClock />
-            </button>
-            {idleOpen && (
-              <ul className="idle-list">
-                <li>
-                  <button
-                    className={autoFile ? "pick-option" : "pick-option on"}
-                    onClick={() => {
-                      setAutoFile(false);
-                      setIdleOpen(false);
-                      void patchSetting({ auto_file: false });
-                    }}
-                  >
-                    Turned off
-                  </button>
-                </li>
-                {[10, 30, 60, 120].map((m) => (
-                  <li key={m}>
-                    <button
-                      className={autoFile && idleMinutes === m ? "pick-option on" : "pick-option"}
-                      onClick={() => {
-                        setAutoFile(true);
-                        setIdleMinutes(m);
-                        setIdleOpen(false);
-                        void patchSetting({ auto_file: true, idle_minutes: m });
-                      }}
-                    >
-                      {m < 60 ? `${m} min` : `${m / 60} hr`}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
           <button
             className="btn btn-send"
             onClick={() => void send()}
@@ -1632,7 +1655,9 @@ export default function App() {
                 ? "Waiting for you — say more, or send"
                 : hearing
                   ? "Listening"
-                  : "Say something — it sends when you stop"
+                  : callSilence <= 0
+                    ? "Say something — it sends when you press Send"
+                    : "Say something — it sends when you stop"
           }
           onHold={() => {
             // Cancels the send without dropping what was heard: the pause was

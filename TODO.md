@@ -38,6 +38,25 @@ shortlist over titles, which is the same machinery reconciliation already uses.
 Not urgent: 200 titles is a long time at one person's pace, and the cap fails
 safely by dropping the oldest.
 
+## 3. Learning mode, out of scope for now
+
+Learning mode — a document in, ideas out, no conversation first, plus the
+Settings category that switched it on — is hidden from the interface. The
+import path underneath it is still used: the Think tab's **Import** button reads
+a document back into ideas. What is parked is the mode itself and its settings
+surface:
+
+- `learning_mode` in `settings.ts` / `src-tauri/src/settings.rs` still exists
+  and is still saved; nothing in the UI sets or reads it.
+- The Settings category, the Ideas-tab Learn button, the tab reversal
+  (Think/Ask, Make/Learn) and the Learning-mode opening screen were removed.
+- Bringing it back means restoring those surfaces, not rebuilding the reading:
+  `learn_document` is untouched and the Think-tab Import button proves it works.
+
+Decide first whether a mode is the right shape at all, or whether Import plus
+the ordinary extraction is enough. If it stays parked, the dead `learning_mode`
+setting should be removed from the store in the same pass.
+
 ---
 
 # To try

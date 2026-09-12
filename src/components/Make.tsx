@@ -120,10 +120,18 @@ export default function Make({ folder, compact = false }: { folder: number | nul
   const [opening, setOpening] = useState<MakeOutput | null>(null);
   /** How much this folder has been made into — the number on the tab. */
   const [outputCount, setOutputCount] = useState(0);
+  const takeCounts = useCallback(
+    (c: { archived: number; current: number }) => {
+      setOutputCount(c.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     void listMakeOutputs(folder)
-      .then((os) => setOutputCount(os.length))
+      .then((os) => {
+        setOutputCount(os.filter((o) => !o.archived).length);
+      })
       .catch(() => {});
   }, [folder]);
   /** What there is to choose from, and what is ticked. */
@@ -442,10 +450,28 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     }
   }
 
+  // Make / Outputs, one switch with two faces. It lives at the top right of
+  // the window, above the material, rather than on the left where it was one
+  // more thing between the instructions and the conversation.
+  const makeViews = (
+    <span className="make-views">
+      <button
+        className={page === "compose" ? "make-view on" : "make-view"}
+        onClick={() => setPage("compose")}
+      >
+        Make
+      </button>
+      <button
+        className={page === "outputs" ? "make-view on" : "make-view"}
+        data-tip="Everything this folder has been made into"
+        onClick={() => setPage("outputs")}
+      >
+        Outputs{outputCount > 0 && ` · ${outputCount}`}
+      </button>
+    </span>
+  );
+
   return (
-    // Simple mode gives this the whole page, so the picker goes to the right
-    // edge and out of the reading column; the narrow advanced panel has no
-    // right edge to speak of and keeps everything stacked.
     <div className={compact ? "pane-inner make" : "pane-inner make roomy"}>
       {/* Two columns where there is room: the asking on the left with the
           instructions in its header, what it is being made from on the right.
@@ -456,25 +482,23 @@ export default function Make({ folder, compact = false }: { folder: number | nul
         <div className="make-main">
           {/* The tabs belong to the archive, not the document: opening one
               takes the page over, and a Make/Outputs switch floating above a
-              document being read is two things where there is one. */}
-          {!outputOpen && (
-            <div className="make-head">
-              <span className="make-views">
-                <button className="make-view" onClick={() => setPage("compose")}>
-                  Make
-                </button>
-                <button className="make-view on">
-                  Outputs{outputCount > 0 && ` · ${outputCount}`}
-                </button>
-              </span>
-            </div>
-          )}
+              document being read is two things where there is one. They sit at
+              the top right, where they are in the Make view too. */}
+          {!outputOpen && <div className="make-head make-head-right">{makeViews}</div>}
           <MakeOutputs
             folder={folder}
             compact={compact}
             onOpenChange={setOutputOpen}
             openId={requestedOutput}
             onOpenConsumed={() => setRequestedOutput(null)}
+            showArchived={false}
+            onCounts={takeCounts}
+            onRetry={(o) => {
+              // Ask the same instruction again, from the Make page, so the
+              // result is a fresh output rather than an overwrite.
+              setPage("compose");
+              void ask(o.prompt, o.format as OutputFormat, o.title);
+            }}
           />
         </div>
       ) : (
@@ -512,18 +536,6 @@ export default function Make({ folder, compact = false }: { folder: number | nul
             <IconPlus />
           </button>
         </div>
-
-        {/* The way to the archive, at the top right. */}
-        <span className="make-views">
-          <button className="make-view on">Make</button>
-          <button
-            className="make-view"
-            data-tip="Everything this folder has been made into"
-            onClick={() => setPage("outputs")}
-          >
-            Outputs{outputCount > 0 && ` · ${outputCount}`}
-          </button>
-        </span>
       </div>
 
       {adding && (
@@ -712,6 +724,8 @@ export default function Make({ folder, compact = false }: { folder: number | nul
       </aside>
 
       <aside className="make-side">
+      {/* Make / Outputs at the top right, above and inside this column. */}
+      <div className="make-side-head">{makeViews}</div>
       {/* What the model will actually be reading. A count alone asks to be
           trusted; this says which, and lets any of it be dropped. Ticking a
           conversation takes it whole; ticking one idea takes that idea's own
@@ -803,7 +817,11 @@ export default function Make({ folder, compact = false }: { folder: number | nul
                           <span className="row-main">
                             {c.title || `Conversation ${c.session_id}`}
                           </span>
-                          <span className="row-meta">
+                          <span
+                            className={
+                              c.ideas.length === 0 ? "row-meta idea-count none" : "row-meta idea-count"
+                            }
+                          >
                             {c.ideas.length} {c.ideas.length === 1 ? "idea" : "ideas"}
                           </span>
                         </button>
@@ -864,7 +882,7 @@ export default function Make({ folder, compact = false }: { folder: number | nul
             compact={compact}
             onClose={() => {
               setOpening(null);
-              void listMakeOutputs(folder).then((os) => setOutputCount(os.length)).catch(() => {});
+              void listMakeOutputs(folder).then((os) => setOutputCount(os.filter((o) => !o.archived).length)).catch(() => {});
             }}
           />
         </Sheet>
