@@ -90,6 +90,15 @@ jobs:
       - name: Check before building
         run: npm run build
 
+      # A restored `target` can come back without the speech libraries beside
+      # the binaries, and cargo will not rerun the build script that copies
+      # them there, so the tests then die with "libsherpa-onnx-c-api.so:
+      # cannot open shared object file" (exit 127). Cleaning just this crate
+      # reruns that script; the download itself is in the cache above.
+      - name: Put the speech libraries back into target
+        run: cargo clean -p sherpa-rs-sys
+        working-directory: src-tauri
+
       # From src-tauri so cargo picks up .cargo/config.toml (the rpath) —
       # see check.yml.
       - name: Test before building
