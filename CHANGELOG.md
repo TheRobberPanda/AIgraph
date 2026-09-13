@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+- **The Windows installers start again.** They shipped only the program, not
+  the speech libraries it loads at startup, so a fresh install stopped at
+  once with "sherpa-onnx-c-api.dll was not found". The installers now carry
+  those libraries beside the program.
+
 ## 0.5.0
 
 ### The map, drawn as one picture
