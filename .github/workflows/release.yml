@@ -96,6 +96,22 @@ jobs:
         run: cargo test --no-default-features
         working-directory: src-tauri
 
+      # The installer has to carry the sherpa-onnx DLLs beside the exe, or the
+      # app will not start ("sherpa-onnx-c-api.dll not found"). Tauri checks
+      # bundled resources at compile time, in every profile, so the list
+      # cannot live in tauri.windows.conf.json permanently: the debug build
+      # above, and `tauri dev` on Windows, would fail on files that only
+      # exist after a release build. So build the speech library in release
+      # first — its build script copies the DLLs into target/release — and
+      # only then switch the list on.
+      - name: Stage the speech DLLs for the Windows installer
+        if: matrix.platform == 'windows-latest'
+        working-directory: src-tauri
+        shell: bash
+        run: |
+          cargo build --release -p sherpa-rs-sys
+          cp tauri.windows-bundle.conf.json tauri.windows.conf.json
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
