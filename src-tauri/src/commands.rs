@@ -2933,6 +2933,39 @@ pub async fn reset_presets(
     Ok(settings)
 }
 
+/// Write a Make instruction from a sample of the wanted result and a list of
+/// things it must not do. Returns the wording only; saving it is the page's.
+#[tauri::command]
+pub async fn write_preset_prompt(
+    state: State<'_, AppState>,
+    sample: String,
+    avoid: Vec<String>,
+) -> Result<String, String> {
+    if sample.trim().is_empty() {
+        return Err("Paste an example of what you want first.".into());
+    }
+    let (provider, model) = {
+        let active = state.active.lock().await;
+        let a = active.as_ref().ok_or("No model is loaded. Pick one first.")?;
+        (a.provider.clone(), a.model.clone())
+    };
+    let request = crate::llm::ChatRequest {
+        model,
+        messages: vec![crate::llm::types::Message {
+            role: crate::llm::types::Role::User,
+            content: crate::compose::helper::build(&sample, &avoid),
+        }],
+        system: Some(crate::compose::helper::system()),
+        reasoning: state.settings.lock().await.reasoning,
+    };
+    let written = provider.chat_stream(&request, &|_, _| {}).await.map_err(|e| e.to_string())?;
+    let written = written.trim().to_string();
+    if written.is_empty() {
+        return Err("The model came back with nothing. Try again.".into());
+    }
+    Ok(written)
+}
+
 /// Run one export command the Make tab's model wrote, by hand.
 ///
 /// The directive loop runs inside `compose_send`, but a failed run should not

@@ -160,6 +160,7 @@ pub fn run() {
             commands::compose_revise_output,
             commands::clear_output_thread,
             commands::reset_presets,
+            commands::write_preset_prompt,
             commands::create_folder,
             commands::rename_folder,
             commands::delete_folder,

@@ -17,6 +17,8 @@
 //! a TikTok script is not producing that kind of thing, so it does not get to
 //! put anything into the record.
 
+pub mod helper;
+
 use crate::store::Recorded;
 
 /// How much of the folder is handed over, in characters.

@@ -63,7 +63,15 @@ pub const RECALL_ATTACHED: &str = "\n\n[earlier ideas]";
 pub fn answer_style(style: crate::settings::AnswerStyle) -> &'static str {
     use crate::settings::AnswerStyle::*;
     match style {
-        Brief => "\n\nKeep replies short: a few sentences, unless asked for more.",
+        // "A few sentences" on its own cut a long, many-point message down to
+        // an answer that skipped most of it. Short has to mean no padding,
+        // not answering less than was asked.
+        Brief => {
+            "\n\nKeep replies tight: no preamble, no restating, no padding. Match \
+             the length to the message — a line gets a few sentences; a long \
+             message that raises several points gets each of them answered, \
+             briefly. Brief means dense, not incomplete."
+        }
         Examples => "\n\nWhen something is abstract, give one concrete example of it.",
         Questions => "\n\nEnd the reply with one short question that moves the thought forward.",
         Plain => {

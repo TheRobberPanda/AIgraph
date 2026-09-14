@@ -264,6 +264,11 @@ export function resetPresets(): Promise<Settings> {
   return invoke<Settings>("reset_presets");
 }
 
+/** A full Make instruction, written by the model from an example and a list of don'ts. */
+export function writePresetPrompt(sample: string, avoid: string[]): Promise<string> {
+  return invoke<string>("write_preset_prompt", { sample, avoid });
+}
+
 export function activeModels(): Promise<ActiveModels> {
   return invoke<ActiveModels>("active_models");
 }

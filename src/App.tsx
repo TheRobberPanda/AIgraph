@@ -817,7 +817,33 @@ export default function App() {
     setHeardText(heardRef.current);
   }
 
-  async function sendText(text: string, resend = false) {
+  /**
+   * Ask the last question again and replace the answer it got.
+   *
+   * The backend drops the exchange first, so the conversation never holds
+   * both answers — the next reply would read the one that was thrown away.
+   */
+  async function remake() {
+    const at = turns.length - 2;
+    const asked = turns[at];
+    if (streaming || asked?.role !== "user") return;
+    if (!provider) {
+      setError("No model is loaded. Pick one and try again.");
+      setShowModels(true);
+      return;
+    }
+    stopSpeaking();
+    try {
+      await rewindConversation(at);
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    await sendText(asked.content, false, at);
+  }
+
+  /** `from`, when given, is where this exchange goes — the turns from there on are replaced. */
+  async function sendText(text: string, resend = false, from?: number) {
     if (!text || streaming) return;
     // Said rather than swallowed. Without this, pressing Send with no model
     // did nothing at all — the same thing a broken button does.
@@ -842,9 +868,10 @@ export default function App() {
     // on screen would put every later index one out from the conversation.
     const last = turns[turns.length - 1];
     const ghost = resend && last?.role === "user" && last.content === text;
-    activeExchangeRef.current = { index: ghost ? turns.length - 1 : turns.length, text };
+    const base = from ?? (ghost ? turns.length - 1 : turns.length);
+    activeExchangeRef.current = { index: base, text };
     setTurns((t) => [
-      ...(ghost ? t.slice(0, -1) : t),
+      ...t.slice(0, base),
       { role: "user", content: text },
       { role: "assistant", content: "" },
     ]);
@@ -1562,6 +1589,19 @@ export default function App() {
             {t.role === "assistant" && showTiming && t.timing && (
               <div className="reply-timing">{timingLine(t.timing)}</div>
             )}
+            {t.role === "assistant" &&
+              t.content &&
+              !streaming &&
+              i === turns.length - 1 &&
+              turns[i - 1]?.role === "user" && (
+                <button
+                  className="btn remake"
+                  data-tip="Ask the same thing again and replace this answer"
+                  onClick={() => void remake()}
+                >
+                  Remake
+                </button>
+              )}
             {t.role === "assistant" && !t.content && streaming && (
               <span className="thinking">
                 {thinking ? "thinking" : thinkingMessage(waitTick)}

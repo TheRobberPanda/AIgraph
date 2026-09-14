@@ -3047,6 +3047,17 @@ blockquote {
 .preset-formats { flex-wrap: wrap; }
 .preset-formats .btn { font-size: 0.76rem; padding: 0.22rem 0.5rem; }
 
+/* Writing an instruction from an example, under the list of them. */
+.prompt-helper { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 1.4rem; }
+.prompt-helper-label { font-size: 0.78rem; color: var(--muted); margin-top: 0.3rem; }
+.prompt-helper-avoid { display: flex; align-items: center; gap: 0.5rem; }
+.prompt-helper-avoid .field { flex: 1; min-width: 0; }
+.prompt-helper .preset { margin-top: 0.6rem; border-bottom: none; }
+
+/* Ask the last question again, under the answer it replaces. */
+.remake { margin-top: 0.4rem; font-size: 0.72rem; padding: 0.15rem 0.5rem; color: var(--faint); }
+.remake:hover:not(:disabled) { color: var(--fg); }
+
 /* What a Make button will produce, on the button itself. A quiet second line
    rather than a word beside the name: the name is what you are looking for,
    and the format is what you check once you have found it. */
