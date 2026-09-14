@@ -607,6 +607,11 @@ function arrangeSimplified(
   const placed = emptyPlaced();
   const inner = SPREAD_INNER[spread];
   const gap = 70 * SPREAD_GAP[spread];
+  // The conversation's title sits above its ring, so every row keeps room
+  // for it and the top of each ring is left open: an idea there sat right
+  // under the title, and its own name ran into it.
+  const titleRoom = 44;
+  const opening = Math.PI * 0.22;
   const circles = hubs.map((hub) => {
     const ideas = ideasOf.get(hub) ?? [];
     // Round enough that neighbouring ideas on it sit a readable step apart.
@@ -631,13 +636,13 @@ function arrangeSimplified(
   }
   if (row.length) rows.push(row);
 
-  const heights = rows.map((r) => Math.max(...r.map((c) => c.half * 2)));
+  const heights = rows.map((r) => Math.max(...r.map((c) => c.half * 2)) + titleRoom);
   const totalH = heights.reduce((s, h) => s + h, 0) + gap * Math.max(0, rows.length - 1);
   let y = -totalH / 2;
   rows.forEach((r, i) => {
     const width = r.reduce((s, c) => s + c.half * 2, 0) + gap * (r.length - 1);
     let x = -width / 2;
-    const cy = y + heights[i] / 2;
+    const cy = y + titleRoom + (heights[i] - titleRoom) / 2;
     for (const c of r) {
       const cx = x + c.half;
       x += c.half * 2 + gap;
@@ -647,14 +652,21 @@ function arrangeSimplified(
       c.hub.fy = cy;
       if (c.ideas.length) placed.rings.push({ hub: c.hub, radius: c.radius });
       c.ideas.forEach((idea, k) => {
-        const angle = -Math.PI / 2 + (k / c.ideas.length) * Math.PI * 2;
+        const angle =
+          -Math.PI / 2 + opening + ((k + 0.5) / c.ideas.length) * (Math.PI * 2 - opening * 2);
         idea.x = cx + Math.cos(angle) * c.radius;
         idea.y = cy + Math.sin(angle) * c.radius;
         idea.fx = idea.x;
         idea.fy = idea.y;
         placed.outward.set(idea, angle);
       });
-      placed.extent = grow(placed.extent, cx - c.half, cy - c.half, cx + c.half, cy + c.half);
+      placed.extent = grow(
+        placed.extent,
+        cx - c.half,
+        cy - c.half - titleRoom,
+        cx + c.half,
+        cy + c.half,
+      );
     }
     y += heights[i] + gap;
   });
@@ -1422,14 +1434,19 @@ function drawDisc(ctx: CanvasRenderingContext2D, x: number, y: number, r: number
   ctx.arc(x, y, r * 0.74, 0, Math.PI * 2);
   ctx.fill();
   // Seeds on the golden angle, the way a real head packs them.
+  // One path, one fill.
   ctx.fillStyle = "#7a5a32";
+  ctx.beginPath();
+  const seed = r * 0.045;
   for (let i = 1; i < 40; i++) {
     const rr = r * 0.9 * Math.sqrt(i / 40);
     const a = i * 2.399963;
-    ctx.beginPath();
-    ctx.arc(x + Math.cos(a) * rr, y + Math.sin(a) * rr, r * 0.045, 0, Math.PI * 2);
-    ctx.fill();
+    const sx = x + Math.cos(a) * rr;
+    const sy = y + Math.sin(a) * rr;
+    ctx.moveTo(sx + seed, sy);
+    ctx.arc(sx, sy, seed, 0, Math.PI * 2);
   }
+  ctx.fill();
 }
 
 /**
@@ -2020,6 +2037,9 @@ export default function Graph({
   /** The node being looked at, and everything it touches: the only ideas
    *  named on the map when no subject is pinned. */
   const focusNodeRef = useRef<Node | null>(null);
+  /** Set when a click lets go of the focused node, so the resize that
+   *  follows (a file closing) keeps the view instead of refitting it. */
+  const keepViewRef = useRef(false);
   const revealRef = useRef<Set<string>>(new Set());
   /** An idea being pointed at in the open file, so the list and the map are
    *  reading the same thing at the same time. */
@@ -2090,6 +2110,14 @@ export default function Graph({
    *  the state is for the toggle that shows what is set. */
   const [locked, setLocked] = useState(false);
   const lockRef = useRef(false);
+  /** Whether correlations are on the map. A rebuild, not paint: they are
+   *  springs in the force layout as well as lines. */
+  const [correlations, setCorrelations] = useState(false);
+  const correlationsRef = useRef(false);
+  /** Each meadow stream's sag this frame. Working it out scans every node,
+   *  and drawing, routing, bees and the hit test all ask for it — per link,
+   *  per candidate route, every frame. Cleared at the top of `draw`. */
+  const sagRef = useRef(new Map<Link, number>());
   const [showArrange, setShowArrange] = useState(false);
   const buildRef = useRef<() => void>(() => {});
   useEffect(() => {
@@ -2124,6 +2152,13 @@ export default function Graph({
       secretTreesRef.current = !!on;
       if (styleRef.current === "forest") buildRef.current();
     };
+    const applyCorrelations = (on: boolean | undefined) => {
+      if (!alive) return;
+      setCorrelations(!!on);
+      if (correlationsRef.current === !!on) return;
+      correlationsRef.current = !!on;
+      buildRef.current();
+    };
     // The first read is not a change, so it sets the ref and rebuilds once —
     // the initial build may already have run under the default.
     void getSettings().then((st) => {
@@ -2132,12 +2167,14 @@ export default function Graph({
       applyLock(st.map_lock_nodes);
       applySecret(st.secret_galaxy);
       applyTrees(st.secret_trees);
+      applyCorrelations(st.map_correlations);
     });
     const un = onSettingsChanged((st) => {
       apply(st.map_style, st.map_spread ?? "balanced");
       applyLock(st.map_lock_nodes);
       applySecret(st.secret_galaxy);
       applyTrees(st.secret_trees);
+      applyCorrelations(st.map_correlations);
     });
     return () => {
       alive = false;
@@ -2252,6 +2289,7 @@ export default function Graph({
     const C = paletteRef.current;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
+    sagRef.current.clear();
 
     // The secret galaxy is a night sky: pitch black, with stars fixed behind
     // the map. The worlds turn in front of them — a sky that moved with the
@@ -2543,7 +2581,11 @@ export default function Graph({
           s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
           return s / 4294967296;
         };
-        const count = Math.max(12, Math.round(len / 8));
+        // One fill per band of opacity rather than one per grain: a grain
+        // each was a draw call each, thousands a frame on a busy meadow.
+        const BANDS = 4;
+        const bands: Path2D[] = Array.from({ length: BANDS }, () => new Path2D());
+        const count = Math.min(90, Math.max(12, Math.round(len / 8)));
         for (let i = 0; i < count; i++) {
           const start = rnd();
           const across = (rnd() - 0.5) * 2;
@@ -2559,10 +2601,14 @@ export default function Graph({
           const off = across * band + Math.sin(now * 0.7 + phase) * 2.5 * zoomW;
           const px = cubic(sa.x, c1.x, c2.x, pb.x, t) - (ty / tl) * off + gust * 12 * zoomW * mid;
           const py = cubic(sa.y, c1.y, c2.y, pb.y, t) + (tx / tl) * off - Math.abs(gust) * 4 * zoomW * mid;
-          ctx.globalAlpha = (lit ? 0.75 : 0.12) * (0.2 + 0.8 * mid);
-          ctx.beginPath();
-          ctx.arc(px, py, Math.max(0.7, 1.35 * size * zoomW), 0, Math.PI * 2);
-          ctx.fill();
+          const rr = Math.max(0.7, 1.35 * size * zoomW);
+          const into = bands[Math.min(BANDS - 1, Math.floor(mid * BANDS))];
+          into.moveTo(px + rr, py);
+          into.arc(px, py, rr, 0, Math.PI * 2);
+        }
+        for (let i = 0; i < BANDS; i++) {
+          ctx.globalAlpha = (lit ? 0.75 : 0.12) * (0.2 + 0.8 * ((i + 0.5) / BANDS));
+          ctx.fill(bands[i]);
         }
         ctx.globalAlpha = 1;
         return;
@@ -2653,6 +2699,11 @@ export default function Graph({
       if (style === "forest" ? link.kind !== "answers" : link.kind === "from" && style !== "nodes" && style !== "simplified") {
         continue;
       }
+      // A subject's chain says what its colour already says, once per pair
+      // of ideas — on a real map most of the lines drawn, and most of the
+      // frame. It still holds the subject together in the layout; it is only
+      // drawn while that subject is the one being looked at.
+      if (link.kind === "category" && (link.source as Node).data.category !== focus) continue;
       drawLink(link);
     }
     ctx.globalAlpha = 1;
@@ -2670,7 +2721,7 @@ export default function Graph({
         // Bees ride the streams that are drawn. A flower's petals belong to
         // their sunflower without a thread, so those ties are not drawn — and
         // a bee following an invisible line would be a bee going nowhere.
-        const links = linksRef.current.filter((l) => l.kind !== "from");
+        const links = linksRef.current.filter(isRelation);
         if (!links.length) {
           beeSpawnRef.current = nowS + 3.5;
         } else {
@@ -3006,13 +3057,32 @@ export default function Graph({
       // claim with it. Only the card flips: an ordinary label is narrow
       // enough that the column reads better staying on one side.
       const pad = Math.max(4, px * 0.85);
-      const flip = isHovered && s.x + half + gap + widest + pad > w;
+      // In the simplified map an idea's name points away from its ring —
+      // out to the side it sits on, or down under the bottom of it — so it
+      // never lies across the spokes or the conversation's own title above.
+      const simplified = styleRef.current === "simplified";
+      const outward = simplified && !isConversation ? placed.outward.get(n) : undefined;
+      const ring =
+        simplified && isConversation ? placed.rings.find((g) => g.hub === n) : undefined;
+      const below =
+        outward !== undefined && Math.sin(outward) > 0 && Math.abs(Math.cos(outward)) < 0.35;
+      // The hovered card is several times wider than a label, so it takes
+      // the other side when its own would run it off the canvas.
+      const outwardLeft = outward !== undefined && Math.cos(outward) < 0;
+      const flip =
+        outward !== undefined
+          ? isHovered
+            ? outwardLeft
+              ? s.x - half - gap - widest - pad >= 0 || s.x + half + gap + widest + pad > w
+              : s.x + half + gap + widest + pad > w && s.x - half - gap - widest - pad >= 0
+            : outwardLeft
+          : isHovered && s.x + half + gap + widest + pad > w;
       // A sunflower's name sits over its head, centred, in the open sky:
-      // beside the flower it ran across the next one's petals. In the
-      // simplified map every title does — beside a node on a ring, it lay
-      // across the spokes and the next idea round.
+      // beside the flower it ran across the next one's petals. A simplified
+      // conversation's sits above its whole ring, clear of its ideas.
       const above =
-        styleRef.current === "simplified" ||
+        below ||
+        (simplified && (isConversation || outward === undefined)) ||
         (styleRef.current === "sunflower" && isConversation && placed.flowers.has(n));
       const textX = above
         ? s.x - widest / 2
@@ -3025,7 +3095,11 @@ export default function Graph({
       // bubble cut off by the edge of the map is the same failure as one cut
       // off by its own width.
       const blockH = lines.length * lineHeight;
-      const textY = above
+      const textY = below
+        ? s.y + half + gap
+        : ring
+          ? s.y - ring.radius * viewRef.current.scale - half - gap - blockH
+          : above
         ? s.y - half - gap - blockH
         : isHovered
           ? Math.min(
@@ -3225,6 +3299,7 @@ export default function Graph({
     let byId = new Map(nodes.map((n) => [n.data.id, n]));
     let links: Link[] = data.edges
       .filter((e) => byId.has(e.source) && byId.has(e.target))
+      .filter((e) => e.kind !== "recall" || correlationsRef.current)
       .map((e) => ({
         source: byId.get(e.source)!,
         target: byId.get(e.target)!,
@@ -3540,8 +3615,11 @@ export default function Graph({
         // Opening a file resizes the canvas, and refitting here threw away the
         // framing that opening it had just set up. Re-aim at what is being
         // looked at instead, so it ends up centred in the space that is left.
+        // Closing a file after letting go of its node resizes the canvas
+        // too, and a refit there zoomed all the way out.
         const focused = focusNodeRef.current;
         if (focused) travelTo(focused);
+        else if (keepViewRef.current) keepViewRef.current = false;
         else fitToView();
       }, 180);
     });
@@ -3919,23 +3997,22 @@ function chordClearance(
     const dy = (b.y - a.y) / len;
     // Both controls sag by the same amount, which puts the curve's lowest
     // point where the meadow's old single-arch stream had it.
-    const sag =
-      styleRef.current === "sunflower"
-        ? (meadowArch(
+    let sag = 0;
+    if (styleRef.current === "sunflower") {
+      const known = sagRef.current.get(link);
+      if (known !== undefined) {
+        sag = known;
+      } else {
+        sag =
+          (meadowArch(
             len,
-            chordClearance(
-              a.x,
-              a.y,
-              b.x,
-              b.y,
-              new Set([na.data.id, nb.data.id]),
-              w,
-              h,
-            ),
+            chordClearance(a.x, a.y, b.x, b.y, new Set([na.data.id, nb.data.id]), w, h),
           ) *
             2) /
-          3
-        : 0;
+          3;
+        sagRef.current.set(link, sag);
+      }
+    }
     const ra = len * route.reach;
     // The far end turns the mirror way, so equal angles bow to one side.
     const c1 = {
@@ -4017,7 +4094,9 @@ function chordClearance(
         } else if (style === "simplified" || (style === "sunflower" && placed.petals.has(b))) {
           fixed.push(seg(sa, sb));
         }
-      } else {
+      } else if (l.kind !== "category") {
+        // Subject chains are hidden unless their subject is in focus, so
+        // they are not something a line has to steer round.
         fixed.push(seg(sa, sb));
       }
     }
@@ -4446,14 +4525,10 @@ function chordClearance(
           panRef.current = null;
           if (wasDrag) return;
 
-          // A click is a decision, and decisions are made about things you can see.
-          // Pulled back far enough, nodes are dots a few pixels apart and
-          // picking one is a guess at best — so past the zoom where anything
-          // is legible, a click answers nothing and is spent on the bare map
-          // instead (which puts the titles away). Hovering answers at every
-          // zoom: that is a side effect of where the pointer rests.
-          const readable = viewRef.current.scale >= READABLE_ZOOM;
-          const hit = readable ? nodeAt(e.clientX, e.clientY) : null;
+          // A node answers a click at every zoom, the same as it answers
+          // hovering. Pulled back, the hover names the dot before it is
+          // clicked, so the click is not a guess.
+          const hit = nodeAt(e.clientX, e.clientY);
           if (!hit) {
           // A contradiction is the one edge worth clicking: it is the only
           // thing on the map that asks the person a question. Checked before
@@ -4473,9 +4548,23 @@ function chordClearance(
                 return;
               }
             }
-            // Clicking the bare map puts the titles away again.
+            // Clicking the bare map puts the titles away again — and leaves
+            // the view where it is.
+            if (focusNodeRef.current) keepViewRef.current = true;
             focusNodeRef.current = null;
             revealRef.current = new Set();
+            cancelTravel();
+            return;
+          }
+          // Clicking the node already in focus lets go of it. The view stays
+          // where it is: letting go of a thing is not asking to see the
+          // whole map again.
+          if (focusNodeRef.current === hit) {
+            keepViewRef.current = true;
+            focusNodeRef.current = null;
+            revealRef.current = new Set();
+            cancelTravel();
+            if (panelRef.current) setPanel(null);
             return;
           }
           // The file and the framing are one thing. A node whose file is
@@ -4507,11 +4596,9 @@ function chordClearance(
         }}
         onContextMenu={(e) => {
           // The map's own menu, not the browser's. A node answers here on the
-          // same terms as a click — past the zoom where anything is legible,
-          // naming a node would be naming a guess.
+          // same terms as a click, at every zoom.
           e.preventDefault();
-          const hit =
-            viewRef.current.scale >= READABLE_ZOOM ? nodeAt(e.clientX, e.clientY) : null;
+          const hit = nodeAt(e.clientX, e.clientY);
           if (!hit) return;
           setMenu({ x: e.clientX, y: e.clientY, node: hit.data });
         }}
@@ -4669,6 +4756,29 @@ function chordClearance(
                   }}
                 >
                   Locked
+                </button>
+              </div>
+              <p className="graph-arrange-head">Correlations</p>
+              <div className="graph-arrange-row">
+                <button
+                  type="button"
+                  className={!correlations ? "on" : undefined}
+                  title="Only judged relations and contradictions are drawn"
+                  onClick={() => {
+                    void getSettings().then((st) => saveSettings({ ...st, map_correlations: false }));
+                  }}
+                >
+                  Hidden
+                </button>
+                <button
+                  type="button"
+                  className={correlations ? "on" : undefined}
+                  title="Also join ideas whose claims are close in meaning"
+                  onClick={() => {
+                    void getSettings().then((st) => saveSettings({ ...st, map_correlations: true }));
+                  }}
+                >
+                  Shown
                 </button>
               </div>
             </div>

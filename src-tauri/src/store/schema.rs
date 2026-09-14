@@ -481,6 +481,21 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
          );",
     )?;
 
+    // Messages taken out of the live conversation — deleted one at a time or
+    // rewound past. Not in `trash`: its kinds are fixed by a CHECK that only
+    // a table rebuild could widen, and a message has nothing to restore into.
+    // `session_id` is the archived conversation being continued, if any.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS deleted_messages (
+             id                      INTEGER PRIMARY KEY,
+             role                    TEXT NOT NULL,
+             text                    TEXT NOT NULL,
+             conversation_started_at TEXT,
+             session_id              INTEGER,
+             deleted_at              TEXT NOT NULL
+         );",
+    )?;
+
     // What the person said their words mean, found by the same read that
     // finds ideas. No foreign key on the session: a conversation in the bin
     // hides its definitions through the join that lists them, and restoring
@@ -494,10 +509,21 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
              definition TEXT NOT NULL,
              quote      TEXT NOT NULL,
              created_at TEXT NOT NULL,
-             archived   INTEGER NOT NULL DEFAULT 0
+             archived   INTEGER NOT NULL DEFAULT 0,
+             edited     INTEGER NOT NULL DEFAULT 0
          );
          CREATE INDEX IF NOT EXISTS definitions_session ON definitions(session_id);",
     )?;
+    let definition_cols: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('definitions')")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !definition_cols.iter().any(|c| c == "edited") {
+        // One the person rewrote is theirs now: a re-read leaves it alone.
+        conn.execute_batch(
+            "ALTER TABLE definitions ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
 
     // Root always exists, on a fresh database and on one made before folders.
     conn.execute(

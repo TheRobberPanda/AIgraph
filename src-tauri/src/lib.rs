@@ -211,6 +211,7 @@ pub fn run() {
             commands::load_draft,
             commands::recovered_session,
             commands::remove_definition,
+            commands::edit_definition,
         ])
         .setup(|app| {
             use tauri::Manager;

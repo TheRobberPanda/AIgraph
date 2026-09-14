@@ -27,7 +27,6 @@ import {
   OUTPUT_FORMATS,
 } from "../lib/settings";
 import Confirm from "./Confirm";
-import PromptHelper from "./PromptHelper";
 import { IconTrash } from "./Icons";
 import Hint, { Section } from "./Hint";
 
@@ -316,6 +315,26 @@ export default function Settings() {
                 onClick={() => void update({ map_lock_nodes: true })}
               >
                 Locked
+              </button>
+            </div>
+
+            <Section
+              hint="Correlations join ideas whose claims are close in meaning, without a model judging them related. Contradictions and judged relations always show."
+            >
+              Correlations
+            </Section>
+            <div className="row">
+              <button
+                className={!s.map_correlations ? "btn on" : "btn"}
+                onClick={() => void update({ map_correlations: false })}
+              >
+                Hidden
+              </button>
+              <button
+                className={s.map_correlations ? "btn on" : "btn"}
+                onClick={() => void update({ map_correlations: true })}
+              >
+                Shown
               </button>
             </div>
 
@@ -813,7 +832,6 @@ export default function Settings() {
                 it, and undoes edits to the ones that came with the app.
               </Hint>
             </div>
-            <PromptHelper onAdd={(p) => void update({ presets: [...s.presets, p] })} />
             <Section
               hint={
                 <>

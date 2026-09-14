@@ -936,18 +936,18 @@ export function OutputFile({
               </button>
               <span className="spacer" />
               {busy ? (
-                <button className="btn" onClick={() => void stopGeneration()}>
+                <button className="btn grow" onClick={() => void stopGeneration()}>
                   <IconStop />
-                  Stop
+                  <span className="btn-label">Stop</span>
                 </button>
               ) : (
                 <button
-                  className="btn btn-send"
+                  className="btn btn-send grow"
                   disabled={!draft.trim()}
                   onClick={() => void revise()}
                 >
                   <IconSend />
-                  Send
+                  <span className="btn-label">Send</span>
                 </button>
               )}
             </div>

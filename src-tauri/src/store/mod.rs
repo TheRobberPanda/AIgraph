@@ -1930,6 +1930,8 @@ impl Store {
         // the link would be dropped, stranding the rest of the subject.
         let on_map_ideas: std::collections::HashSet<i64> =
             g.nodes.iter().filter_map(|n| n.idea_id).collect();
+        let category_of: std::collections::HashMap<i64, String> =
+            by_category.iter().cloned().collect();
         let mut prev: Option<(i64, String)> = None;
         for (id, category) in by_category {
             if !on_map_ideas.contains(&id) {
@@ -1970,10 +1972,35 @@ impl Store {
             .filter(|(id, _, _)| on_map_ideas.contains(id))
             .map(|(id, _, v)| (id, v))
             .collect();
+        // The conversations each idea came from. An idea can be traced to
+        // more than one.
+        let mut sessions_of: std::collections::HashMap<i64, Vec<&str>> =
+            std::collections::HashMap::new();
+        for e in g.edges.iter().filter(|e| e.kind == "from") {
+            if let Some(id) = idea_of(&e.target) {
+                sessions_of.entry(id).or_default().push(e.source.as_str());
+            }
+        }
+        // A correlation is only worth a line when nothing else on the map
+        // already says the two belong together. Ideas from the same
+        // conversation share its hub, and ideas on the same subject share a
+        // colour; what is left is "you said something like this elsewhere".
+        let already_joined = |a: i64, b: i64| {
+            let same_subject = matches!(
+                (category_of.get(&a), category_of.get(&b)),
+                (Some(x), Some(y)) if x == y
+            );
+            let same_conversation = match (sessions_of.get(&a), sessions_of.get(&b)) {
+                (Some(x), Some(y)) => x.iter().any(|s| y.contains(s)),
+                _ => false,
+            };
+            same_subject || same_conversation
+        };
+        let mut found =
+            embed::correlations(&pool, embed::MAP_CORRELATION_MIN, embed::MAP_CORRELATION_PER_IDEA);
+        found.retain(|&(a, b, _)| !already_joined(a, b));
         // Mutual and stand-out, not just nearest: see `embed::correlations`.
-        for (a, b, score) in
-            embed::correlations(&pool, embed::MAP_CORRELATION_MIN, embed::MAP_CORRELATION_PER_IDEA)
-        {
+        for (a, b, score) in found {
             if !drawn.insert(pair(a, b)) {
                 continue;
             }
@@ -1987,6 +2014,7 @@ impl Store {
             });
         }
 
+        collapse_repeated_ideas(&mut g);
         Ok(g)
     }
 
@@ -2448,7 +2476,10 @@ impl Store {
         let tx = self.conn.transaction()?;
 
         let evidence = tx.execute("DELETE FROM evidence WHERE session_id = ?1", [session_id])?;
-        tx.execute("DELETE FROM definitions WHERE session_id = ?1 AND archived = 0", [session_id])?;
+        tx.execute(
+            "DELETE FROM definitions WHERE session_id = ?1 AND archived = 0 AND edited = 0",
+            [session_id],
+        )?;
         tx.execute("DELETE FROM session_nudges WHERE session_id = ?1", [session_id])?;
         tx.execute(
             "UPDATE rejected_ideas SET archived = 1
@@ -2681,7 +2712,64 @@ impl Store {
         Ok(())
     }
 
+    /// An idea already on record that says the same thing, by claim or by
+    /// name, once case, punctuation and spacing are set aside.
+    ///
+    /// Asked before the embedding shortlist: a repeat is the one case where
+    /// no model has to be consulted, and where leaving it to the adjudicator
+    /// (or to having an embedder at all) put the same thought on the map twice.
+    pub fn same_idea(&self, claim: &str, title: &str) -> Result<Option<i64>> {
+        let (claim, title) = (same_idea_key(claim), same_idea_key(title));
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, claim, title FROM ideas WHERE archived = 0 ORDER BY id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })?;
+        for row in rows {
+            let (id, c, t) = row?;
+            if (!claim.is_empty() && same_idea_key(&c) == claim)
+                || (!title.is_empty() && same_idea_key(&t) == title)
+            {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Keep messages taken out of the live conversation, by deleting one or
+    /// rewinding past it. They show in the bin under Messages.
+    pub fn keep_deleted_messages(
+        &mut self,
+        messages: &[crate::llm::types::Message],
+        conversation_started_at: Option<&str>,
+        session_id: Option<i64>,
+    ) -> Result<()> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now().to_rfc3339();
+        let tx = self.conn.transaction()?;
+        for m in messages {
+            let role = match m.role {
+                Role::User => "user",
+                Role::Assistant => "assistant",
+            };
+            tx.execute(
+                "INSERT INTO deleted_messages
+                   (role, text, conversation_started_at, session_id, deleted_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![role, m.content, conversation_started_at, session_id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// What is in the bin, newest first.
+    ///
+    /// Deleted messages live in a table of their own and are listed under
+    /// negative ids, so the bin can hold both without their ids colliding.
     pub fn trash_list(&self) -> Result<Vec<TrashItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, kind, label, detail, deleted_at
@@ -2697,7 +2785,23 @@ impl Store {
                 deleted_at: r.get(4)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+        let mut items: Vec<TrashItem> = rows.collect::<rusqlite::Result<_>>()?;
+        let mut msgs =
+            self.conn.prepare("SELECT id, role, text, deleted_at FROM deleted_messages")?;
+        for row in msgs.query_map([], |r| {
+            let role: String = r.get(1)?;
+            Ok(TrashItem {
+                id: -r.get::<_, i64>(0)?,
+                kind: "message".into(),
+                label: r.get(2)?,
+                detail: if role == "user" { "you said" } else { "the AI replied" }.into(),
+                deleted_at: r.get(3)?,
+            })
+        })? {
+            items.push(row?);
+        }
+        items.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at).then(b.id.cmp(&a.id)));
+        Ok(items)
     }
 
     /// Put a binned thing back.
@@ -2707,6 +2811,11 @@ impl Store {
     /// everything pointing at the old id is re-pointed, so restoring an old
     /// conversation beside new work cannot corrupt either.
     pub fn trash_restore(&mut self, trash_id: i64, md_dir: Option<&Path>) -> Result<()> {
+        if trash_id < 0 {
+            return Err(StoreError::Bin(
+                "a deleted message has no conversation to go back into".into(),
+            ));
+        }
         let (kind, payload): (String, String) = self
             .conn
             .query_row("SELECT kind, payload FROM trash WHERE id = ?1", [trash_id], |r| {
@@ -2934,6 +3043,10 @@ impl Store {
     /// Drop one bin entry and its snapshot. This is the delete that cannot be
     /// taken back.
     pub fn trash_purge(&mut self, trash_id: i64) -> Result<()> {
+        if trash_id < 0 {
+            self.conn.execute("DELETE FROM deleted_messages WHERE id = ?1", [-trash_id])?;
+            return Ok(());
+        }
         self.conn.execute("DELETE FROM trash WHERE id = ?1", [trash_id])?;
         Ok(())
     }
@@ -2941,6 +3054,7 @@ impl Store {
     /// Empty the bin.
     pub fn trash_empty(&mut self) -> Result<()> {
         self.conn.execute("DELETE FROM trash", [])?;
+        self.conn.execute("DELETE FROM deleted_messages", [])?;
         Ok(())
     }
 
@@ -2956,25 +3070,31 @@ impl Store {
 
     /// Replace one session's definitions with what a read just found.
     ///
-    /// One taken off the list stays off: reading the conversation again does
-    /// not put back a term hidden for it.
+    /// One taken off the list stays off, and one the person rewrote stays as
+    /// they wrote it: reading the conversation again does not put back a term
+    /// hidden for it, or add a second copy beside an edited one.
     pub fn replace_definitions(
         &mut self,
         session_id: i64,
         found: &[crate::extract::VerifiedDefinition],
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM definitions WHERE session_id = ?1 AND archived = 0", [session_id])?;
+        tx.execute(
+            "DELETE FROM definitions WHERE session_id = ?1 AND archived = 0 AND edited = 0",
+            [session_id],
+        )?;
         let now = Utc::now().to_rfc3339();
         for d in found {
             let term = d.raw.term.trim();
-            let hidden: bool = tx.query_row(
+            // An edit can rename the term, so the quote it was said in counts too.
+            let kept: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM definitions
-                  WHERE session_id = ?1 AND archived = 1 AND lower(term) = lower(?2))",
-                params![session_id, term],
+                  WHERE session_id = ?1 AND (archived = 1 OR edited = 1)
+                    AND (lower(term) = lower(?2) OR quote = ?3))",
+                params![session_id, term, d.located.matched_text],
                 |r| r.get(0),
             )?;
-            if hidden {
+            if kept {
                 continue;
             }
             tx.execute(
@@ -3021,6 +3141,21 @@ impl Store {
     /// not to add it back.
     pub fn remove_definition(&mut self, definition_id: i64) -> Result<()> {
         self.conn.execute("UPDATE definitions SET archived = 1 WHERE id = ?1", [definition_id])?;
+        Ok(())
+    }
+
+    /// The person's own wording for a term or what it means. Marked edited,
+    /// so a re-read keeps it instead of putting the found version back.
+    pub fn edit_definition(
+        &mut self,
+        definition_id: i64,
+        term: &str,
+        definition: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE definitions SET term = ?2, definition = ?3, edited = 1 WHERE id = ?1",
+            params![definition_id, term.trim(), definition.trim()],
+        )?;
         Ok(())
     }
 
@@ -3459,6 +3594,128 @@ pub fn summarize_output(content: &str) -> (String, String) {
 ///
 /// Lowercased and squeezed so "Moral Philosophy" and "moral  philosophy" do not
 /// become two colours on the map.
+/// What two ideas have to share to count as the same one: their words, with
+/// case, punctuation and spacing set aside.
+fn same_idea_key(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() { c.to_lowercase().next().unwrap_or(c) } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One node per idea, however many times it was said.
+///
+/// Reconciliation attaches a repeat to the idea it repeats, but ideas saved
+/// before that check still have rows of their own. Two nodes with the same
+/// name read as one thought, so they are drawn as one: the oldest keeps its
+/// node and every line to the others moves onto it. Nothing is merged in the
+/// database — this is only how the map draws them. A pair recorded as
+/// contradicting each other is left apart, since that line is the point.
+fn collapse_repeated_ideas(g: &mut Graph) {
+    use std::collections::{HashMap, HashSet};
+    let idea_of = |node: &str| node.strip_prefix('i').and_then(|n| n.parse::<i64>().ok());
+
+    let opposed: HashSet<(i64, i64)> = g
+        .edges
+        .iter()
+        .filter(|e| e.kind == "contradicts")
+        .filter_map(|e| {
+            let (a, b) = (idea_of(&e.source)?, idea_of(&e.target)?);
+            Some((a.min(b), a.max(b)))
+        })
+        .collect();
+
+    let mut ideas: Vec<(i64, String)> = g
+        .nodes
+        .iter()
+        .filter(|n| n.kind == "idea")
+        .filter_map(|n| Some((n.idea_id?, same_idea_key(&n.label))))
+        .filter(|(_, key)| !key.is_empty())
+        .collect();
+    ideas.sort_by_key(|(id, _)| *id);
+    let mut kept: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut merged: HashMap<i64, i64> = HashMap::new();
+    for (id, key) in ideas {
+        let group = kept.entry(key).or_default();
+        match group.iter().find(|&&c| !opposed.contains(&(c.min(id), c.max(id)))) {
+            Some(&canon) => {
+                merged.insert(id, canon);
+            }
+            None => group.push(id),
+        }
+    }
+    if merged.is_empty() {
+        return;
+    }
+
+    // What the folded-away nodes carried, handed to the one that stays.
+    let mut carried: HashMap<i64, (bool, i64, Vec<String>, Vec<String>)> = HashMap::new();
+    for n in g.nodes.iter().filter(|n| n.kind == "idea") {
+        if let Some(&canon) = n.idea_id.and_then(|i| merged.get(&i)) {
+            let c = carried.entry(canon).or_default();
+            c.0 |= n.just_revised;
+            c.1 = c.1.max(n.weight);
+            c.2.extend(n.strong.iter().cloned());
+            c.3.extend(n.weak.iter().cloned());
+        }
+    }
+    g.nodes.retain(|n| !(n.kind == "idea" && n.idea_id.is_some_and(|i| merged.contains_key(&i))));
+    for n in g.nodes.iter_mut().filter(|n| n.kind == "moon") {
+        if let Some(&canon) = n.idea_id.and_then(|i| merged.get(&i)) {
+            n.idea_id = Some(canon);
+        }
+    }
+
+    let moved = |node: &str| match idea_of(node).and_then(|i| merged.get(&i)) {
+        Some(canon) => format!("i{canon}"),
+        None => node.to_string(),
+    };
+    let mut seen: HashSet<(String, String, String)> = HashSet::new();
+    for mut e in std::mem::take(&mut g.edges) {
+        e.source = moved(&e.source);
+        e.target = moved(&e.target);
+        if e.source == e.target {
+            continue;
+        }
+        let ends = if e.source < e.target {
+            (e.source.clone(), e.target.clone())
+        } else {
+            (e.target.clone(), e.source.clone())
+        };
+        if seen.insert((ends.0, ends.1, e.kind.clone())) {
+            g.edges.push(e);
+        }
+    }
+
+    let mut conversations: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for e in g.edges.iter().filter(|e| e.kind == "from") {
+        conversations.entry(e.target.as_str()).or_default().insert(e.source.as_str());
+    }
+    let reach: HashMap<String, i64> =
+        conversations.into_iter().map(|(k, v)| (k.to_string(), v.len() as i64)).collect();
+    for n in g.nodes.iter_mut().filter(|n| n.kind == "idea") {
+        let Some((revised, weight, strong, weak)) = n.idea_id.and_then(|i| carried.remove(&i))
+        else {
+            continue;
+        };
+        n.just_revised |= revised;
+        n.weight = n.weight.max(weight).max(reach.get(&n.id).copied().unwrap_or(0));
+        n.shared = n.weight > 1;
+        for s in strong {
+            if !n.strong.contains(&s) {
+                n.strong.push(s);
+            }
+        }
+        for w in weak {
+            if !n.weak.contains(&w) {
+                n.weak.push(w);
+            }
+        }
+    }
+}
+
 fn normalize_category(raw: &str) -> String {
     let cleaned: String =
         raw.trim().to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
@@ -4123,6 +4380,85 @@ mod tests {
     }
 
     #[test]
+    fn a_repeated_idea_is_found_by_its_words() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (s, t) = session_with(&mut store, "latency is the problem");
+        let id = store
+            .apply_decision(
+                s,
+                &verified("Latency is the problem.", "latency is the problem", &t),
+                &Decision::New { related: vec![] },
+                "t",
+                "m",
+            )
+            .unwrap();
+        assert_eq!(store.same_idea("latency  is THE problem", "").unwrap(), Some(id));
+        assert_eq!(store.same_idea("cost is the problem", "").unwrap(), None);
+        assert_eq!(store.same_idea("", "").unwrap(), None, "nothing is not a match");
+    }
+
+    #[test]
+    fn repeated_ideas_share_one_node() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut idea = |said: &str| {
+            let (s, t) = session_with(&mut store, said);
+            let id = store
+                .apply_decision(
+                    s,
+                    &verified("Latency is the problem", said, &t),
+                    &Decision::New { related: vec![] },
+                    "t",
+                    "m",
+                )
+                .unwrap();
+            (s, id)
+        };
+        let (s1, a) = idea("latency is the problem");
+        let (s2, b) = idea("latency is the problem, again");
+        assert_ne!(a, b, "saved as two rows, as older builds did");
+
+        let g = store.graph(None).unwrap();
+        let ideas: Vec<_> = g.nodes.iter().filter(|n| n.kind == "idea").collect();
+        assert_eq!(ideas.len(), 1, "one thought, one node");
+        assert_eq!(ideas[0].idea_id, Some(a), "the oldest keeps its node");
+        assert!(ideas[0].shared);
+        let from: Vec<_> = g
+            .edges
+            .iter()
+            .filter(|e| e.kind == "from" && e.target == format!("i{a}"))
+            .map(|e| e.source.clone())
+            .collect();
+        assert!(from.contains(&format!("s{s1}")) && from.contains(&format!("s{s2}")));
+        assert!(!g
+            .edges
+            .iter()
+            .any(|e| e.source == format!("i{b}") || e.target == format!("i{b}")));
+    }
+
+    #[test]
+    fn deleted_messages_wait_in_the_bin() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .keep_deleted_messages(
+                &[
+                    Message { role: Role::User, content: "never mind".into() },
+                    Message { role: Role::Assistant, content: "ok".into() },
+                ],
+                Some("2026-09-14T10:00:00Z"),
+                None,
+            )
+            .unwrap();
+        let bin = store.trash_list().unwrap();
+        assert_eq!(bin.len(), 2);
+        assert!(bin.iter().all(|i| i.kind == "message" && i.id < 0));
+        assert!(store.trash_restore(bin[0].id, None).is_err(), "nothing to put it back into");
+        store.trash_purge(bin[0].id).unwrap();
+        assert_eq!(store.trash_list().unwrap().len(), 1);
+        store.trash_empty().unwrap();
+        assert!(store.trash_list().unwrap().is_empty());
+    }
+
+    #[test]
     fn ideas_close_in_meaning_are_joined_by_a_recall_correlation() {
         let mut store = Store::open_in_memory().unwrap();
         let mut idea = |said: &str, title: &str| {
@@ -4150,6 +4486,13 @@ mod tests {
         store.set_embedding(a, &unit(&[(0, 1.0)])).unwrap();
         store.set_embedding(b, &unit(&[(0, 0.9), (1, 0.1)])).unwrap();
         store.set_embedding(c, &unit(&[(2, 1.0)])).unwrap();
+        // Different subjects, or the colour already joins them.
+        for (id, cat) in [(a, "speed"), (b, "capacity"), (c, "garden")] {
+            store
+                .conn
+                .execute("UPDATE ideas SET category = ?1 WHERE id = ?2", params![cat, id])
+                .unwrap();
+        }
 
         let g = store.graph(None).unwrap();
         let recall: Vec<_> = g.edges.iter().filter(|e| e.kind == "recall").collect();
@@ -4160,6 +4503,71 @@ mod tests {
         );
         let ends = [recall[0].source.clone(), recall[0].target.clone()];
         assert!(ends.contains(&format!("i{a}")) && ends.contains(&format!("i{b}")));
+    }
+
+    #[test]
+    fn no_correlation_between_ideas_the_map_already_joins() {
+        let unit = |pairs: &[(usize, f32)]| {
+            let mut v = vec![0.0f32; 384];
+            for &(i, x) in pairs {
+                v[i] = x;
+            }
+            v
+        };
+        let recalls = |store: &Store| {
+            store.graph(None).unwrap().edges.iter().filter(|e| e.kind == "recall").count()
+        };
+
+        // Same subject, different conversations.
+        let mut store = Store::open_in_memory().unwrap();
+        let mut idea = |said: &str, title: &str| {
+            let (s, t) = session_with(&mut store, said);
+            store
+                .apply_decision(
+                    s,
+                    &verified(title, said, &t),
+                    &Decision::New { related: vec![] },
+                    "t",
+                    "m",
+                )
+                .unwrap()
+        };
+        let a = idea("latency is the problem", "Latency");
+        let b = idea("throughput matters more", "Throughput");
+        store.set_embedding(a, &unit(&[(0, 1.0)])).unwrap();
+        store.set_embedding(b, &unit(&[(0, 0.9), (1, 0.1)])).unwrap();
+        assert_eq!(recalls(&store), 0, "both are \"testing\": the colour says it");
+
+        // Different subjects, same conversation.
+        let mut store = Store::open_in_memory().unwrap();
+        let (s, t) = session_with(&mut store, "latency is the problem, throughput matters more");
+        let a = store
+            .apply_decision(
+                s,
+                &verified("Latency", "latency is the problem", &t),
+                &Decision::New { related: vec![] },
+                "t",
+                "m",
+            )
+            .unwrap();
+        let b = store
+            .apply_decision(
+                s,
+                &verified("Throughput", "throughput matters more", &t),
+                &Decision::New { related: vec![] },
+                "t",
+                "m",
+            )
+            .unwrap();
+        for (id, cat) in [(a, "speed"), (b, "capacity")] {
+            store
+                .conn
+                .execute("UPDATE ideas SET category = ?1 WHERE id = ?2", params![cat, id])
+                .unwrap();
+        }
+        store.set_embedding(a, &unit(&[(0, 1.0)])).unwrap();
+        store.set_embedding(b, &unit(&[(0, 0.9), (1, 0.1)])).unwrap();
+        assert_eq!(recalls(&store), 0, "one conversation: its hub says it");
     }
 
     #[test]

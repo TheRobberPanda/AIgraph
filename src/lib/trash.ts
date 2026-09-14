@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type TrashedKind = "session" | "idea" | "make_output";
+/** A "message" was deleted from the live conversation. It can be read and
+ *  deleted for good, but not restored: there is no conversation to put it in. */
+export type TrashedKind = "session" | "idea" | "make_output" | "message";
 
 export interface TrashedItem {
   id: number;

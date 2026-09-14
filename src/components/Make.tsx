@@ -27,6 +27,7 @@ import {
 import { REASONING_REFUSED, wantsReasoning } from "../lib/chat";
 import { enableReasoningFor } from "../lib/notice";
 import PresetPreview from "./PresetPreview";
+import PromptHelper from "./PromptHelper";
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { composeSaveOutput, listMakeOutputs, type MakeOutput } from "../lib/outputs";
 import { onMaking, setMaking, takeMakeOpenRequest } from "../lib/making";
@@ -165,6 +166,8 @@ export default function Make({ folder, compact = false }: { folder: number | nul
   const [readOpen, toggleReadOpen] = useRememberedOpen("make.readOpen");
   /** Writing a new instruction to sit beside the others. */
   const [adding, setAdding] = useState(false);
+  /** The prompt helper is open: an instruction written from an example. */
+  const [aiWriting, setAiWriting] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPrompt, setNewPrompt] = useState("");
   const [newFormat, setNewFormat] = useState<OutputFormat>("markdown");
@@ -427,6 +430,19 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     }
   }
 
+  /** Keep an instruction the prompt helper wrote. */
+  async function addWrittenPreset(p: Preset) {
+    try {
+      const current = await getSettings();
+      const next = [...current.presets, p];
+      await saveSettings({ ...current, presets: next });
+      setPresets(next);
+      setAiWriting(false);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   // Everything is what an empty selection means to the backend. It just never
   // looked like it: the rows sat unticked while the label said "Everything",
   // so the ticks read as "nothing chosen yet" rather than as the state they
@@ -548,12 +564,33 @@ export default function Make({ folder, compact = false }: { folder: number | nul
           <button
             className={adding ? "icon-btn on" : "icon-btn"}
             data-tip={adding ? "Cancel" : "Write another instruction"}
-            onClick={() => setAdding((v) => !v)}
+            onClick={() => {
+              setAiWriting(false);
+              setAdding((v) => !v);
+            }}
           >
             <IconPlus />
           </button>
+          {/* The same thing the other way round: show what you want back and
+              let the model write the instruction for it. */}
+          <button
+            className={aiWriting ? "btn on" : "btn"}
+            data-tip={aiWriting ? "Cancel" : "Have AI write an instruction from an example"}
+            onClick={() => {
+              setAdding(false);
+              setAiWriting((v) => !v);
+            }}
+          >
+            AI
+          </button>
         </div>
       </div>
+
+      {aiWriting && (
+        <div className="make-new">
+          <PromptHelper onAdd={(p) => void addWrittenPreset(p)} />
+        </div>
+      )}
 
       {adding && (
         <div className="make-new">
@@ -719,21 +756,21 @@ export default function Make({ folder, compact = false }: { folder: number | nul
           )}
           {busy ? (
             <button
-              className="btn"
+              className="btn grow"
               data-tip="Stop writing and keep what has arrived"
               onClick={() => void stopGeneration()}
             >
               <IconStop />
-              Stop
+              <span className="btn-label">Stop</span>
             </button>
           ) : (
             <button
-              className="btn btn-send"
+              className="btn btn-send grow"
               disabled={!draft.trim() || !packed || nothing}
               onClick={() => void ask(draft)}
             >
               <IconSend />
-              Ask
+              <span className="btn-label">Ask</span>
             </button>
           )}
         </div>

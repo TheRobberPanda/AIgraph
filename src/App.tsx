@@ -19,6 +19,8 @@ import {
   IconStop,
   IconCall,
   IconChevron,
+  IconArchive,
+  IconTrash,
 } from "./components/Icons";
 import Notice from "./components/Notice";
 import { enableReasoningFor, notify, REASONING_TURNED_ON } from "./lib/notice";
@@ -39,6 +41,8 @@ import QuickTune, { nextChatNumber } from "./components/QuickTune";
 import Sheet from "./components/Sheet";
 import Call from "./components/Call";
 import Queue from "./components/Queue";
+import Archive from "./components/Archive";
+import Trash from "./components/Trash";
 import Vitals from "./components/Vitals";
 import FolderMark from "./components/FolderMark";
 import ContextMenu from "./components/ContextMenu";
@@ -302,6 +306,8 @@ export default function App() {
   const [digesting, setDigesting] = useState<ExtractionProgress | null>(null);
   const [digestBusy, setDigestBusy] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
+  const [showTrash, setShowTrash] = useState(false);
   /** What the Make tab is making, so its progress follows you around the app. */
   const [making, setMaking] = useState<Making | null>(getMaking());
   const [showModels, setShowModels] = useState(false);
@@ -1411,6 +1417,23 @@ export default function App() {
               aside — does not appear and vanish with the count. */}
           {(
             <span className="row digest-group">
+              {/* What was set aside and what was thrown away. Quiet on
+                  purpose: places to go looking, not things asking for
+                  attention next to the one button that does. */}
+              <button
+                className="icon-btn topbar-quiet"
+                data-tip="Archived"
+                onClick={() => setShowArchive(true)}
+              >
+                <IconArchive />
+              </button>
+              <button
+                className="icon-btn topbar-quiet"
+                data-tip="Trash bin"
+                onClick={() => setShowTrash(true)}
+              >
+                <IconTrash />
+              </button>
               {/* Running, it becomes the way to stop — the same button, because
                   "digesting" and "stop digesting" are the same thing seen from
                   either side of the decision, and a second button beside it
@@ -1843,13 +1866,13 @@ export default function App() {
           <span className="spacer" />
 
           <button
-            className="btn btn-send"
+            className="btn btn-send grow"
             onClick={() => void send()}
             disabled={!draft.trim() || streaming}
             data-tip={tr("chat_send_tip")}
           >
             <IconSend />
-            Send
+            <span className="btn-label">Send</span>
           </button>
           {turns.length > 0 && (
             <button
@@ -1944,6 +1967,20 @@ export default function App() {
             setDigestBusy(true);
             void extractNow().finally(() => setDigestBusy(false));
           }}
+        />
+      )}
+
+      {showArchive && (
+        <Archive
+          onClose={() => setShowArchive(false)}
+          onChanged={() => void extractionProgress().then(setDigesting)}
+        />
+      )}
+
+      {showTrash && (
+        <Trash
+          onClose={() => setShowTrash(false)}
+          onChanged={() => void extractionProgress().then(setDigesting)}
         />
       )}
 

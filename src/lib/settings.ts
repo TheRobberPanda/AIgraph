@@ -66,6 +66,8 @@ export interface Settings {
   map_spread: MapSpread;
   /** Whether the map's nodes can be dragged out of place. */
   map_lock_nodes: boolean;
+  /** Whether the map draws correlations (ideas close in meaning). Off by default. */
+  map_correlations: boolean;
   /** Advanced layout order: conversations left, Make right. */
   advanced_swap: boolean;
   /** Show how long each reply took, and where the time went. */

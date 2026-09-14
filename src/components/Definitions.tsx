@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { listDefinitions, removeDefinition, type Definition } from "../lib/definitions";
+import {
+  editDefinition,
+  listDefinitions,
+  removeDefinition,
+  type Definition,
+} from "../lib/definitions";
 import { onIdeasChanged } from "../lib/ideas";
 import { longDate } from "../lib/format";
 import Confirm from "./Confirm";
-import { IconTrash } from "./Icons";
+import { IconPencil, IconTrash } from "./Icons";
 
 /**
  * What the person has said their words mean.
@@ -25,6 +30,25 @@ export default function Definitions({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [removing, setRemoving] = useState<Definition | null>(null);
+  const [editing, setEditing] = useState<{ id: number; term: string; definition: string } | null>(
+    null,
+  );
+  const [saving, setSaving] = useState(false);
+
+  const save = () => {
+    if (!editing || saving) return;
+    const term = editing.term.trim();
+    const definition = editing.definition.trim();
+    if (!term || !definition) return;
+    setSaving(true);
+    editDefinition(editing.id, term, definition)
+      .then(() => {
+        setRows((r) => (r ?? []).map((x) => (x.id === editing.id ? { ...x, term, definition } : x)));
+        setEditing(null);
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setSaving(false));
+  };
 
   useEffect(() => {
     const refresh = () =>
@@ -80,7 +104,53 @@ export default function Definitions({
         </p>
       ) : (
         <div>
-          {shown.map((d) => (
+          {shown.map((d) =>
+            editing?.id === d.id ? (
+              <div key={d.id} className="def-item editing">
+                <div className="def-edit">
+                  <input
+                    className="field"
+                    value={editing.term}
+                    autoFocus
+                    placeholder="Term"
+                    onChange={(e) => setEditing({ ...editing, term: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setEditing(null);
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        save();
+                      }
+                    }}
+                  />
+                  <textarea
+                    className="field"
+                    rows={3}
+                    value={editing.definition}
+                    placeholder="What you mean by it"
+                    onChange={(e) => setEditing({ ...editing, definition: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setEditing(null);
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        save();
+                      }
+                    }}
+                  />
+                  <div className="row">
+                    <button
+                      className="btn"
+                      disabled={saving || !editing.term.trim() || !editing.definition.trim()}
+                      onClick={save}
+                    >
+                      Save
+                    </button>
+                    <button className="btn subtle" disabled={saving} onClick={() => setEditing(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
             // The whole entry goes to where it was said, not just the quote:
             // the term is what the eye lands on, so it is what gets clicked.
             <div
@@ -88,7 +158,6 @@ export default function Definitions({
               className="def-item"
               role="link"
               tabIndex={0}
-              data-tip="Go to where you said this"
               onClick={() => onOpenConversation(d.session_id, d.quote)}
               onKeyDown={(e) => {
                 if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
@@ -99,16 +168,28 @@ export default function Definitions({
             >
               <div className="def-head">
                 <span className="def-term">{d.term}</span>
-                <button
-                  className="icon-btn"
-                  data-tip="Take it off the list"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setRemoving(d);
-                  }}
-                >
-                  <IconTrash />
-                </button>
+                <span className="def-tools">
+                  <button
+                    className="icon-btn"
+                    data-tip="Edit"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditing({ id: d.id, term: d.term, definition: d.definition });
+                    }}
+                  >
+                    <IconPencil />
+                  </button>
+                  <button
+                    className="icon-btn"
+                    data-tip="Take it off the list"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRemoving(d);
+                    }}
+                  >
+                    <IconTrash />
+                  </button>
+                </span>
               </div>
               <p className="def-text">{d.definition}</p>
               <span className="def-quote">“{d.quote}”</span>
@@ -117,7 +198,8 @@ export default function Definitions({
                 {d.started_at && ` · ${longDate(d.started_at)}`}
               </div>
             </div>
-          ))}
+            ),
+          )}
           {rows !== null && rows.length > 0 && shown.length === 0 && (
             <p className="empty">No term matches “{query}”.</p>
           )}

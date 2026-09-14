@@ -12,7 +12,6 @@ import MoveTo from "./MoveTo";
 import Sheet from "./Sheet";
 import { IconArchive, IconPlus, IconRewind, IconTrash } from "./Icons";
 import ImportChat from "./ImportChat";
-import Trash from "./Trash";
 import { ConversationFile, IdeaFile } from "./Deep";
 import { categoryColor } from "../lib/categories";
 import { ROOT_FOLDER } from "../lib/folders";
@@ -102,7 +101,6 @@ export default function Ideas({
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [binOpen, setBinOpen] = useState(false);
   /** Conversations that were read and yielded nothing are kept out of the way
    *  rather than gone — this is the drawer they wait in. */
   const [showEmpty, setShowEmpty] = useState(false);
@@ -351,18 +349,9 @@ export default function Ideas({
         >
           <IconArchive />
         </button>
-        <button
-          className={binOpen ? "icon-btn on" : "icon-btn"}
-          data-tip="The trash"
-          onClick={() => setBinOpen((b) => !b)}
-        >
-          <IconTrash />
-        </button>
       </div>
 
       {adding && <ImportChat onDone={() => { setAdding(false); refresh(); }} />}
-
-      {binOpen && <Trash onClose={() => setBinOpen(false)} onChanged={refresh} />}
 
       {tags.length > 1 && (
         <div className="tag-filter">

@@ -765,11 +765,14 @@ fn log_timing(t: &ReplyTiming, prep_ms: u64, call_mode: bool, reasoning: bool) {
 /// the rest of it.
 #[tauri::command]
 pub async fn delete_turn(state: State<'_, AppState>, index: usize) -> Result<(), String> {
-    {
+    let removed = {
         let mut guard = state.conversation.lock().await;
         let convo = guard.as_mut().ok_or("no conversation")?;
+        let removed: Vec<_> = convo.messages().get(index).cloned().into_iter().collect();
         convo.remove(index);
-    }
+        removed
+    };
+    keep_deleted(&state, &removed).await;
     persist_live(&state, None).await;
     Ok(())
 }
@@ -778,13 +781,31 @@ pub async fn delete_turn(state: State<'_, AppState>, index: usize) -> Result<(),
 /// and everything said after it.
 #[tauri::command]
 pub async fn rewind_conversation(state: State<'_, AppState>, index: usize) -> Result<(), String> {
-    {
+    let removed = {
         let mut guard = state.conversation.lock().await;
         let convo = guard.as_mut().ok_or("no conversation")?;
+        let removed = convo.messages().get(index..).map(<[_]>::to_vec).unwrap_or_default();
         convo.rewind(index);
-    }
+        removed
+    };
+    keep_deleted(&state, &removed).await;
     persist_live(&state, None).await;
     Ok(())
+}
+
+/// Put messages taken out of the live conversation in the bin. Logged rather
+/// than returned on failure: the delete itself already happened.
+async fn keep_deleted(state: &AppState, removed: &[crate::llm::types::Message]) {
+    if removed.is_empty() {
+        return;
+    }
+    let started_at = state.session.lock().await.as_ref().map(|s| s.started_at.to_rfc3339());
+    let continuing = *state.continuing.lock().await;
+    if let Err(e) =
+        state.store.lock().await.keep_deleted_messages(removed, started_at.as_deref(), continuing)
+    {
+        tracing::error!(error = %e, "could not keep deleted messages");
+    }
 }
 
 /// Write the live conversation to the journal. See `crate::journal`.
@@ -1746,8 +1767,19 @@ async fn reconcile_and_save(
     };
 
     for (idea, vector) in extraction.ideas.iter().zip(vectors) {
-        let decision = match &vector {
-            Some(vector) => {
+        // The same idea said again — same claim or same name — joins the one
+        // already there, with no model asked. Otherwise a repeat depends on
+        // the embedder and the adjudicator both agreeing, and a second node
+        // for one thought is what the map showed when they did not.
+        let same = state
+            .store
+            .lock()
+            .await
+            .same_idea(&idea.raw.claim, &idea.raw.title)
+            .map_err(|e| e.to_string())?;
+        let decision = match (&vector, same) {
+            (_, Some(idea_id)) => reconcile::Decision::Attach { idea_id, confidence: 1.0 },
+            (Some(vector), None) => {
                 // Re-read each time: a decision may have added an idea that the
                 // next one should be compared against, including within this
                 // same session.
@@ -1767,7 +1799,7 @@ async fn reconcile_and_save(
             }
             // No vectors, so nothing to shortlist against: kept separate, the
             // same safe direction, and merged by the desktop at sync.
-            None => reconcile::Decision::New { related: Vec::new() },
+            (None, None) => reconcile::Decision::New { related: Vec::new() },
         };
 
         if !matches!(decision, reconcile::Decision::New { .. }) {
@@ -2099,6 +2131,28 @@ pub async fn remove_definition(
     definition_id: i64,
 ) -> Result<(), String> {
     state.store.lock().await.remove_definition(definition_id).map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+/// Reword a definition, or the term it defines. Kept through a re-read.
+#[tauri::command]
+pub async fn edit_definition(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    definition_id: i64,
+    term: String,
+    definition: String,
+) -> Result<(), String> {
+    if term.trim().is_empty() || definition.trim().is_empty() {
+        return Err("A definition needs both a term and what it means.".into());
+    }
+    state
+        .store
+        .lock()
+        .await
+        .edit_definition(definition_id, &term, &definition)
+        .map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
     Ok(())
 }

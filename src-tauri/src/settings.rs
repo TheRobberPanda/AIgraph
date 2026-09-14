@@ -145,6 +145,11 @@ pub struct Settings {
     /// tree dragged sideways stays sideways; anyone who wants the picture kept
     /// exactly as drawn asks for it to be locked.
     pub map_lock_nodes: bool,
+    /// Whether the map draws correlations: ideas joined only because their
+    /// claims sit close in meaning. Off by default — even filtered hard they
+    /// outnumber every other line, and the judged relations and contradictions
+    /// are what the map is read for.
+    pub map_correlations: bool,
     /// Advanced layout order: conversations on the left and Make on the
     /// right, instead of the default Make left / conversations right.
     pub advanced_swap: bool,
@@ -631,6 +636,7 @@ impl Default for Settings {
             learning_mode: false,
             map_spread: MapSpread::default(),
             map_lock_nodes: false,
+            map_correlations: false,
             advanced_swap: false,
             show_timing: false,
             quick_tune: true,

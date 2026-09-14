@@ -26,3 +26,8 @@ export function listDefinitions(folder?: number | null): Promise<Definition[]> {
 export function removeDefinition(definitionId: number): Promise<void> {
   return invoke("remove_definition", { definitionId });
 }
+
+/** Reword a term or what it means. Kept as written through a re-read. */
+export function editDefinition(definitionId: number, term: string, definition: string): Promise<void> {
+  return invoke("edit_definition", { definitionId, term, definition });
+}

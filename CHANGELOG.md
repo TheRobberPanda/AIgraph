@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.5
+
+- **Edit a definition.** Each definition has a pencil beside its bin button
+  to reword the term or what it means. An edited definition is kept as
+  written when the conversation is read again.
+- **Archived and the bin sit beside the Read button.** Archived is its own
+  window, and the bin is sorted into Conversations, Ideas, Outputs and
+  Messages.
+- **Deleted messages go to the bin**, whether deleted or rewound past.
+- **Pick several things in the bin**, and restore or delete them together.
+  Deleting anything for good asks three times, and Enter answers none of them.
+- **Correlations on the map are off by default.** Turn them on in
+  Settings › Map.
+- **One node per idea.** An idea said twice is drawn once, and a repeat is
+  caught before it is saved.
+- **A node answers a click at every zoom**, and letting go of it keeps the
+  view where it is.
+- **Have AI write an instruction from an example** on the Make tab.
+
 ## 0.6.4
 
 - **The conversations rail's arrow sits on the rail's edge again.** It had
