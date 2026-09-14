@@ -20,6 +20,14 @@ pub struct VerifiedIdea {
     pub located: Located,
 }
 
+/// A definition whose quote was found in a USER line — the same check an
+/// idea's quote faces.
+#[derive(Debug, Clone)]
+pub struct VerifiedDefinition {
+    pub raw: prompt::RawDefinition,
+    pub located: Located,
+}
+
 #[derive(Debug, Clone)]
 pub struct Rejected {
     pub raw: RawIdea,
@@ -56,6 +64,8 @@ pub struct Extraction {
     /// A short, glanceable name for the conversation, e.g. "American Economic
     /// Empire". Empty if the model returned nothing usable.
     pub title: String,
+    /// What the person said their words mean, verified like quotes are.
+    pub definitions: Vec<VerifiedDefinition>,
 }
 
 impl Extraction {
@@ -97,11 +107,13 @@ pub async fn run_with_progress(
     let extracted = extractor.extract(&for_model, known_categories).await?;
     let notes = extracted.conversation.clone();
     let title = extracted.title.trim().to_string();
+    let definitions = verify_definitions(&extracted.definitions, turns);
 
     on_phase(Phase::Verifying);
     let mut first = sort_out(extracted.ideas, turns);
     first.conversation = notes;
     first.title = title;
+    first.definitions = definitions;
 
     // Retried only when the first pass went badly enough to be worth paying
     // for twice.
@@ -149,6 +161,16 @@ pub async fn run_with_progress(
             } else {
                 extracted.title.trim().to_string()
             };
+            // The retry is about quotes, and usually says nothing about
+            // definitions — keep the first pass's unless it found some.
+            second.definitions = {
+                let again = verify_definitions(&extracted.definitions, turns);
+                if again.is_empty() {
+                    first.definitions.clone()
+                } else {
+                    again
+                }
+            };
             // Keep whichever attempt traced more ideas to real text. A retry
             // that does worse is discarded rather than trusted for being newer.
             if second.ideas.len() >= first.ideas.len() {
@@ -171,6 +193,29 @@ fn sort_out(raws: Vec<RawIdea>, turns: &[Turn]) -> Extraction {
         }
     }
     out
+}
+
+/// Definitions whose quote is really in a USER line, one per term.
+fn verify_definitions(raws: &[prompt::RawDefinition], turns: &[Turn]) -> Vec<VerifiedDefinition> {
+    let mut seen = std::collections::HashSet::new();
+    raws.iter()
+        .filter(|d| !d.term.trim().is_empty() && !d.definition.trim().is_empty())
+        .filter_map(|d| {
+            // The verifier takes an idea; a definition's quote is held to the
+            // same standard, so it is checked as one.
+            let shell = RawIdea {
+                claim: d.definition.clone(),
+                title: String::new(),
+                quote: d.quote.clone(),
+                reasoning: String::new(),
+                category: String::new(),
+                notes: vec![],
+            };
+            let located = verify::verify(&shell, turns).ok()?;
+            seen.insert(d.term.trim().to_lowercase())
+                .then(|| VerifiedDefinition { raw: d.clone(), located })
+        })
+        .collect()
 }
 
 fn prompt_snippet(s: &str) -> String {
@@ -201,6 +246,7 @@ mod tests {
                 title: String::new(),
                 ideas: self.passes.get(n).cloned().unwrap_or_default(),
                 conversation: Default::default(),
+                definitions: vec![],
             })
         }
         async fn judge(
@@ -288,6 +334,23 @@ mod tests {
         let out = run(&ex, &turns()).await.unwrap();
         assert_eq!(out.ideas.len(), 1, "kept the better first pass");
         assert!(out.retried);
+    }
+
+    #[test]
+    fn a_definition_is_kept_only_when_its_quote_was_really_said() {
+        let def = |term: &str, quote: &str| prompt::RawDefinition {
+            term: term.into(),
+            definition: "what it means".into(),
+            quote: quote.into(),
+        };
+        let raws = vec![
+            def("latency", "latency is the real problem"),
+            def("invented", "never said this"),
+            def("Latency", "the real problem here"),
+        ];
+        let kept = verify_definitions(&raws, &turns());
+        assert_eq!(kept.len(), 1, "one real quote, one invented, one repeat of the term");
+        assert_eq!(kept[0].raw.term, "latency");
     }
 
     #[test]

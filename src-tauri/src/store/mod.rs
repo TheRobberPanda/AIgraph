@@ -511,6 +511,18 @@ pub struct Diagnostics {
     pub by_reason: Vec<(String, i64)>,
 }
 
+/// Something the person said a word means, with the words they said it in.
+#[derive(Debug, Clone, Serialize)]
+pub struct Definition {
+    pub id: i64,
+    pub term: String,
+    pub definition: String,
+    pub quote: String,
+    pub session_id: i64,
+    pub started_at: String,
+    pub session_title: String,
+}
+
 /// An archived transcript, pre-split around one highlighted quote.
 ///
 /// The split is done here rather than in the UI on purpose. Rust offsets count
@@ -2390,6 +2402,7 @@ impl Store {
         let tx = self.conn.transaction()?;
 
         let evidence = tx.execute("DELETE FROM evidence WHERE session_id = ?1", [session_id])?;
+        tx.execute("DELETE FROM definitions WHERE session_id = ?1 AND archived = 0", [session_id])?;
         tx.execute("DELETE FROM session_nudges WHERE session_id = ?1", [session_id])?;
         tx.execute(
             "UPDATE rejected_ideas SET archived = 1
@@ -2892,6 +2905,76 @@ impl Store {
             "UPDATE sessions SET title = ?2 WHERE id = ?1 AND title_locked = 0",
             params![session_id, title],
         )?;
+        Ok(())
+    }
+
+    /// Replace one session's definitions with what a read just found.
+    ///
+    /// One taken off the list stays off: reading the conversation again does
+    /// not put back a term hidden for it.
+    pub fn replace_definitions(
+        &mut self,
+        session_id: i64,
+        found: &[crate::extract::VerifiedDefinition],
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM definitions WHERE session_id = ?1 AND archived = 0", [session_id])?;
+        let now = Utc::now().to_rfc3339();
+        for d in found {
+            let term = d.raw.term.trim();
+            let hidden: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM definitions
+                  WHERE session_id = ?1 AND archived = 1 AND lower(term) = lower(?2))",
+                params![session_id, term],
+                |r| r.get(0),
+            )?;
+            if hidden {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO definitions (session_id, turn_id, term, definition, quote, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    session_id,
+                    d.located.turn_id,
+                    term,
+                    d.raw.definition.trim(),
+                    d.located.matched_text,
+                    now
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Definitions in one folder, or in all of them, newest conversation first.
+    /// Only conversations that still exist: one in the bin hides its own.
+    pub fn definitions(&self, folder: Option<i64>) -> Result<Vec<Definition>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.id, d.term, d.definition, d.quote, d.session_id, s.started_at, s.title
+               FROM definitions d JOIN sessions s ON s.id = d.session_id
+              WHERE d.archived = 0 AND (?1 IS NULL OR COALESCE(s.folder_id, 1) = ?1)
+              ORDER BY s.started_at DESC, d.id",
+        )?;
+        let rows = stmt.query_map(params![folder], |r| {
+            Ok(Definition {
+                id: r.get(0)?,
+                term: r.get(1)?,
+                definition: r.get(2)?,
+                quote: r.get(3)?,
+                session_id: r.get(4)?,
+                started_at: r.get(5)?,
+                session_title: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Take one off the list. Hidden rather than deleted, so a re-read knows
+    /// not to add it back.
+    pub fn remove_definition(&mut self, definition_id: i64) -> Result<()> {
+        self.conn.execute("UPDATE definitions SET archived = 1 WHERE id = ?1", [definition_id])?;
         Ok(())
     }
 
@@ -3759,6 +3842,7 @@ mod tests {
             retried: false,
             conversation: Default::default(),
             title: String::new(),
+            definitions: vec![],
         };
         store.save_extraction(session_id, &extraction, "test", "m").unwrap();
 
@@ -3806,6 +3890,7 @@ mod tests {
                     retried: false,
                     conversation: Default::default(),
                     title: String::new(),
+                    definitions: vec![],
                 },
                 "t",
                 "m",
@@ -4289,6 +4374,7 @@ mod tests {
                     retried: false,
                     conversation: Default::default(),
                     title: String::new(),
+                    definitions: vec![],
                 },
                 "test",
                 "m",
@@ -4462,6 +4548,7 @@ mod tests {
                     retried: false,
                     conversation: Default::default(),
                     title: String::new(),
+                    definitions: vec![],
                 },
                 "test",
                 "m",

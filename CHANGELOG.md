@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.6.0
+
+### Nothing you type is lost
+
+A conversation used to live only in memory until it was filed, and a crash,
+a killed process or a power cut lost all of it. Now every message is written
+to disk the moment it is sent, before the model is asked anything, and the
+conversation is written again every time it changes. What is typed and not
+yet sent is saved as it is typed. Each write is flushed to the disk and
+swapped in whole, so a crash mid-write leaves the previous copy intact.
+
+If the app stops without filing a conversation, the next launch files it and
+offers to continue it. A message that was sent but never answered goes back
+into the box. The on-disk copies live in `journal/` in the app's data folder
+and are never deleted: a filed conversation's copy moves to `journal/filed/`.
+
+### Recall that answers what was just said
+
+- The earlier ideas handed to the chat are now chosen for every message,
+  from what that message says. They used to be chosen once, from the opening
+  line, so after a restart they were whatever sat closest to "hi".
+- Only the sentence that makes the connection is highlighted, not the whole
+  paragraph around it.
+- The hover card shows the words the idea was taken from, in focus, with
+  the text around it readable. It used to open with nothing in focus for
+  ideas merged or re-read since.
+- The model the recall uses is loaded in the background at launch, so the
+  first message does not wait for it.
+
+### New
+
+- **Definitions.** A tab of what you have said your words mean — "by freedom
+  I mean…" — found when a conversation is read back, with the words you said
+  it in.
+- **Also answer.** Extra ways for the chat to answer, under How it responds:
+  brief, plain words, with examples, analogies, step by step, or ending with
+  a question. Any number at once.
+- **A question under Call mode.** Every second new chat, one question about
+  how the AI is behaving — "Is the AI being too agreeable?" — with the fix a
+  click away.
+- **Cost of the last read** in the status bar, as the provider reported it: a
+  price from OpenRouter, token counts elsewhere.
+- **Generation timing**, an optional line under each reply saying where the
+  time went.
+
+### Fixed
+
+- The Read button stays in place, and no longer offers to read a
+  conversation that was already deleted or set aside.
+- Archived conversations and ideas can be moved to the trash bin from the
+  waiting-to-be-read page, one at a time or all at once.
+- Confirming a delete no longer dims and blurs the chat behind it.
+
 ## 0.5.1
 
 - **The Windows installers start again.** They shipped only the program, not

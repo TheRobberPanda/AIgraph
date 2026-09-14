@@ -6,6 +6,7 @@ import {
   IconThink,
   IconMap,
   IconIdeas,
+  IconDefinitions,
   IconChats,
   IconBook,
   IconModels,
@@ -30,6 +31,8 @@ import {
   type Making,
 } from "./lib/making";
 import Confirm from "./components/Confirm";
+import Definitions from "./components/Definitions";
+import QuickTune, { nextChatNumber } from "./components/QuickTune";
 import Sheet from "./components/Sheet";
 import Call from "./components/Call";
 import Queue from "./components/Queue";
@@ -61,7 +64,9 @@ import {
   pace,
   stopDigest,
   onExtractionProgress,
+  onIdeasChanged,
   type ExtractionProgress,
+  type LastExtraction,
 } from "./lib/ideas";
 import Mic from "./components/Mic";
 import {
@@ -91,6 +96,10 @@ import {
   onArchived,
   rewindConversation,
   sendMessage,
+  saveDraft,
+  loadDraft,
+  recoveredSession,
+  timingLine,
   startup,
   wantsReasoning,
   REASONING_REFUSED,
@@ -107,8 +116,8 @@ import {
  * the same list twice — once with the ideas hidden and once with the
  * conversations reduced to headings.
  */
-type Tab = "chat" | "map" | "ideas" | "make" | "settings";
-const TABS: Tab[] = ["chat", "map", "ideas", "make", "settings"];
+type Tab = "chat" | "map" | "ideas" | "definitions" | "make" | "settings";
+const TABS: Tab[] = ["chat", "map", "ideas", "definitions", "make", "settings"];
 
 /** What each place is called, in the app's own language. */
 function tabName(tab: Tab): string {
@@ -122,11 +131,12 @@ const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>>
   chat: IconThink,
   map: IconMap,
   ideas: IconIdeas,
+  definitions: IconDefinitions,
   make: IconBook,
   settings: IconSettings,
 };
 
-const MAIN: Tab[] = ["chat", "map", "ideas", "make"];
+const MAIN: Tab[] = ["chat", "map", "ideas", "definitions", "make"];
 /**
  * Settings only.
  *
@@ -135,6 +145,31 @@ const MAIN: Tab[] = ["chat", "map", "ideas", "make"];
  * controls where nothing else about the conversation lives.
  */
 const SETUP: Tab[] = ["settings"];
+
+/** Where the draft is also kept in the browser, written on every keystroke. */
+const DRAFT_KEY = "aigraph-draft";
+
+/** Tokens, briefly: 12.4k rather than 12,431. */
+function tokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/**
+ * What the last read cost, in the terms the provider gave. A price only where
+ * one was reported (OpenRouter); otherwise the tokens it read and wrote, which
+ * is what a price would have been made of.
+ */
+function readCost(last: LastExtraction): string | null {
+  const c = last.cost;
+  const inTok = c.usage_in || c.read_tokens;
+  const outTok = c.usage_out || c.wrote_tokens;
+  const size = inTok || outTok ? `${tokens(inTok)} in / ${tokens(outTok)} out` : "";
+  if (c.cost_usd != null) {
+    const usd = c.cost_usd < 0.01 ? c.cost_usd.toFixed(4) : c.cost_usd.toFixed(2);
+    return size ? `$${usd} · ${size}` : `$${usd}`;
+  }
+  return size ? `${size} tokens` : null;
+}
 
 /** What each extraction phase is actually doing, in words. */
 const PHASE_WORD: Record<string, string> = {
@@ -343,7 +378,7 @@ export default function App() {
   /** Which workspace panel is filling the pane, if any. */
   const [expanded, setExpanded] = useState<"make" | "conversations" | null>(null);
   /** Map and Ideas in advanced mode: popups over the workspace, not panels. */
-  const [popup, setPopup] = useState<"map" | "ideas" | null>(null);
+  const [popup, setPopup] = useState<"map" | "ideas" | "definitions" | null>(null);
   /** Whether the conversations rail sits beside the stream (simple layout). */
   const [railOpen, setRailOpen] = useState(true);
   /** Simple visits one place at a time; advanced puts them all on screen. */
@@ -358,10 +393,38 @@ export default function App() {
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [showTiming, setShowTiming] = useState(false);
+  /** Which new chat this is, for the every-second-chat question under Call mode. */
+  const [chatNo, setChatNo] = useState(nextChatNumber);
+  /** A conversation the last run left unfiled, filed at this launch. */
+  const [recoveredId, setRecoveredId] = useState<number | null>(null);
+
+  // What is typed and not yet sent is kept as it is typed: in the browser's
+  // storage on every keystroke, and on disk a moment after typing stops. A
+  // crash, a kill or a power cut then costs nothing that was written down.
+  const draftLoaded = useRef(false);
+  useEffect(() => {
+    void Promise.all([
+      loadDraft().catch(() => ""),
+      recoveredSession().catch(() => null),
+    ]).then(([saved, recovered]) => {
+      let local = "";
+      try {
+        local = localStorage.getItem(DRAFT_KEY) ?? "";
+      } catch {
+        // Storage can be unavailable; the disk copy is the one that matters.
+      }
+      const text = saved || local;
+      if (text) setDraft((d) => d || text);
+      if (recovered !== null) setRecoveredId(recovered);
+      draftLoaded.current = true;
+    });
+  }, []);
 
   // Apply the saved theme before anything is looked at.
   useEffect(() => {
     void getSettings().then((s) => {
+      setShowTiming(s.show_timing);
       applyTheme(s.theme);
       applyAccent(s.accent);
       applyUiScale(s.ui_scale);
@@ -375,9 +438,15 @@ export default function App() {
       setLayout(s.layout);
       setAdvancedSwap(s.advanced_swap);
     });
-    const un = listen<{ voice?: string; call_mode?: boolean; layout?: "simple" | "advanced" }>(
+    const un = listen<{
+      voice?: string;
+      call_mode?: boolean;
+      layout?: "simple" | "advanced";
+      show_timing?: boolean;
+    }>(
       "settings:changed",
       (e) => {
+      if (e.payload.show_timing !== undefined) setShowTiming(e.payload.show_timing);
         // Only the setting. Whether a call is in progress is this window's
         // business, not something a saved settings file should turn on.
       if (e.payload.voice !== undefined) {
@@ -514,8 +583,14 @@ export default function App() {
   useEffect(() => {
     void extractionProgress().then(setDigesting);
     const p = onExtractionProgress(setDigesting);
+    // Deleting, archiving or restoring a conversation changes how many are
+    // waiting without any read starting or finishing, so no progress event
+    // follows — and the count on the Read button stayed at whatever it was,
+    // offering to read a conversation that was already in the bin.
+    const q = onIdeasChanged(() => void extractionProgress().then(setDigesting));
     return () => {
       void p.then((un) => un());
+      void q.then((un) => un());
     };
   }, []);
 
@@ -583,6 +658,7 @@ export default function App() {
     const p = onArchived((a) => {
       setTurns([]);
       setJustArchived(a);
+      setChatNo(nextChatNumber());
       // Filing no longer starts a digest, so the waiting count has to be
       // re-read here rather than arriving on a progress event.
       void extractionProgress().then(setDigesting);
@@ -762,7 +838,7 @@ export default function App() {
     ]);
 
     try {
-      const reply = await sendMessage(
+      const { reply, timing } = await sendMessage(
         text,
         (chunk) => {
           // Talked over: the model is still writing, but nothing more of it
@@ -819,7 +895,7 @@ export default function App() {
         const { open, text: clean } = parseReply(reply);
         setTurns((t) => {
           const next = [...t];
-          next[next.length - 1] = { role: "assistant", content: clean };
+          next[next.length - 1] = { role: "assistant", content: clean, timing };
           return next;
         });
         if (open) {
@@ -1016,6 +1092,18 @@ export default function App() {
   // someone who came to think is the app's problem being made theirs, and the
   // answer is one click away from where they already are.
 
+  const unsaved = [draft, heardText].filter((t) => t.trim()).join("\n");
+  useEffect(() => {
+    if (!draftLoaded.current) return;
+    try {
+      localStorage.setItem(DRAFT_KEY, unsaved);
+    } catch {
+      // The disk copy below still happens.
+    }
+    const id = window.setTimeout(() => void saveDraft(unsaved).catch(() => {}), 300);
+    return () => window.clearTimeout(id);
+  }, [unsaved]);
+
   const pending = digesting?.pending ?? 0;
   /**
    * How much of the queue is behind us.
@@ -1108,6 +1196,13 @@ export default function App() {
               >
                 <IconIdeas />
               </button>
+              <button
+                className="icon-btn"
+                data-tip="Definitions"
+                onClick={() => setPopup("definitions")}
+              >
+                <IconDefinitions />
+              </button>
             </>
           )}
           {making && (
@@ -1143,7 +1238,9 @@ export default function App() {
                   : `${making.name} failed`}
             </button>
           )}
-          {pending > 0 && (
+          {/* Always there, so the way to what is waiting — and to what was set
+              aside — does not appear and vanish with the count. */}
+          {(
             <span className="row digest-group">
               {/* Running, it becomes the way to stop — the same button, because
                   "digesting" and "stop digesting" are the same thing seen from
@@ -1187,8 +1284,10 @@ export default function App() {
                       <span className="digest-fill" style={{ width: `${digestPct}%` }} />
                     )}
                   </>
-                ) : (
+                ) : pending > 0 ? (
                   `Read (${pending})`
+                ) : (
+                  "Read"
                 )}
               </button>
             </span>
@@ -1227,7 +1326,7 @@ export default function App() {
           had no row of its own, so it was auto-placed into the last one and
           spent its life at the bottom of the window, under the status bar,
           saying "is what you are looking at" about something a screen away. */}
-      {(view === "map" || view === "ideas" || view === "make") &&
+      {(view === "map" || view === "ideas" || view === "definitions" || view === "make") &&
         layout === "simple" && (
         <div className="row scope-bar">
           <button
@@ -1243,6 +1342,13 @@ export default function App() {
       {view === "settings" ? (
         <Boundary what="Settings">
           <SettingsPanel />
+        </Boundary>
+      ) : layout === "simple" && view === "definitions" ? (
+        <Boundary what="Definitions">
+          <Definitions
+            folder={folderId}
+            onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
+          />
         </Boundary>
       ) : layout === "simple" && view === "make" ? (
         // The other direction: not what was taken out of the folder, but what
@@ -1313,6 +1419,31 @@ export default function App() {
           <div className="empty">
             <strong>Think out loud.</strong>
             <CallToggle on={callMode} onToggle={(next) => void toggleCall(next)} />
+            <QuickTune key={chatNo} chat={chatNo} />
+          </div>
+        )}
+
+        {recoveredId !== null && (
+          <div className="filed">
+            <p className="filed-head">
+              A conversation was still open when the app last stopped. Nothing was lost — it has
+              been saved with your conversations.
+            </p>
+            <div className="row">
+              <button
+                className="btn on"
+                onClick={() => {
+                  const id = recoveredId;
+                  setRecoveredId(null);
+                  void resume(id);
+                }}
+              >
+                Continue it
+              </button>
+              <button className="btn" onClick={() => setRecoveredId(null)}>
+                OK
+              </button>
+            </div>
           </div>
         )}
 
@@ -1389,6 +1520,9 @@ export default function App() {
               <Markdown>{t.content}</Markdown>
             ) : (
               t.content
+            )}
+            {t.role === "assistant" && showTiming && t.timing && (
+              <div className="reply-timing">{timingLine(t.timing)}</div>
             )}
             {t.role === "assistant" && !t.content && streaming && (
               <span className="thinking">
@@ -1678,7 +1812,9 @@ export default function App() {
       {popup && (
         <Sheet onClose={() => setPopup(null)}>
           <div className="sheet-head">
-            <h2 className="sheet-title">{popup === "map" ? "The map" : "Ideas"}</h2>
+            <h2 className="sheet-title">
+              {popup === "map" ? "The map" : popup === "ideas" ? "Ideas" : "Definitions"}
+            </h2>
             <button className="icon-btn" data-tip="Close" onClick={() => setPopup(null)}>
               <IconClose />
             </button>
@@ -1686,6 +1822,11 @@ export default function App() {
           <div className="sheet-body">
             {popup === "map" ? (
               <Graph folder={folderId} onOpenFile={(kind, id) => setDeep({ kind, id })} />
+            ) : popup === "definitions" ? (
+              <Definitions
+                folder={folderId}
+                onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
+              />
             ) : (
               <Ideas folder={folderId} onContinue={(id) => void resume(id)} />
             )}
@@ -1768,6 +1909,11 @@ export default function App() {
         )}
         {!digesting?.running && (digesting?.pending ?? 0) > 0 && (
           <span>{digesting?.pending} waiting to be read</span>
+        )}
+        {!digesting?.running && digesting?.last && readCost(digesting.last) && (
+          <span className="read-cost" data-tip="What the last read cost, as the provider reported it">
+            last read {readCost(digesting.last)}
+          </span>
         )}
         <span className="spacer" />
         {error && (

@@ -89,28 +89,33 @@ fn a_fresh_conversation_sends_no_turns() {
     assert!(json["messages"].as_array().unwrap().is_empty());
 }
 
-/// Recall is opt-in, and opting in is the only way anything the user wrote
-/// reaches the system prompt.
+/// Recall is opt-in. Switched on, the system prompt gains only fixed
+/// instructions; the titles travel with the latest message alone, and are
+/// never stored as part of it.
 #[test]
 fn recall_adds_nothing_until_it_is_asked_for() {
     let mut off = Conversation::new("llama3.2");
     off.push_user("ownership is a debt");
     let quiet = serde_json::to_value(off.to_request()).unwrap();
     let sys = quiet["system"].as_str().unwrap().to_string();
+    assert_eq!(quiet["messages"][0]["content"], "ownership is a debt");
 
     let mut on = Conversation::new("llama3.2");
     on.push_user("ownership is a debt");
-    on.set_recall(vec![(7, "Entitlement as the source of gratitude".into())]);
+    on.set_recall(Some(vec![(7, "Entitlement as the source of gratitude".into())]));
     let loud = serde_json::to_value(on.to_request()).unwrap();
     let with = loud["system"].as_str().unwrap();
+    let said = loud["messages"][0]["content"].as_str().unwrap();
 
     assert!(
         !sys.contains("Entitlement"),
         "nothing recorded reaches the chat unless recall is switched on"
     );
     assert!(with.starts_with(&sys), "recall is appended, never woven in");
-    assert!(with.contains("Entitlement as the source of gratitude"));
+    assert!(!with.contains("Entitlement"), "the system prompt stays constant; titles ride on the message");
+    assert!(said.starts_with("ownership is a debt"), "the person's words go first, untouched");
     // Titles, and only titles. A claim, a quote, or a transcript reaching the
     // chat would be a different feature with a different cost.
-    assert!(!with.contains("ownership is a debt\n- "));
+    assert!(said.contains("[7] Entitlement as the source of gratitude"));
+    assert_eq!(on.messages()[0].content, "ownership is a debt", "nothing attached is stored");
 }

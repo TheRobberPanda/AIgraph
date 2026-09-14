@@ -220,6 +220,9 @@ struct Completion {
     content: Vec<Block>,
     #[serde(default)]
     stop_reason: Option<String>,
+    /// Input and output tokens. Anthropic reports no price.
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -267,6 +270,7 @@ impl Anthropic {
 
         let completion: Completion =
             resp.json().await.map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        crate::llm::meter::record_usage(completion.usage.as_ref());
 
         if completion.stop_reason.as_deref() == Some("refusal") {
             return Err(LlmError::BadOutput(
@@ -326,6 +330,7 @@ impl Anthropic {
 
         let completion: Completion =
             resp.json().await.map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        crate::llm::meter::record_usage(completion.usage.as_ref());
 
         if completion.stop_reason.as_deref() == Some("refusal") {
             return Err(LlmError::BadOutput("the model declined to read this document".into()));

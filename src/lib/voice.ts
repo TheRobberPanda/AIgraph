@@ -91,7 +91,7 @@ function atLineStart(text: string, at: number): boolean {
 function forSpeech(text: string): string {
   return text
     .replace(MARKER, "")
-    .replace(/\[\[recall:\d+\]\]/g, "")
+    .replace(/\[\[\s*recall\s*:\s*\d+\s*\]\]/gi, "")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/[*_`#>]/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")

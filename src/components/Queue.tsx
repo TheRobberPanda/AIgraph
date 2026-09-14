@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { setSessionArchived, type SessionSummary } from "../lib/chat";
+import { deleteSession, setSessionArchived, type SessionSummary } from "../lib/chat";
 import {
   archivedIdeas,
   archivedSessions,
+  deleteIdea,
   extractionProgress,
   extractionTrouble,
   onExtractionProgress,
@@ -14,7 +15,8 @@ import {
 } from "../lib/ideas";
 import { longDate } from "../lib/format";
 import Sheet from "./Sheet";
-import { IconArchive, IconRewind, IconSend } from "./Icons";
+import Confirm from "./Confirm";
+import { IconArchive, IconRewind, IconSend, IconTrash } from "./Icons";
 import { t, useLang } from "../lib/i18n";
 
 /**
@@ -51,6 +53,27 @@ export default function Queue({
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
   /** Which reason was just copied, so the button can say so briefly. */
   const [copied, setCopied] = useState<number | null>(null);
+  /** Asking before everything set aside goes to the bin at once. */
+  const [binningAll, setBinningAll] = useState(false);
+
+  /** To the bin, not gone: the bin can put any of it back. */
+  function binSession(id: number) {
+    return deleteSession(id).then(refresh).then(onChanged).catch((e) => setError(String(e)));
+  }
+  function binIdea(id: number) {
+    return deleteIdea(id).then(refresh).catch((e) => setError(String(e)));
+  }
+  async function binAll() {
+    setBinningAll(false);
+    try {
+      for (const i of archivedIdeaRows ?? []) await deleteIdea(i.id);
+      for (const s of archivedRows ?? []) await deleteSession(s.id);
+    } catch (e) {
+      setError(String(e));
+    }
+    refresh();
+    onChanged();
+  }
 
   const refresh = () => {
     pendingSessions()
@@ -276,6 +299,15 @@ export default function Queue({
                         {i.category || "idea"} · kept
                       </span>
                     </span>
+                    <span className="chat-actions">
+                      <button
+                        className="icon-btn"
+                        data-tip="Move to the trash bin"
+                        onClick={() => void binIdea(i.id)}
+                      >
+                        <IconTrash />
+                      </button>
+                    </span>
                   </li>
                 ))}
                 {(archivedRows ?? []).map((s) => (
@@ -304,10 +336,35 @@ export default function Queue({
                       >
                         <IconRewind />
                       </button>
+                      <button
+                        className="icon-btn"
+                        data-tip="Move to the trash bin"
+                        onClick={() => void binSession(s.id)}
+                      >
+                        <IconTrash />
+                      </button>
                     </span>
                   </li>
                 ))}
               </ul>
+            )}
+
+            {archivedCount > 0 && (
+              <div className="row queue-read-row">
+                <button className="btn" onClick={() => setBinningAll(true)}>
+                  <IconTrash />
+                  Move all {archivedCount} to the trash bin
+                </button>
+              </div>
+            )}
+
+            {binningAll && (
+              <Confirm
+                title={`Move all ${archivedCount} to the trash bin? You can restore them from there.`}
+                danger
+                onConfirm={() => void binAll()}
+                onCancel={() => setBinningAll(false)}
+              />
             )}
 
             <p className="blurb">

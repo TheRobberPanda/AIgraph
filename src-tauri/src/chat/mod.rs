@@ -32,7 +32,9 @@ use crate::llm::types::{ChatRequest, Message, Role};
 pub fn strip_recall_markers(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(start) = rest.find("[[recall:") {
+    // Case-insensitively: models write `[[Recall:3]]` often enough. ASCII
+    // lowering keeps every byte offset where it was.
+    while let Some(start) = rest.to_ascii_lowercase().find("[[recall:") {
         out.push_str(&rest[..start]);
         match rest[start..].find("]]") {
             Some(end) => rest = &rest[start + end + 2..],
@@ -82,16 +84,17 @@ pub struct Conversation {
     messages: Vec<Message>,
     /// Short answers, because they are being spoken rather than read.
     call_mode: bool,
-    /// Ideas already recorded, by id and title, when the setting asks for them.
+    /// Recall, when the setting asks for it: the titles of the earlier ideas
+    /// closest to the latest message, by id.
     ///
-    /// The only user-derived thing that ever reaches the system prompt. It is
-    /// off by construction unless someone turns it on, and the purity test
-    /// checks the shape without it. The id travels with the title so a reply
-    /// that draws on one can mark exactly which — see [`style::RECALL_TAIL`].
-    recall: Vec<(i64, String)>,
-    /// Whether recall has been decided for this conversation. Distinct from
-    /// the list being empty, which is a legitimate answer.
-    recall_set: bool,
+    /// `None` is recall off. `Some` adds the fixed [`style::RECALL`]
+    /// instructions to the system prompt and attaches these titles to the
+    /// latest message only. Never stored: the next request carries the next
+    /// message's titles, and the transcript carries none. The id travels with
+    /// the title so a reply can mark exactly which idea it drew on.
+    recall: Option<Vec<(i64, String)>>,
+    /// Extra ways of answering the person chose — see [`style::answer_style`].
+    styles: Vec<crate::settings::AnswerStyle>,
     /// Whether the model may think out loud before answering.
     reasoning: bool,
     /// Argue the substance, or just help lay it out. See
@@ -105,8 +108,8 @@ impl Conversation {
             model: model.into(),
             messages: Vec::new(),
             call_mode: false,
-            recall: Vec::new(),
-            recall_set: false,
+            recall: None,
+            styles: Vec::new(),
             reasoning: false,
             stance: crate::settings::ChatStance::default(),
         }
@@ -144,26 +147,45 @@ impl Conversation {
         self.stance = stance;
     }
 
-    /// Hand the model what has already been thought, by title.
+    /// Turn recall on with the titles for the next message, or off with `None`.
     ///
-    /// Titles scale linearly, so this is capped. Past the cap it becomes a
-    /// retrieval problem — an embedding shortlist over titles, which is the
-    /// same machinery reconciliation already uses.
-    pub fn set_recall(&mut self, titles: Vec<(i64, String)>) {
+    /// Chosen for every message, not once per conversation. Decided once from
+    /// the opening line, the list was whatever sat closest to "hi" — and after
+    /// a restart every conversation starts from an opening line — so the model
+    /// was handed ideas unrelated to anything said after it.
+    ///
+    /// The titles go on the latest message rather than in the system prompt,
+    /// which stays one constant from the first turn to the last. A server keeps
+    /// the work it did on a prefix it has already seen, and a system prompt
+    /// that changed every turn would throw that away from the first token.
+    pub fn set_recall(&mut self, titles: Option<Vec<(i64, String)>>) {
         self.recall = titles;
-        self.recall_set = true;
     }
 
-    /// Whether recall has already been decided for this conversation.
-    ///
-    /// It is decided once and then left alone. The system prompt is the
-    /// beginning of every request, and a server keeps the work it did on a
-    /// prefix it has seen before — so a prompt that changes between turns
-    /// throws that away from the first token and every turn pays to re-read
-    /// the whole conversation. Nothing new can appear in the list mid-way
-    /// regardless: extraction runs when a conversation ends.
-    pub fn recall_decided(&self) -> bool {
-        self.recall_set
+    /// How many titles go out with the next message.
+    pub fn recall_len(&self) -> usize {
+        self.recall.as_ref().map(Vec::len).unwrap_or(0)
+    }
+
+    pub fn set_answer_styles(&mut self, styles: Vec<crate::settings::AnswerStyle>) {
+        self.styles = styles;
+    }
+
+    /// The conversation as sent: the stored turns, with this message's recall
+    /// titles attached to the last one when there are any.
+    fn outgoing_messages(&self) -> Vec<Message> {
+        let mut messages = self.messages.clone();
+        let titles = self.recall.as_deref().unwrap_or_default();
+        if titles.is_empty() {
+            return messages;
+        }
+        if let Some(last) = messages.last_mut().filter(|m| m.role == Role::User) {
+            last.content.push_str(style::RECALL_ATTACHED);
+            for (id, title) in titles {
+                last.content.push_str(&format!("\n- [{id}] {title}"));
+            }
+        }
+        messages
     }
 
     pub fn set_reasoning(&mut self, on: bool) {
@@ -216,7 +238,7 @@ impl Conversation {
     pub fn to_request(&self) -> ChatRequest {
         ChatRequest {
             model: self.model.clone(),
-            messages: self.messages.clone(),
+            messages: self.outgoing_messages(),
             reasoning: self.reasoning,
             system: Some({
                 // Neutral adds nothing: no voice, no instructions about how to
@@ -233,15 +255,15 @@ impl Conversation {
                 if self.call_mode {
                     sys.push_str(style::CALL_MODE);
                 }
-                if !self.recall.is_empty() {
-                    sys.push_str(style::RECALL);
-                    for (id, title) in &self.recall {
-                        sys.push_str("\n- [");
-                        sys.push_str(&id.to_string());
-                        sys.push_str("] ");
-                        sys.push_str(title);
+                for s in &self.styles {
+                    // Numbered steps are a list, and a call is spoken.
+                    if self.call_mode && *s == crate::settings::AnswerStyle::Steps {
+                        continue;
                     }
-                    sys.push_str(style::RECALL_TAIL);
+                    sys.push_str(style::answer_style(*s));
+                }
+                if self.recall.is_some() {
+                    sys.push_str(style::RECALL);
                 }
                 sys
             }),
@@ -377,6 +399,32 @@ mod tests {
         let sys = req.system.as_deref().unwrap();
         assert!(sys.contains(style::NAVIGATION));
         assert!(!sys.contains("latency"), "the system prompt drew on the conversation");
+    }
+
+    #[test]
+    fn recall_titles_ride_on_the_latest_message_and_are_never_stored() {
+        let mut c = Conversation::new("m");
+        c.push_user("first");
+        c.push_assistant("reply");
+        c.push_user("debt is a promise");
+        c.set_recall(Some(vec![(7, "Debt binds the future".into())]));
+        let req = c.to_request();
+        assert!(req.messages[2].content.starts_with("debt is a promise"));
+        assert!(req.messages[2].content.contains("[7] Debt binds the future"));
+        assert_eq!(req.messages[0].content, "first", "earlier turns go out as they were");
+        let sys = req.system.unwrap();
+        assert!(sys.contains(style::RECALL));
+        assert!(!sys.contains("Debt binds"), "the system prompt stays constant");
+        assert_eq!(c.messages()[2].content, "debt is a promise", "nothing attached is stored");
+    }
+
+    #[test]
+    fn answer_styles_add_their_fixed_lines() {
+        let mut c = Conversation::new("m");
+        c.set_answer_styles(vec![crate::settings::AnswerStyle::Brief]);
+        assert!(c.to_request().system.unwrap().contains(style::answer_style(
+            crate::settings::AnswerStyle::Brief
+        )));
     }
 
     #[test]

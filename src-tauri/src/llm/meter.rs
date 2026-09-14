@@ -22,6 +22,13 @@ pub struct Tally {
     pub read_ms: f64,
     pub wrote_tokens: u64,
     pub wrote_ms: f64,
+    /// Tokens as the provider billed them, from the `usage` object. Separate
+    /// from the timings above, which only a local llama.cpp server sends.
+    pub usage_in: u64,
+    pub usage_out: u64,
+    /// What the run cost in US dollars, where the provider says (OpenRouter
+    /// does). None is "not reported", never "free".
+    pub cost_usd: Option<f64>,
 }
 
 impl Tally {
@@ -47,8 +54,16 @@ fn rate(tokens: u64, ms: f64) -> Option<f64> {
     Some(tokens as f64 / (ms / 1000.0))
 }
 
-static TALLY: Mutex<Tally> =
-    Mutex::new(Tally { calls: 0, read_tokens: 0, read_ms: 0.0, wrote_tokens: 0, wrote_ms: 0.0 });
+static TALLY: Mutex<Tally> = Mutex::new(Tally {
+    calls: 0,
+    read_tokens: 0,
+    read_ms: 0.0,
+    wrote_tokens: 0,
+    wrote_ms: 0.0,
+    usage_in: 0,
+    usage_out: 0,
+    cost_usd: None,
+});
 
 /// Start counting again. Called at the top of a run.
 pub fn reset() {
@@ -71,6 +86,22 @@ pub fn record(timings: Option<&serde_json::Value>) {
         tally.read_ms += num("prompt_ms");
         tally.wrote_tokens += num("predicted_n") as u64;
         tally.wrote_ms += num("predicted_ms");
+    }
+}
+
+/// Add one response's `usage` object, if the server sent one.
+///
+/// OpenAI-shaped servers say `prompt_tokens`/`completion_tokens`, Anthropic
+/// says `input_tokens`/`output_tokens`, and OpenRouter adds `cost`.
+pub fn record_usage(usage: Option<&serde_json::Value>) {
+    let Some(u) = usage else { return };
+    let num = |keys: &[&str]| keys.iter().find_map(|k| u.get(*k).and_then(|v| v.as_f64()));
+    if let Ok(mut tally) = TALLY.lock() {
+        tally.usage_in += num(&["prompt_tokens", "input_tokens"]).unwrap_or(0.0) as u64;
+        tally.usage_out += num(&["completion_tokens", "output_tokens"]).unwrap_or(0.0) as u64;
+        if let Some(cost) = num(&["cost"]) {
+            tally.cost_usd = Some(tally.cost_usd.unwrap_or(0.0) + cost);
+        }
     }
 }
 
@@ -107,5 +138,14 @@ mod tests {
         assert_eq!(t.read_tokens, 2000);
         assert_eq!(t.read_per_second(), Some(500.0));
         assert_eq!(t.wrote_per_second(), Some(10.0));
+
+        assert_eq!(t.cost_usd, None, "no usage reported is not a price of zero");
+        record_usage(Some(&serde_json::json!({
+            "prompt_tokens": 800, "completion_tokens": 120, "cost": 0.0015
+        })));
+        record_usage(Some(&serde_json::json!({ "input_tokens": 200, "output_tokens": 30 })));
+        let t = read();
+        assert_eq!((t.usage_in, t.usage_out), (1000, 150));
+        assert_eq!(t.cost_usd, Some(0.0015));
     }
 }

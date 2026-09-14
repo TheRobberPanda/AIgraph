@@ -82,6 +82,9 @@ pub struct Settings {
     pub reasoning: bool,
     /// Whether the chat pushes back on what's said, or just helps lay it out.
     pub chat_stance: ChatStance,
+    /// Extra ways of answering, on top of the stance. Each adds one fixed line
+    /// to the system prompt — see `chat::style::answer_style`.
+    pub answer_styles: Vec<AnswerStyle>,
     /// The language the model is asked to answer and write in.
     ///
     /// `Auto` follows whatever the person is writing, which is right until it
@@ -143,6 +146,10 @@ pub struct Settings {
     /// Advanced layout order: conversations on the left and Make on the
     /// right, instead of the default Make left / conversations right.
     pub advanced_swap: bool,
+    /// Show under each reply how long it took, and where the time went —
+    /// choosing recall titles, the model reading the prompt, and writing.
+    /// Off: it is a diagnostic, not something to read every turn.
+    pub show_timing: bool,
     /// The folder the app was in when it last closed.
     ///
     /// Everything on screen — the ideas, the map, the Make tab, the digest —
@@ -336,6 +343,19 @@ pub enum ChatStance {
     Challenge,
     /// Help structure and clarify without arguing the substance.
     Organize,
+}
+
+/// An extra way of answering, chosen on top of the stance. Any number of
+/// them at once; each is one fixed sentence in the system prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnswerStyle {
+    Brief,
+    Examples,
+    Questions,
+    Plain,
+    Steps,
+    Analogies,
 }
 
 /// The language the app works in.
@@ -548,6 +568,7 @@ impl Default for Settings {
             // not something anyone asked for on arrival — and "argues with
             // you" is a strong thing to be by default.
             chat_stance: ChatStance::Neutral,
+            answer_styles: Vec::new(),
             call_silence_seconds: 5,
             mic_timeout_seconds: 0,
             runtime: Runtime::default(),
@@ -561,6 +582,7 @@ impl Default for Settings {
             map_spread: MapSpread::default(),
             map_lock_nodes: false,
             advanced_swap: false,
+            show_timing: false,
             current_folder: crate::store::ROOT_FOLDER,
             accent: String::new(),
             presets: default_presets(),

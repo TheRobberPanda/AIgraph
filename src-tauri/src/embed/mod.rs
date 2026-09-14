@@ -13,6 +13,7 @@
 
 use std::path::Path;
 
+#[cfg(not(target_os = "android"))]
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 
 /// Recorded alongside every vector. If this ever changes, stored vectors are no
@@ -27,10 +28,34 @@ pub enum EmbedError {
     Model(String),
 }
 
+/// No embedder on a phone: the ONNX runtime has no Android build. Ideas read
+/// on the phone are reconciled when it next syncs with the desktop, which does
+/// have one — so the vectors stay from the one fixed model, as above.
+/// Uninhabited, so the methods below are provably never reached.
+#[cfg(target_os = "android")]
+pub enum Embedder {}
+
+#[cfg(target_os = "android")]
+impl Embedder {
+    pub fn load(_cache_dir: &Path) -> Result<Self, EmbedError> {
+        Err(EmbedError::Model("not available on the phone; merged on the desktop at sync".into()))
+    }
+
+    pub fn embed(&mut self, _texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
+        match *self {}
+    }
+
+    pub fn embed_one(&mut self, _text: &str) -> Result<Vec<f32>, EmbedError> {
+        match *self {}
+    }
+}
+
+#[cfg(not(target_os = "android"))]
 pub struct Embedder {
     model: TextEmbedding,
 }
 
+#[cfg(not(target_os = "android"))]
 impl Embedder {
     /// Load the model, downloading it (~90MB) on first use.
     pub fn load(cache_dir: &Path) -> Result<Self, EmbedError> {

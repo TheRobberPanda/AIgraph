@@ -61,6 +61,8 @@ pub struct AppState {
     /// Loaded on first use — the model is ~90MB and most of a session's work
     /// happens before anything needs embedding.
     embedder: Mutex<Option<Embedder>>,
+    // The phone never embeds; see `claim_vectors`.
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     embed_cache_dir: PathBuf,
     extractor: Mutex<Option<Extractor>>,
     settings: Mutex<Settings>,
@@ -93,6 +95,9 @@ pub struct AppState {
     /// The archived conversation being added to, if one was picked back up.
     /// Set by `continue_session` and cleared when the session ends.
     continuing: Mutex<Option<i64>>,
+    /// A conversation the last run left unfiled, filed at launch. Taken once
+    /// by the window so it can offer to continue it.
+    recovered: Mutex<Option<i64>>,
     /// OpenRouter's model listing, with the time it was fetched. The pickers
     /// re-read it on every open, and 400+ models is a download worth skipping
     /// when it is less than a few minutes old.
@@ -129,6 +134,7 @@ impl AppState {
             queue_progress: Mutex::new((0, 0)),
             stop_drain: Mutex::new(false),
             continuing: Mutex::new(None),
+            recovered: Mutex::new(None),
             router_catalog: Mutex::new(None),
             embedded: Mutex::new(crate::llm::embedded::Embedded::new(
                 db_path.parent().unwrap_or(std::path::Path::new(".")),
@@ -194,6 +200,8 @@ pub struct LastExtraction {
     pub session_id: i64,
     pub ideas: usize,
     pub dropped: usize,
+    /// Definitions the read found.
+    pub definitions: usize,
     pub drop_rate: f32,
     pub seconds: i64,
     pub retried: bool,
@@ -234,6 +242,13 @@ pub async fn startup(app: tauri::AppHandle, state: State<'_, AppState>) -> Resul
     // would be forgotten at the next launch, because auto-selection runs first
     // and would quietly overrule it.
     let saved = state.settings.lock().await.clone();
+    if saved.recall {
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = handle.state::<AppState>();
+            warm_embedder(&state).await;
+        });
+    }
     if let Some(choice) = &saved.chat {
         let still_there = servers
             .iter()
@@ -391,12 +406,159 @@ async fn set_active(
 /// embedding-shortlist machinery reconciliation already uses.
 const RECALL_LIMIT: usize = 200;
 
+/// How many titles go out with one message, at most.
+///
+/// Few, on purpose. Every title is prompt the model reads before it writes a
+/// word, and a long list of loosely related ideas invites a reply that reaches
+/// for one because it is there. The closest six hold anything one message is
+/// likely to touch.
+const RECALL_PER_MESSAGE: usize = 6;
+
+/// How close an idea has to be to the message to be attached, as the cosine
+/// of their embeddings. Below this MiniLM is matching topic words, not
+/// anything that was said.
+const RECALL_MIN_SCORE: f32 = 0.3;
+
+/// Where the time went for one reply. Shown under it when the setting asks.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ReplyTiming {
+    /// Choosing the recall titles for this message.
+    recall_ms: Option<u64>,
+    /// Titles in the prompt, and how many they were chosen from.
+    recall_titles: usize,
+    recall_considered: usize,
+    /// Ranked by relevance to the message, rather than by recency.
+    recall_ranked: bool,
+    /// Size of the system prompt, which is read before every answer.
+    system_chars: usize,
+    /// From sending the request to the model's first output of any kind —
+    /// mostly the model reading the prompt.
+    first_token_ms: Option<u64>,
+    /// From sending to the first word of the answer itself, after any thinking.
+    first_content_ms: Option<u64>,
+    /// The whole turn, recall included.
+    total_ms: u64,
+    reply_chars: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SentReply {
+    reply: String,
+    timing: ReplyTiming,
+}
+
+/// The titles attached to one message: the folder's ideas closest to it.
+///
+/// Returns the titles, how many were considered, and whether they were ranked
+/// by meaning. Without an embedder they are ranked by shared words instead —
+/// cruder, but still about this message rather than about what is recent.
+async fn choose_recall(
+    state: &AppState,
+    folder: i64,
+    message: &str,
+) -> (Vec<(i64, String)>, usize, bool) {
+    let recent =
+        state.store.lock().await.idea_titles(Some(folder), RECALL_LIMIT).unwrap_or_default();
+    let considered = recent.len();
+    if recent.is_empty() {
+        return (recent, 0, false);
+    }
+    match rank_by_relevance(state, &recent, message).await {
+        Some(ranked) => (ranked, considered, true),
+        None => (rank_by_words(&recent, message), considered, false),
+    }
+}
+
+/// The embedder, loaded if it is not yet.
+///
+/// Waits a moment for it rather than giving up at once. Extraction holds it
+/// while it embeds a session's claims, and giving up on the first try is how
+/// recall quietly fell back to "most recent" whenever anything else had it.
+async fn embedder_ready(
+    state: &AppState,
+) -> Option<tokio::sync::MutexGuard<'_, Option<Embedder>>> {
+    let mut guard =
+        tokio::time::timeout(std::time::Duration::from_millis(1500), state.embedder.lock())
+            .await
+            .ok()?;
+    if guard.is_none() {
+        let cache = state.embed_cache_dir.clone();
+        *guard = Some(
+            tauri::async_runtime::spawn_blocking(move || Embedder::load(&cache))
+                .await
+                .ok()?
+                .ok()?,
+        );
+    }
+    Some(guard)
+}
+
+/// Load the embedder in the background, so the first message after a launch
+/// does not sit waiting for a model to come off disk.
+pub async fn warm_embedder(state: &AppState) {
+    let _ = embedder_ready(state).await;
+}
+
+async fn rank_by_relevance(
+    state: &AppState,
+    recent: &[(i64, String)],
+    message: &str,
+) -> Option<Vec<(i64, String)>> {
+    let vectors: std::collections::HashMap<i64, Vec<f32>> = state
+        .store
+        .lock()
+        .await
+        .ideas_with_embeddings()
+        .ok()?
+        .into_iter()
+        .map(|(id, _, v)| (id, v))
+        .collect();
+    if vectors.is_empty() {
+        return None;
+    }
+    let query = {
+        let mut guard = embedder_ready(state).await?;
+        guard.as_mut()?.embed_one(message).ok()?
+    };
+    let mut scored: Vec<(f32, usize)> = recent
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (id, _))| vectors.get(id).map(|v| (crate::embed::cosine(&query, v), i)))
+        .filter(|(score, _)| *score >= RECALL_MIN_SCORE)
+        .collect();
+    // Stable, so ties keep their recency order.
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    Some(scored.into_iter().take(RECALL_PER_MESSAGE).map(|(_, i)| recent[i].clone()).collect())
+}
+
+/// Titles sharing the most words with the message, for when there is no
+/// embedder (the phone, a failed download).
+fn rank_by_words(recent: &[(i64, String)], message: &str) -> Vec<(i64, String)> {
+    let words = |s: &str| -> std::collections::HashSet<String> {
+        s.split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() > 3)
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let said = words(message);
+    let mut scored: Vec<(usize, usize)> = recent
+        .iter()
+        .enumerate()
+        .map(|(i, (_, title))| (words(title).intersection(&said).count(), i))
+        .filter(|(n, _)| *n > 0)
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.into_iter().take(RECALL_PER_MESSAGE).map(|(_, i)| recent[i].clone()).collect()
+}
+
 #[tauri::command]
 pub async fn send_message(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     text: String,
-) -> Result<String, String> {
+) -> Result<SentReply, String> {
+    let started = std::time::Instant::now();
+    let mut timing = ReplyTiming::default();
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err("empty message".into());
@@ -420,25 +582,27 @@ pub async fn send_message(
         }
     }
 
-    let (call_mode, recall, reasoning, stance) = {
+    // On disk before anything else happens: choosing recall and asking the
+    // model can take seconds, and the words must not exist only in memory
+    // for any of them.
+    persist_live(&state, Some(&text)).await;
+
+    let (call_mode, recall, reasoning, stance, answer_styles) = {
         let s = state.settings.lock().await;
-        (s.call_mode, s.recall, s.reasoning, s.chat_stance)
+        (s.call_mode, s.recall, s.reasoning, s.chat_stance, s.answer_styles.clone())
     };
 
-    // What has already been thought, by title, so the reply can connect the
-    // two. Fetched once per conversation rather than every turn: the system
-    // prompt is the beginning of every request, and a changing one throws away
-    // the work the server already did on the prefix. Nothing new can appear
-    // here mid-conversation anyway — extraction runs when one ends.
-    let needs_recall = {
-        let guard = state.conversation.lock().await;
-        guard.as_ref().map(|c| !c.recall_decided()).unwrap_or(false)
-    };
-    let titles = if recall && needs_recall {
+    // The earlier ideas closest to what was just said, chosen again for every
+    // message so a reply can connect this message — not the opening line —
+    // to what came before. They go out with this message only.
+    let titles = if recall {
         let folder = *state.current_folder.lock().await;
-        Some(state.store.lock().await.idea_titles(Some(folder), RECALL_LIMIT).unwrap_or_default())
-    } else if needs_recall {
-        Some(Vec::new())
+        let chose = std::time::Instant::now();
+        let (titles, considered, ranked) = choose_recall(&state, folder, &text).await;
+        timing.recall_ms = Some(chose.elapsed().as_millis() as u64);
+        timing.recall_considered = considered;
+        timing.recall_ranked = ranked;
+        Some(titles)
     } else {
         None
     };
@@ -449,16 +613,28 @@ pub async fn send_message(
         convo.set_call_mode(call_mode);
         convo.set_stance(stance);
         convo.set_reasoning(reasoning);
-        if let Some(titles) = titles {
-            convo.set_recall(titles);
-        }
+        convo.set_answer_styles(answer_styles);
+        convo.set_recall(titles);
         convo.push_user(&text);
+        timing.recall_titles = convo.recall_len();
         convo.to_request()
     };
+    persist_live(&state, None).await;
+    timing.system_chars = request.system.as_ref().map(|s| s.chars().count()).unwrap_or(0);
 
     let emitter = app.clone();
+    let sent_at = std::time::Instant::now();
+    let first_any = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    let first_content = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    let (seen_any, seen_content) = (first_any.clone(), first_content.clone());
     let streamed = provider
         .chat_stream(&request, &move |kind, text| {
+            use std::sync::atomic::Ordering::Relaxed;
+            let ms = sent_at.elapsed().as_millis() as u64;
+            let _ = seen_any.compare_exchange(u64::MAX, ms, Relaxed, Relaxed);
+            if kind == ChunkKind::Content {
+                let _ = seen_content.compare_exchange(u64::MAX, ms, Relaxed, Relaxed);
+            }
             // Reasoning goes out on its own channel so the UI can show that
             // something is happening without ever treating it as the reply.
             let event = match kind {
@@ -481,6 +657,8 @@ pub async fn send_message(
                     convo.drop_last_user();
                 }
             }
+            // Taken back from the conversation, but not from the disk.
+            persist_live(&state, Some(&text)).await;
             return Err(e.to_string());
         }
     };
@@ -509,16 +687,27 @@ pub async fn send_message(
     if let Some(s) = state.session.lock().await.as_mut() {
         s.touch();
     }
-    Ok(reply)
+    persist_live(&state, None).await;
+    let at = |cell: &std::sync::atomic::AtomicU64| {
+        Some(cell.load(std::sync::atomic::Ordering::Relaxed)).filter(|&ms| ms != u64::MAX)
+    };
+    timing.first_token_ms = at(&first_any);
+    timing.first_content_ms = at(&first_content);
+    timing.total_ms = started.elapsed().as_millis() as u64;
+    timing.reply_chars = reply.chars().count();
+    Ok(SentReply { reply, timing })
 }
 
 /// Remove one turn from the conversation still being had, without touching
 /// the rest of it.
 #[tauri::command]
 pub async fn delete_turn(state: State<'_, AppState>, index: usize) -> Result<(), String> {
-    let mut guard = state.conversation.lock().await;
-    let convo = guard.as_mut().ok_or("no conversation")?;
-    convo.remove(index);
+    {
+        let mut guard = state.conversation.lock().await;
+        let convo = guard.as_mut().ok_or("no conversation")?;
+        convo.remove(index);
+    }
+    persist_live(&state, None).await;
     Ok(())
 }
 
@@ -526,10 +715,120 @@ pub async fn delete_turn(state: State<'_, AppState>, index: usize) -> Result<(),
 /// and everything said after it.
 #[tauri::command]
 pub async fn rewind_conversation(state: State<'_, AppState>, index: usize) -> Result<(), String> {
-    let mut guard = state.conversation.lock().await;
-    let convo = guard.as_mut().ok_or("no conversation")?;
-    convo.rewind(index);
+    {
+        let mut guard = state.conversation.lock().await;
+        let convo = guard.as_mut().ok_or("no conversation")?;
+        convo.rewind(index);
+    }
+    persist_live(&state, None).await;
     Ok(())
+}
+
+/// Write the live conversation to the journal. See `crate::journal`.
+///
+/// `pending` is a message sent but not (or no longer) in the conversation.
+/// A failure is logged loudly and not returned: refusing to answer because
+/// the disk is full would lose the conversation a second way.
+async fn persist_live(state: &AppState, pending: Option<&str>) {
+    let messages = state
+        .conversation
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.messages().to_vec())
+        .unwrap_or_default();
+    let (started_at, model) = state
+        .session
+        .lock()
+        .await
+        .as_ref()
+        .map(|s| (Some(s.started_at), s.model.clone()))
+        .unwrap_or((None, String::new()));
+    let live = crate::journal::Live {
+        started_at,
+        model,
+        folder: *state.current_folder.lock().await,
+        continuing: *state.continuing.lock().await,
+        messages,
+        pending: pending.map(str::to_string),
+    };
+    if let Err(e) = crate::journal::save_live(&state.data_dir, &live) {
+        tracing::error!(error = %e, "could not write the live journal");
+    }
+}
+
+/// File whatever the last run left in the journal. Run once, at launch,
+/// before anything else can touch the conversation.
+///
+/// A message that was sent and never answered goes back into the draft, so
+/// it is in the box to send again. If filing fails the journal is left where
+/// it is, and the next launch tries again.
+pub async fn recover_live(state: &AppState) {
+    let Some(live) = crate::journal::load_live(&state.data_dir) else { return };
+    if let Some(p) = live.pending.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        let draft = crate::journal::load_draft(&state.data_dir);
+        if !draft.contains(p) {
+            let joined = if draft.trim().is_empty() { p.to_string() } else { format!("{draft}\n{p}") };
+            if let Err(e) = crate::journal::save_draft(&state.data_dir, &joined) {
+                tracing::error!(error = %e, "could not put an unsent message back in the draft");
+                return;
+            }
+        }
+    }
+    if live.messages.is_empty() {
+        let _ = crate::journal::retire_live(&state.data_dir, 0);
+        return;
+    }
+    let rendered = crate::session::transcript::render(&live.messages);
+    let filed = {
+        let mut store = state.store.lock().await;
+        let continued = live.continuing.and_then(|id| {
+            // Grows the conversation it continued. If that no longer lines up
+            // (turns deleted since), it is filed on its own instead.
+            store.extend_session(id, &rendered, &live.model, Some(&state.md_dir)).ok().map(|_| id)
+        });
+        match continued {
+            Some(id) => Ok(id),
+            None => store
+                .archive_session_with(
+                    &rendered,
+                    &live.model,
+                    live.started_at.unwrap_or_else(chrono::Utc::now),
+                    Some(&state.md_dir),
+                    &Default::default(),
+                )
+                .inspect(|id| {
+                    let _ = store.set_session_folder(*id, live.folder);
+                }),
+        }
+    };
+    match filed {
+        Ok(id) => {
+            tracing::info!(session = id, turns = live.messages.len(), "recovered an unfiled conversation");
+            if let Err(e) = crate::journal::retire_live(&state.data_dir, id) {
+                tracing::warn!(error = %e, "recovered, but the journal could not be moved aside");
+            }
+            *state.recovered.lock().await = Some(id);
+        }
+        Err(e) => tracing::error!(error = %e, "could not file the recovered conversation; kept in the journal"),
+    }
+}
+
+/// What is typed and not yet sent, kept as it is typed.
+#[tauri::command]
+pub async fn save_draft(state: State<'_, AppState>, text: String) -> Result<(), String> {
+    crate::journal::save_draft(&state.data_dir, &text).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn load_draft(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(crate::journal::load_draft(&state.data_dir))
+}
+
+/// The conversation filed at launch from the journal, once.
+#[tauri::command]
+pub async fn recovered_session(state: State<'_, AppState>) -> Result<Option<i64>, String> {
+    Ok(state.recovered.lock().await.take())
 }
 
 /// Pick an archived conversation back up.
@@ -574,6 +873,7 @@ pub async fn continue_session(
     if let Ok(folder) = state.store.lock().await.session_folder(session_id) {
         *state.current_folder.lock().await = folder;
     }
+    persist_live(&state, None).await;
     Ok(n)
 }
 
@@ -658,6 +958,12 @@ pub async fn end_session_inner(
     }
 
     let turn_count = rendered.spans.len();
+
+    // In the database now, so the journal's copy is moved beside the others
+    // it was filed with. Moved, never deleted.
+    if let Err(e) = crate::journal::retire_live(&state.data_dir, session_id) {
+        tracing::warn!(error = %e, "filed, but the journal could not be moved aside");
+    }
 
     // Only now is it safe to let go of the conversation.
     *state.conversation.lock().await = Some(Conversation::new(&model));
@@ -874,6 +1180,14 @@ pub async fn extract_session_inner(
             reconcile_and_save(state, session_id, &extraction, &provider_label, &model)
                 .await
                 .map_err(|e| format!("saving ideas: {e}"))?;
+            // What the person said their words mean, kept beside the ideas.
+            // A failure here is logged, not fatal: the ideas are already saved.
+            let definitions = extraction.definitions.len();
+            if let Err(e) =
+                state.store.lock().await.replace_definitions(session_id, &extraction.definitions)
+            {
+                tracing::warn!(error = %e, "could not save definitions");
+            }
 
             if !extraction.title.is_empty() {
                 let _ =
@@ -887,6 +1201,7 @@ pub async fn extract_session_inner(
                     session_id,
                     ideas: kept,
                     dropped,
+                    definitions,
                     drop_rate: extraction.drop_rate(),
                     seconds,
                     retried: extraction.retried,
@@ -915,6 +1230,7 @@ pub async fn extract_session_inner(
                     session_id,
                     ideas: 0,
                     dropped: 0,
+                    definitions: 0,
                     drop_rate: 0.0,
                     seconds,
                     retried: false,
@@ -1357,23 +1673,7 @@ async fn reconcile_and_save(
     // Embed every claim in one batch, off the async runtime — ONNX inference is
     // blocking work and would otherwise stall the chat stream.
     let claims: Vec<String> = extraction.ideas.iter().map(|i| i.raw.claim.clone()).collect();
-    let vectors = if claims.is_empty() {
-        Vec::new()
-    } else {
-        let cache = state.embed_cache_dir.clone();
-        let mut guard = state.embedder.lock().await;
-        if guard.is_none() {
-            let cache2 = cache.clone();
-            *guard = Some(
-                tauri::async_runtime::spawn_blocking(move || Embedder::load(&cache2))
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .map_err(|e| e.to_string())?,
-            );
-        }
-        let embedder = guard.as_mut().expect("just loaded");
-        embedder.embed(&claims).map_err(|e| e.to_string())?
-    };
+    let vectors = claim_vectors(state, &claims).await?;
 
     let adjudicator = {
         let guard = state.extractor.lock().await;
@@ -1381,20 +1681,29 @@ async fn reconcile_and_save(
     };
 
     for (idea, vector) in extraction.ideas.iter().zip(vectors) {
-        // Re-read each time: a decision may have added an idea that the next one
-        // should be compared against, including within this same session.
-        let existing =
-            state.store.lock().await.ideas_with_embeddings().map_err(|e| e.to_string())?;
+        let decision = match &vector {
+            Some(vector) => {
+                // Re-read each time: a decision may have added an idea that the
+                // next one should be compared against, including within this
+                // same session.
+                let existing =
+                    state.store.lock().await.ideas_with_embeddings().map_err(|e| e.to_string())?;
 
-        let candidates = reconcile::shortlist(&vector, &existing);
-        let decision = reconcile::decide(adjudicator.as_ref(), &idea.raw.claim, &candidates)
-            .await
-            .unwrap_or_else(|e| {
-                // A failed adjudication must not merge anything. Keeping the
-                // idea separate is the safe direction — see the over-merging rule.
-                tracing::warn!(error = %e, "adjudication failed; keeping idea separate");
-                reconcile::Decision::New { related: Vec::new() }
-            });
+                let candidates = reconcile::shortlist(vector, &existing);
+                reconcile::decide(adjudicator.as_ref(), &idea.raw.claim, &candidates)
+                    .await
+                    .unwrap_or_else(|e| {
+                        // A failed adjudication must not merge anything. Keeping
+                        // the idea separate is the safe direction — see the
+                        // over-merging rule.
+                        tracing::warn!(error = %e, "adjudication failed; keeping idea separate");
+                        reconcile::Decision::New { related: Vec::new() }
+                    })
+            }
+            // No vectors, so nothing to shortlist against: kept separate, the
+            // same safe direction, and merged by the desktop at sync.
+            None => reconcile::Decision::New { related: Vec::new() },
+        };
 
         if !matches!(decision, reconcile::Decision::New { .. }) {
             tracing::info!(?decision, claim = %idea.raw.claim, "reconciled");
@@ -1419,7 +1728,9 @@ async fn reconcile_and_save(
                 }
             }
             _ => {
-                store.set_embedding(idea_id, &vector).map_err(|e| e.to_string())?;
+                if let Some(vector) = &vector {
+                    store.set_embedding(idea_id, vector).map_err(|e| e.to_string())?;
+                }
             }
         }
     }
@@ -1431,6 +1742,40 @@ async fn reconcile_and_save(
     condense_replies(state, session_id, adjudicator.as_ref(), model).await;
     break_paragraphs(state, session_id, adjudicator.as_ref(), model).await;
     Ok(())
+}
+
+/// One vector per claim, embedded in a single batch off the async runtime —
+/// ONNX inference is blocking work and would otherwise stall the chat stream.
+#[cfg(not(target_os = "android"))]
+async fn claim_vectors(
+    state: &AppState,
+    claims: &[String],
+) -> Result<Vec<Option<Vec<f32>>>, String> {
+    if claims.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut guard = state.embedder.lock().await;
+    if guard.is_none() {
+        let cache = state.embed_cache_dir.clone();
+        *guard = Some(
+            tauri::async_runtime::spawn_blocking(move || Embedder::load(&cache))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    let embedder = guard.as_mut().expect("just loaded");
+    Ok(embedder.embed(claims).map_err(|e| e.to_string())?.into_iter().map(Some).collect())
+}
+
+/// None on the phone, one per claim so every idea is still saved. See
+/// `embed::Embedder`.
+#[cfg(target_os = "android")]
+async fn claim_vectors(
+    _state: &AppState,
+    claims: &[String],
+) -> Result<Vec<Option<Vec<f32>>>, String> {
+    Ok(vec![None; claims.len()])
 }
 
 /// Work out where the paragraphs go in a long turn, after the fact.
@@ -1667,6 +2012,28 @@ pub async fn delete_session(
     session_id: i64,
 ) -> Result<(), String> {
     state.store.lock().await.trash_session(session_id).map_err(|e| e.to_string())?;
+    let _ = app.emit("ideas:changed", ());
+    Ok(())
+}
+
+/// What the person has said their words mean.
+#[tauri::command]
+pub async fn definitions(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+) -> Result<Vec<crate::store::Definition>, String> {
+    state.store.lock().await.definitions(folder).map_err(|e| e.to_string())
+}
+
+/// Take a definition off the list. Hidden, not deleted, so reading the
+/// conversation again does not put it back.
+#[tauri::command]
+pub async fn remove_definition(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    definition_id: i64,
+) -> Result<(), String> {
+    state.store.lock().await.remove_definition(definition_id).map_err(|e| e.to_string())?;
     let _ = app.emit("ideas:changed", ());
     Ok(())
 }

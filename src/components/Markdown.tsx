@@ -1,7 +1,7 @@
 import { memo } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { splitRecall } from "../lib/recall";
+import { markRecall, RECALL_SCHEME } from "../lib/recall";
 import RecallHighlight from "./RecallHighlight";
 
 /**
@@ -14,28 +14,36 @@ import RecallHighlight from "./RecallHighlight";
  * verbatim: their exact characters are what quotes are matched against, and
  * markdown would render some of them away.
  *
- * A paragraph that drew on something recorded earlier — see `lib/recall.ts` —
- * is split out and wrapped in its own highlight. Split by paragraph rather
- * than rendered as one block: it's the same set of elements ReactMarkdown
- * would produce from the whole string in the ordinary case, since paragraphs
- * are already block boundaries, so a reply with no recall in it renders
- * identically either way.
+ * A sentence that drew on something recorded earlier — see `lib/recall.ts` —
+ * arrives here as a link with a `recall:` address, and is drawn as an inline
+ * highlight instead of a link. A reply with no recall in it renders exactly as
+ * plain markdown.
  */
+const components: Components = {
+  a({ href, children, node: _node, ...rest }) {
+    if (href?.startsWith(RECALL_SCHEME)) {
+      const id = Number(href.slice(RECALL_SCHEME.length));
+      if (Number.isFinite(id)) return <RecallHighlight ideaId={id}>{children}</RecallHighlight>;
+    }
+    return (
+      <a href={href} {...rest}>
+        {children}
+      </a>
+    );
+  },
+};
+
+/** The default sanitiser drops unknown schemes, which would lose the idea id. */
+function urlTransform(url: string): string {
+  return url.startsWith(RECALL_SCHEME) ? url : defaultUrlTransform(url);
+}
+
 function Markdown({ children }: { children: string }) {
-  const segments = splitRecall(children);
   return (
     <div className="md">
-      {segments.map((seg, i) =>
-        seg.ideaId === null ? (
-          <ReactMarkdown key={i} remarkPlugins={[remarkGfm]}>
-            {seg.text}
-          </ReactMarkdown>
-        ) : (
-          <RecallHighlight key={i} ideaId={seg.ideaId}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.text}</ReactMarkdown>
-          </RecallHighlight>
-        ),
-      )}
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={urlTransform}>
+        {markRecall(children)}
+      </ReactMarkdown>
     </div>
   );
 }

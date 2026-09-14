@@ -54,6 +54,17 @@ export function IconIdeas(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** An open book with a marked line — Definitions. */
+export function IconDefinitions(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z" />
+      <path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5z" />
+      <path d="M6.5 8h2.5M6.5 11h2.5M15.5 8h2" />
+    </Base>
+  );
+}
+
 /** A stack of turns — Conversations. */
 export function IconChats(props: SVGProps<SVGSVGElement>) {
   return (

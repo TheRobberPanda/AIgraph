@@ -40,6 +40,21 @@ pub fn json_schema() -> serde_json::Value {
                 "type": "object",
                 "properties": { "notes": { "$ref": "#/$defs/notes" } }
             },
+            // What the person said their own words mean. Most conversations
+            // have none, and a reply without the field still parses.
+            "definitions": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                    "type": "object",
+                    "required": ["term", "definition", "quote"],
+                    "properties": {
+                        "term": { "type": "string" },
+                        "definition": { "type": "string" },
+                        "quote": { "type": "string" }
+                    }
+                }
+            },
             "ideas": {
                 "type": "array",
                 // What actually stops a long reply. Grammar-constrained
@@ -263,8 +278,19 @@ rules out. Name the actual weak point, not "this could be examined further."
 A note that only restates or summarizes what was said, with nothing pressed
 on, is not a note — leave "conversation" empty rather than write one.
 
+Also return "definitions": every place a USER line says what the person means
+by a word or phrase — "by freedom I mean…", "when I say discipline, I mean…",
+"X, to me, is…". Their own meaning of their own words: never a dictionary
+definition, never one given in an ASSISTANT line, never a meaning worked out
+on their behalf. For each return "term" (the word or phrase as they used it,
+lowercase unless it is a name), "definition" (what they said it means, one
+sentence, in their words as far as possible, in the language named in
+"language"), and "quote" (copied exactly from a USER line, under the same rule
+as an idea's quote). Most conversations define nothing; return an empty list
+then.
+
 Return JSON: {{"language": "...", "title": "...", "ideas": [...],
-"conversation": {{"notes": [...]}}}}.
+"definitions": [...], "conversation": {{"notes": [...]}}}}.
 Return {{"language": "...", "title": "...", "ideas": []}} if nothing substantive
 was said.
 {known_block}
@@ -282,6 +308,19 @@ struct Envelope {
     ideas: Vec<RawIdea>,
     #[serde(default)]
     conversation: ConversationNotes,
+    #[serde(default)]
+    definitions: Vec<RawDefinition>,
+}
+
+/// A definition as the model returned it: unverified until its quote is found.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct RawDefinition {
+    #[serde(default)]
+    pub term: String,
+    #[serde(default)]
+    pub definition: String,
+    #[serde(default)]
+    pub quote: String,
 }
 
 /// Everything one extraction call returns.
@@ -290,6 +329,7 @@ pub struct Extracted {
     pub title: String,
     pub ideas: Vec<RawIdea>,
     pub conversation: ConversationNotes,
+    pub definitions: Vec<RawDefinition>,
 }
 
 /// Parse the model's reply.
@@ -306,6 +346,7 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
             title: env.title,
             ideas: env.ideas,
             conversation: env.conversation,
+            definitions: env.definitions,
         });
     }
 
@@ -318,6 +359,7 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
                     title: env.title,
                     ideas: env.ideas,
                     conversation: env.conversation,
+                    definitions: env.definitions,
                 });
             }
         }
@@ -334,6 +376,7 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
                 title: env.title,
                 ideas: env.ideas,
                 conversation: env.conversation,
+                definitions: env.definitions,
             });
         }
     }

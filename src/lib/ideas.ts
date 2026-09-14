@@ -84,7 +84,15 @@ export interface LastExtraction {
     read_ms: number;
     wrote_tokens: number;
     wrote_ms: number;
+    /** Tokens in and out as the provider billed them, where it said. */
+    usage_in: number;
+    usage_out: number;
+    /** What the read cost in US dollars — only providers that report a
+     *  price (OpenRouter) fill this in. */
+    cost_usd: number | null;
   };
+  /** Definitions the read found. */
+  definitions?: number;
   read_per_second: number | null;
   wrote_per_second: number | null;
   error: string | null;

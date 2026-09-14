@@ -174,6 +174,9 @@ struct StreamChunk {
     choices: Vec<StreamChoice>,
     #[serde(default)]
     provider: Option<String>,
+    /// Token counts, and on OpenRouter the price. Sent once, on the last frame.
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -202,6 +205,8 @@ struct Streamed {
     provider: Option<String>,
     /// The person pressed Stop. Distinct from finishing, and from failing.
     cancelled: bool,
+    /// What the server said the call used, where it said.
+    usage: Option<serde_json::Value>,
 }
 
 /// Consume a server-sent-event body, handing every fragment to `on_chunk`.
@@ -220,6 +225,7 @@ async fn drain_sse(
     let mut full = String::new();
     let mut finish_reason = None;
     let mut provider = None;
+    let mut usage: Option<serde_json::Value> = None;
     let mut buf = Vec::<u8>::new();
     let mut stream = resp.bytes_stream();
     let ticket = crate::llm::cancel::start();
@@ -231,7 +237,7 @@ async fn drain_sse(
         // is listening to. What arrived before the stop is kept: the person
         // ended it, they did not hit an error.
         if ticket.cancelled() {
-            return Ok(Streamed { content: full, finish_reason, provider, cancelled: true });
+            return Ok(Streamed { content: full, finish_reason, provider, cancelled: true, usage: usage.clone() });
         }
         buf.extend_from_slice(&chunk.map_err(|e| LlmError::Transport(e.to_string()))?);
 
@@ -246,7 +252,7 @@ async fn drain_sse(
             let payload = payload.trim();
 
             if payload == "[DONE]" {
-                return Ok(Streamed { content: full, finish_reason, provider, cancelled: false });
+                return Ok(Streamed { content: full, finish_reason, provider, cancelled: false, usage: usage.clone() });
             }
             if payload.is_empty() {
                 continue;
@@ -272,6 +278,9 @@ async fn drain_sse(
             if parsed.provider.is_some() {
                 provider = parsed.provider;
             }
+            if parsed.usage.is_some() {
+                usage = parsed.usage;
+            }
             for choice in parsed.choices {
                 if let Some(reason) = choice.finish_reason {
                     finish_reason = Some(reason);
@@ -292,7 +301,7 @@ async fn drain_sse(
         }
     }
 
-    Ok(Streamed { content: full, finish_reason, provider, cancelled: false })
+    Ok(Streamed { content: full, finish_reason, provider, cancelled: false, usage: usage.clone() })
 }
 
 /// The failure in a response body or a stream frame, if there is one.
@@ -735,6 +744,7 @@ impl OpenAiCompat {
         let completion: Completion =
             serde_json::from_str(&raw).map_err(|e| LlmError::BadOutput(e.to_string()))?;
         crate::llm::meter::record(completion.timings.as_ref());
+        crate::llm::meter::record_usage(completion.usage.as_ref());
         let Some(choice) = completion.choices.first() else {
             return Err(LlmError::BadOutput("no choices in response".into()));
         };
@@ -804,6 +814,11 @@ impl OpenAiCompat {
         if self.routes_to_many_providers() {
             body["provider"] = serde_json::json!({ "require_parameters": true });
         }
+        // Ask for the price with the answer: OpenRouter only says what a call
+        // cost when asked, and the last read's cost is shown beside the queue.
+        if self.label == "openrouter" {
+            body["usage"] = serde_json::json!({ "include": true });
+        }
         // Dropped on the way back up when a server rejects it — see `attempt`.
         if !structured_output {
             body.as_object_mut().expect("object").remove("response_format");
@@ -835,6 +850,7 @@ impl OpenAiCompat {
                 }
             })
             .await?;
+            crate::llm::meter::record_usage(streamed.usage.as_ref());
 
             if streamed.cancelled {
                 return Err(LlmError::Transport("the read was stopped".into()));
@@ -884,6 +900,7 @@ impl OpenAiCompat {
         // before anything can fail below, so a run that ends badly still
         // accounts for the time it spent.
         crate::llm::meter::record(completion.timings.as_ref());
+        crate::llm::meter::record_usage(completion.usage.as_ref());
         if let Some(served_by) = &completion.provider {
             // Which of the router's providers answered. Worth a line: when the
             // same model works and then does not, this is usually the only
@@ -935,6 +952,9 @@ struct Completion {
     /// report one.
     #[serde(default)]
     timings: Option<serde_json::Value>,
+    /// Token counts, and on OpenRouter the price.
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]

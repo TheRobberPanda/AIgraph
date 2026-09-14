@@ -3,6 +3,7 @@ import { open as pickFolder } from "@tauri-apps/plugin-dialog";
 import { useNoWheel } from "../lib/noWheel";
 import Engine from "./Engine";
 import {
+  ANSWER_STYLES,
   ACCENTS,
   applyAccent,
   applyTheme,
@@ -443,6 +444,38 @@ export default function Settings() {
             <Section
               hint={
                 <>
+                  Extra ways of answering, on top of the choice above. Pick any
+                  number; each one is a single fixed line in what the model is
+                  told, never anything built from what you said.
+                </>
+              }
+            >
+              Also answer
+            </Section>
+            <div className="row wrap">
+              {ANSWER_STYLES.map((st) => {
+                const on = (s.answer_styles ?? []).includes(st.id);
+                return (
+                  <button
+                    key={st.id}
+                    className={on ? "btn on" : "btn"}
+                    data-tip={st.hint}
+                    onClick={() =>
+                      void update({
+                        answer_styles: on
+                          ? (s.answer_styles ?? []).filter((x) => x !== st.id)
+                          : [...(s.answer_styles ?? []), st.id],
+                      })
+                    }
+                  >
+                    {st.label}
+                  </button>
+                );
+              })}
+            </div>
+            <Section
+              hint={
+                <>
                   Reasoning models can deliberate at length first. None of it is
                   shown or recorded here — on a local model it is most of the
                   wait.
@@ -462,9 +495,10 @@ export default function Settings() {
             <Section
               hint={
                 <>
-                  Hands the conversation the titles of ideas already recorded in
-                  this folder. Titles only — never claims, quotes, or
-                  transcripts.
+                  With each message, hands the conversation the titles of the
+                  ideas in this folder closest to what you just said, so a reply
+                  can say how the two connect. Titles only — never claims,
+                  quotes, or transcripts.
                 </>
               }
             >
@@ -476,6 +510,25 @@ export default function Settings() {
                 onClick={() => void update({ recall: !s.recall })}
               >
                 {s.recall ? "Connecting to earlier ideas" : "Each turn on its own"}
+              </button>
+            </div>
+            <Section
+              hint={
+                <>
+                  A line under each reply saying where the time went: choosing
+                  which earlier ideas to recall, the model reading the prompt,
+                  and the model writing.
+                </>
+              }
+            >
+              Generation timing
+            </Section>
+            <div className="row">
+              <button
+                className={s.show_timing ? "btn on" : "btn"}
+                onClick={() => void update({ show_timing: !s.show_timing })}
+              >
+                {s.show_timing ? "Shown under replies" : "Hidden"}
               </button>
             </div>
             <Section

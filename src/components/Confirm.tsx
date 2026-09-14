@@ -27,7 +27,10 @@ export default function Confirm({
   }, [onConfirm]);
 
   return (
-    <div className="modal-overlay" onClick={onCancel}>
+    // `clear`: a question and two buttons does not need the window dimmed and
+    // blurred behind it — over the chat that read as the conversation being
+    // taken away, for a question about one message in it.
+    <div className="modal-overlay clear" onClick={onCancel}>
       <div className="modal confirm" onClick={(e) => e.stopPropagation()}>
         <p>{title}</p>
         <div className="modal-actions">

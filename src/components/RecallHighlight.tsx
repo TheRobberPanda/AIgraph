@@ -1,16 +1,42 @@
 import { useEffect, useRef, useState } from "react";
-import { conversationView, ideaView, type Segment } from "../lib/views";
+import { createPortal } from "react-dom";
+import { ideaView } from "../lib/views";
 import { longDate } from "../lib/format";
 
+/** What the card shows: the quote the idea was taken from, and its surroundings. */
+interface Source {
+  title: string;
+  when: string;
+  before: string;
+  quote: string;
+  after: string;
+}
+
+/** Where the card goes, in window coordinates. */
+interface Place {
+  left: number;
+  top?: number;
+  bottom?: number;
+}
+
+const CARD_WIDTH = 416;
+
 /**
- * One paragraph of a reply that drew on something recorded earlier, with a
+ * One sentence of a reply that drew on something recorded earlier, with a
  * hover card showing where.
  *
  * The card is built to look like a cropped screenshot of the conversation it
- * came from: the whole turn is there for context, but only the words that
- * actually produced the idea are in focus — everything else is blurred and
- * runs off the edge of the frame, the way a screenshot someone sent you would
- * blur what they didn't mean to show and crop what didn't fit.
+ * came from: the words that produced the idea are in focus, the words either
+ * side are dimmed and cut off at the edge of the frame.
+ *
+ * It shows the idea's own evidence — the quote as it was verified against the
+ * transcript, and the text either side of it. It used to find the turn and
+ * look for segments tagged with this idea, and an idea merged into another, or
+ * re-read since, had none: the card opened with everything blurred and
+ * nothing in focus.
+ *
+ * Drawn in a portal with fixed coordinates, so the chat's scroll region can
+ * never cut it off.
  */
 export default function RecallHighlight({
   ideaId,
@@ -19,75 +45,100 @@ export default function RecallHighlight({
   ideaId: number;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  const [segments, setSegments] = useState<Segment[] | "error" | null>(null);
-  const [when, setWhen] = useState<string | null>(null);
-  const loaded = useRef(false);
+  const [place, setPlace] = useState<Place | null>(null);
+  const [source, setSource] = useState<Source | "error" | null>(null);
+  const loadedFor = useRef<number | null>(null);
+  const closeTimer = useRef<number | undefined>(undefined);
 
-  // Reset when the idea changes — React reuses this component instance when
-  // the paragraph index stays the same but the ideaId prop updates (which
-  // happens during streaming as the text re-segments), so the load guard
-  // would otherwise show stale data from the previous idea.
+  // React reuses this instance while a reply is still streaming and the text
+  // re-renders, so the idea it points at can change under it.
   useEffect(() => {
-    loaded.current = false;
+    loadedFor.current = null;
+    setSource(null);
   }, [ideaId]);
 
-  // Fetched once, on first hover — most paragraphs are never hovered, and a
-  // reply that recalled several ideas would otherwise cost several idea and
-  // conversation fetches nobody asked to see.
+  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+
+  // Fetched on first hover — most highlights are never hovered.
   async function load() {
-    if (loaded.current) return;
-    loaded.current = true;
+    if (loadedFor.current === ideaId) return;
+    loadedFor.current = ideaId;
     try {
       const idea = await ideaView(ideaId);
-      const first = idea.evidence[0];
-      if (!first) {
-        setSegments("error");
+      const ev = idea.evidence[0];
+      if (!ev) {
+        setSource("error");
         return;
       }
-      setWhen(first.started_at);
-      const convo = await conversationView(first.session_id);
-      const turn = convo.turns.find((t) => t.id === first.turn_id);
-      setSegments(turn?.segments ?? "error");
+      setSource({
+        title: idea.title || idea.claim,
+        when: ev.started_at,
+        before: ev.before,
+        quote: ev.quote,
+        after: ev.after,
+      });
     } catch {
-      setSegments("error");
+      setSource("error");
     }
   }
 
+  function open(e: React.MouseEvent<HTMLElement>) {
+    window.clearTimeout(closeTimer.current);
+    const r = e.currentTarget.getBoundingClientRect();
+    const width = Math.min(CARD_WIDTH, window.innerWidth * 0.8);
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    // Near the top of the window a card opening upwards has nowhere to go.
+    setPlace(
+      r.top < 220
+        ? { left, top: r.bottom + 6 }
+        : { left, bottom: window.innerHeight - r.top + 6 },
+    );
+    void load();
+  }
+
+  // A beat before closing, so the pointer can cross the gap onto the card.
+  function close() {
+    window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => setPlace(null), 140);
+  }
+
   return (
-    // A div, not a span: this wraps a rendered markdown paragraph, which is
-    // block content — nesting that inside an inline element is invalid HTML
-    // and browsers reparent it unpredictably, which would break the popup
-    // right when it's supposed to appear.
-    <div
-      className="recall-hit"
-      onMouseEnter={() => {
-        setOpen(true);
-        void load();
-      }}
-      onMouseLeave={() => setOpen(false)}
-    >
-      {children}
-      {open && (
-        <div className="recall-card">
-          <div className="recall-card-head">
-            {when ? `Said ${longDate(when)}` : "Finding where this was said…"}
-          </div>
-          <div className="recall-card-frame">
-            {segments === null ? (
-              <div className="recall-card-loading" />
-            ) : segments === "error" ? (
-              <div className="recall-card-miss">Can't find it — it may have been edited since.</div>
-            ) : (
-              segments.map((seg, i) => (
-                <span key={i} className={seg.idea_id === ideaId ? "recall-focus" : "recall-blur"}>
-                  {seg.text}
-                </span>
-              ))
+    <>
+      <span className="recall-hit" onMouseEnter={open} onMouseLeave={close}>
+        {children}
+      </span>
+      {place &&
+        createPortal(
+          <div
+            className="recall-card"
+            style={{ left: place.left, top: place.top, bottom: place.bottom }}
+            onMouseEnter={() => window.clearTimeout(closeTimer.current)}
+            onMouseLeave={close}
+          >
+            <div className="recall-card-head">
+              {source && source !== "error"
+                ? `You said this ${longDate(source.when)}`
+                : "Finding where this was said…"}
+            </div>
+            {source && source !== "error" && (
+              <div className="recall-card-title">{source.title}</div>
             )}
-          </div>
-        </div>
-      )}
-    </div>
+            <div className="recall-card-frame">
+              {source === null ? (
+                <div className="recall-card-loading" />
+              ) : source === "error" ? (
+                <div className="recall-card-miss">Can't find it — it may have been edited since.</div>
+              ) : (
+                <>
+                  {source.before && <span className="recall-blur">{source.before} </span>}
+                  <span className="recall-focus">{source.quote}</span>
+                  {source.after && <span className="recall-blur"> {source.after}</span>}
+                </>
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }

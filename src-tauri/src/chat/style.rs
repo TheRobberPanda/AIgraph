@@ -31,27 +31,49 @@ it is the answer — a paragraph about what maps are for is not what was asked, 
 and it arrives while they are already looking at it. Use a marker only when \
 they actually asked to see something. Never mention the marker.";
 
-/// Frames the list of existing idea titles handed to the model.
+/// Tells the model what the attached block of earlier ideas is, and what to do
+/// with it.
 ///
-/// The titles themselves are the user's own thinking, so this is the one part
-/// of the system prompt not composed purely of constants — which is why it is
-/// a setting that can be turned off, and why the chat-purity test checks the
-/// default shape without it.
+/// A constant. The titles themselves ride on the latest message — see
+/// `Conversation::set_recall` — so the system prompt is the same from the
+/// first turn to the last, and nothing the person wrote is in it.
 pub const RECALL: &str = "\
-\n\nThe person has thought about these things before. Titles only, no detail, \
-each marked with the number in brackets in front of it:";
+\n\nSome of the person's messages end with a block marked [earlier ideas]. \
+The app added it; the person did not write it and cannot see it. It lists \
+ideas they recorded in earlier conversations that are closest to what they \
+just said, each with a number in brackets.\
+\n\nWhen one of those genuinely bears on what they just said, use it: in one \
+or two sentences, say how the two connect — whether the new thought extends \
+it, contradicts it, or depends on it, and what follows if both hold. Tie it \
+to the specific thing they just said, not to the old idea in general. If \
+none of them bears on it, ignore the block; a forced connection is worse \
+than none. Never list them, never quote the block, never say you were \
+given it.\
+\n\nEnd exactly the sentence that makes the connection with [[recall:N]], \
+using that idea's number, immediately after its full stop and with no \
+space. Only that sentence — not the sentences around it, not the whole \
+paragraph. At most one mark per idea, and never a mark on a sentence that \
+does not actually rest on that idea. The mark is removed before anyone \
+reads the reply.";
 
-pub const RECALL_TAIL: &str = "\
-\nWhere something being said now genuinely bears on one of these, say how — \
-not \"you said this before\" but the consequence: if both hold, what follows? \
-One sentence, worked into the reply. Most turns will touch none of them, and \
-saying nothing is the right answer then. Never list them, never mention that \
-you were given them.\n\nWhen a sentence you write draws on one of them, end \
-that sentence with [[recall:N]] using its number, immediately after the full \
-stop, with no space — this is stripped before anyone reads the reply, so it \
-costs nothing in how it sounds and it is invisible if you forget it. Never \
-write [[recall:N]] where the sentence in front of it does not actually rest \
-on that idea — a wrong mark points at the wrong thing later.";
+/// Opens the block of earlier ideas attached to the latest message.
+pub const RECALL_ATTACHED: &str = "\n\n[earlier ideas]";
+
+/// One fixed line per extra way of answering the person chose.
+pub fn answer_style(style: crate::settings::AnswerStyle) -> &'static str {
+    use crate::settings::AnswerStyle::*;
+    match style {
+        Brief => "\n\nKeep replies short: a few sentences, unless asked for more.",
+        Examples => "\n\nWhen something is abstract, give one concrete example of it.",
+        Questions => "\n\nEnd the reply with one short question that moves the thought forward.",
+        Plain => {
+            "\n\nUse plain, everyday words. No jargon; if a technical term is \
+             needed, say what it means."
+        }
+        Steps => "\n\nWhen reasoning something through, lay it out as short numbered steps.",
+        Analogies => "\n\nWhere it helps, explain through one apt analogy.",
+    }
+}
 
 pub const SYSTEM_PROMPT: &str = "\
 Answer the way a sharp, honest colleague would, not the way a support agent \

@@ -481,10 +481,247 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
          );",
     )?;
 
+    // What the person said their words mean, found by the same read that
+    // finds ideas. No foreign key on the session: a conversation in the bin
+    // hides its definitions through the join that lists them, and restoring
+    // it brings them back.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS definitions (
+             id         INTEGER PRIMARY KEY,
+             session_id INTEGER NOT NULL,
+             turn_id    INTEGER NOT NULL,
+             term       TEXT NOT NULL,
+             definition TEXT NOT NULL,
+             quote      TEXT NOT NULL,
+             created_at TEXT NOT NULL,
+             archived   INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE INDEX IF NOT EXISTS definitions_session ON definitions(session_id);",
+    )?;
+
     // Root always exists, on a fresh database and on one made before folders.
     conn.execute(
         "INSERT OR IGNORE INTO folders (id, name, created_at) VALUES (1, 'Root', ?1)",
         [chrono::Utc::now().to_rfc3339()],
     )?;
+
+    sync_tracking(conn)?;
     Ok(())
+}
+
+/// Tables whose rows are shared between devices. Each gets a `uid` that is the
+/// row's identity everywhere; the integer `id` stays local, so every existing
+/// query and foreign key keeps working untouched. Tables keyed by another row
+/// (`positions`, `embeddings`, `turn_paragraphs`, ...) travel under that row's
+/// uid and need none of their own.
+pub const SYNCED: &[&str] = &[
+    "folders",
+    "sessions",
+    "turns",
+    "ideas",
+    "evidence",
+    "idea_revisions",
+    "relations",
+    "session_nudges",
+    "nudges",
+    "dispute_answers",
+    "session_dispute_answers",
+    "rejected_ideas",
+    "make_outputs",
+    "trash",
+];
+
+/// Give every synced row a global id and log every change to it.
+///
+/// Done with triggers rather than at each write in `store`: there are hundreds
+/// of write sites, and one that forgot to log would be a change that silently
+/// never reaches the other device. A trigger cannot forget.
+///
+/// Changes applied *from* a peer are written with `sync_state.applying = 1`,
+/// which the triggers skip — otherwise every received change would be logged
+/// again and echoed straight back.
+fn sync_tracking(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS sync_state (
+             id        INTEGER PRIMARY KEY CHECK (id = 1),
+             device_id TEXT NOT NULL,
+             applying  INTEGER NOT NULL DEFAULT 0
+         );
+         INSERT OR IGNORE INTO sync_state (id, device_id) VALUES (1, lower(hex(randomblob(16))));
+         -- A crash mid-apply must not leave logging switched off for good.
+         UPDATE sync_state SET applying = 0;
+
+         -- Append-only. `seq` is what a peer remembers as how far it has read.
+         CREATE TABLE IF NOT EXISTS sync_log (
+             seq INTEGER PRIMARY KEY AUTOINCREMENT,
+             tbl TEXT NOT NULL,
+             uid TEXT NOT NULL,
+             op  TEXT NOT NULL CHECK (op IN ('upsert','delete')),
+             at  TEXT NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS sync_peers (
+             peer_id   TEXT PRIMARY KEY,
+             name      TEXT NOT NULL DEFAULT '',
+             last_sent INTEGER NOT NULL DEFAULT 0,
+             last_recv INTEGER NOT NULL DEFAULT 0,
+             paired_at TEXT NOT NULL
+         );",
+    )?;
+
+    const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+    const LOGGING: &str = "(SELECT applying FROM sync_state) = 0";
+
+    for t in SYNCED {
+        let cols: Vec<String> = conn
+            .prepare(&format!("SELECT name FROM pragma_table_info('{t}')"))?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !cols.iter().any(|c| c == "uid") {
+            // Nullable, filled below and by the insert trigger: SQLite cannot
+            // add a column whose default is a function call.
+            conn.execute_batch(&format!("ALTER TABLE {t} ADD COLUMN uid TEXT;"))?;
+        }
+        // Backfill before the triggers exist, so existing rows are not logged
+        // one by one; a new peer's first sync is a full copy anyway.
+        conn.execute_batch(&format!(
+            "UPDATE {t} SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
+             CREATE UNIQUE INDEX IF NOT EXISTS uid_{t} ON {t}(uid);
+
+             CREATE TRIGGER IF NOT EXISTS sync_ins_{t} AFTER INSERT ON {t} BEGIN
+                 UPDATE {t} SET uid = lower(hex(randomblob(16)))
+                  WHERE rowid = NEW.rowid AND uid IS NULL;
+                 INSERT INTO sync_log (tbl, uid, op, at)
+                 SELECT '{t}', uid, 'upsert', {NOW} FROM {t}
+                  WHERE rowid = NEW.rowid AND {LOGGING};
+             END;
+
+             -- `OLD.uid IS NOT NULL` skips the insert trigger's own fill-in.
+             CREATE TRIGGER IF NOT EXISTS sync_upd_{t} AFTER UPDATE ON {t}
+             WHEN OLD.uid IS NOT NULL AND {LOGGING} BEGIN
+                 INSERT INTO sync_log (tbl, uid, op, at) VALUES ('{t}', NEW.uid, 'upsert', {NOW});
+             END;
+
+             CREATE TRIGGER IF NOT EXISTS sync_del_{t} AFTER DELETE ON {t}
+             WHEN OLD.uid IS NOT NULL AND {LOGGING} BEGIN
+                 INSERT INTO sync_log (tbl, uid, op, at) VALUES ('{t}', OLD.uid, 'delete', {NOW});
+             END;"
+        ))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        migrate(&conn).unwrap();
+        conn
+    }
+
+    fn log(conn: &Connection) -> Vec<(String, String, String)> {
+        conn.prepare("SELECT tbl, uid, op FROM sync_log ORDER BY seq")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    fn add_session(conn: &Connection) -> i64 {
+        conn.execute(
+            "INSERT INTO sessions (started_at, transcript, model) VALUES ('t', 'hi', 'm')",
+            [],
+        )
+        .unwrap();
+        let s = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO turns (session_id, ord, role, text, start_byte, end_byte)
+             VALUES (?1, 0, 'user', 'hi', 0, 2)",
+            [s],
+        )
+        .unwrap();
+        s
+    }
+
+    #[test]
+    fn new_rows_get_distinct_uids_and_are_logged() {
+        let conn = db();
+        let a = add_session(&conn);
+        let b = add_session(&conn);
+        let uid = |id: i64| -> String {
+            conn.query_row("SELECT uid FROM sessions WHERE id = ?1", [id], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(uid(a).len(), 32);
+        assert_ne!(uid(a), uid(b));
+
+        let entries = log(&conn);
+        assert_eq!(entries.len(), 4, "two sessions and two turns: {entries:?}");
+        assert!(entries.iter().all(|(_, _, op)| op == "upsert"));
+        assert_eq!(entries[0].1, uid(a));
+    }
+
+    #[test]
+    fn updates_and_cascading_deletes_are_logged() {
+        let conn = db();
+        let s = add_session(&conn);
+        let turn_uid: String =
+            conn.query_row("SELECT uid FROM turns", [], |r| r.get(0)).unwrap();
+        conn.execute("DELETE FROM sync_log", []).unwrap();
+
+        conn.execute("UPDATE sessions SET title = 'x' WHERE id = ?1", [s]).unwrap();
+        conn.execute("DELETE FROM sessions WHERE id = ?1", [s]).unwrap();
+
+        let entries = log(&conn);
+        assert_eq!(entries[0].2, "upsert");
+        assert!(
+            entries.iter().any(|(t, u, op)| t == "turns" && *u == turn_uid && op == "delete"),
+            "the cascaded turn delete must reach the peer too: {entries:?}"
+        );
+        assert!(entries.iter().any(|(t, _, op)| t == "sessions" && op == "delete"));
+    }
+
+    #[test]
+    fn changes_applied_from_a_peer_are_not_echoed() {
+        let conn = db();
+        conn.execute("UPDATE sync_state SET applying = 1", []).unwrap();
+        add_session(&conn);
+        assert!(log(&conn).is_empty());
+        // The insert trigger still mints a uid while applying; a received row
+        // arrives with its own, which is what the apply step writes over it.
+        let missing: i64 = conn
+            .query_row("SELECT count(*) FROM sessions WHERE uid IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(missing, 0);
+    }
+
+    #[test]
+    fn existing_rows_are_backfilled_and_migrate_is_idempotent() {
+        // A database from before sync: schema and rows, no uid column yet.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute("INSERT INTO folders (id, name, created_at) VALUES (1, 'Root', 't')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (started_at, transcript, model) VALUES ('t', 'old', 'm')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+
+        let uid: Option<String> =
+            conn.query_row("SELECT uid FROM sessions", [], |r| r.get(0)).unwrap();
+        assert!(uid.is_some());
+        assert!(log(&conn).is_empty(), "backfill is not a stream of changes");
+        let device: String =
+            conn.query_row("SELECT device_id FROM sync_state", [], |r| r.get(0)).unwrap();
+        assert_eq!(device.len(), 32);
+    }
 }

@@ -17,6 +17,7 @@ pub mod commands;
 pub mod compose;
 pub mod embed;
 pub mod export;
+pub mod journal;
 pub mod extract;
 pub mod llm;
 pub mod reconcile;
@@ -203,16 +204,27 @@ pub fn run() {
             commands::import_obsidian_note,
             commands::unresolve_relation,
             commands::explain_contradiction,
+            commands::definitions,
+            commands::save_draft,
+            commands::load_draft,
+            commands::recovered_session,
+            commands::remove_definition,
         ])
         .setup(|app| {
             use tauri::Manager;
 
             let data_dir = app.path().app_data_dir()?;
             carry_over_old_data(&data_dir);
+            secrets::init(&data_dir);
             let state = commands::AppState::new(
                 &data_dir.join("aigraph.db"),
                 data_dir.join("transcripts"),
             )?;
+
+            // Anything said before the app last stopped without filing it — a
+            // crash, a kill, a power cut, a rebuild — is filed now, before
+            // anything else can touch it.
+            tauri::async_runtime::block_on(commands::recover_live(&state));
 
             app.manage(state);
 

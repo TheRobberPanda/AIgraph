@@ -68,6 +68,10 @@ export interface Settings {
   map_lock_nodes: boolean;
   /** Advanced layout order: conversations left, Make right. */
   advanced_swap: boolean;
+  /** Show how long each reply took, and where the time went. */
+  show_timing: boolean;
+  /** Extra ways of answering, on top of how it responds. */
+  answer_styles: AnswerStyle[];
   /** The accent colour id. Empty means the theme's own. */
   accent: string;
   /** The one-click instructions on the Make tab, yours to edit. */
@@ -198,6 +202,18 @@ export type Voice = "off" | "system" | "neural";
 
 /** Argue the substance, or just help lay it out. */
 export type ChatStance = "neutral" | "challenge" | "organize";
+
+/** Extra ways of answering. Each adds one fixed line to what the model is told. */
+export type AnswerStyle = "brief" | "examples" | "questions" | "plain" | "steps" | "analogies";
+
+export const ANSWER_STYLES: { id: AnswerStyle; label: string; hint: string }[] = [
+  { id: "brief", label: "Brief", hint: "A few sentences unless more is asked for" },
+  { id: "plain", label: "Plain words", hint: "Everyday language, no jargon" },
+  { id: "examples", label: "With examples", hint: "A concrete example for anything abstract" },
+  { id: "analogies", label: "Analogies", hint: "Explain through a comparison" },
+  { id: "steps", label: "Step by step", hint: "Lay out reasoning as numbered steps" },
+  { id: "questions", label: "End with a question", hint: "Close with one question that moves the thought on" },
+];
 
 export type Language = "auto" | "english" | "polish" | "spanish";
 

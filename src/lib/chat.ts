@@ -13,6 +13,51 @@ export type LocalKind =
 export interface Turn {
   role: Role;
   content: string;
+  /** How long the reply took, on replies written in this window. */
+  timing?: ReplyTiming;
+}
+
+/** Where the time went for one reply — see `ReplyTiming` in commands.rs. */
+export interface ReplyTiming {
+  recall_ms: number | null;
+  recall_titles: number;
+  recall_considered: number;
+  recall_ranked: boolean;
+  system_chars: number;
+  first_token_ms: number | null;
+  first_content_ms: number | null;
+  total_ms: number;
+  reply_chars: number;
+}
+
+function secs(ms: number): string {
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+/** One line for under a reply. */
+export function timingLine(t: ReplyTiming): string {
+  const parts: string[] = [];
+  if (t.recall_ms !== null) {
+    const of = t.recall_considered > t.recall_titles ? ` of ${t.recall_considered}` : "";
+    const how = t.recall_ranked ? ", by relevance" : "";
+    parts.push(`recall ${secs(t.recall_ms)} (${t.recall_titles}${of} titles${how})`);
+  } else if (t.recall_titles > 0) {
+    parts.push(`${t.recall_titles} recall titles`);
+  }
+  // Roughly four characters a token — near enough to see what a prompt costs.
+  parts.push(`prompt ~${Math.round(t.system_chars / 4)} tok`);
+  if (t.first_token_ms !== null) parts.push(`first token ${secs(t.first_token_ms)}`);
+  if (t.first_content_ms !== null && t.first_token_ms !== null && t.first_content_ms > t.first_token_ms) {
+    parts.push(`thinking ${secs(t.first_content_ms - t.first_token_ms)}`);
+  }
+  const writingFrom = (t.recall_ms ?? 0) + (t.first_content_ms ?? t.first_token_ms ?? 0);
+  const writing = Math.max(0, t.total_ms - writingFrom);
+  if (t.first_content_ms !== null) {
+    const rate = writing > 0 ? ` · ~${Math.round(t.reply_chars / 4 / (writing / 1000))} tok/s` : "";
+    parts.push(`writing ${secs(writing)}${rate}`);
+  }
+  parts.push(`total ${secs(t.total_ms)}`);
+  return parts.join(" · ");
 }
 
 export interface ModelInfo {
@@ -63,13 +108,13 @@ export async function sendMessage(
   text: string,
   onContent: (chunk: string) => void,
   onReasoning: (chunk: string) => void,
-): Promise<string> {
+): Promise<{ reply: string; timing: ReplyTiming }> {
   const unlisten: UnlistenFn[] = [
     await listen<{ text: string }>("chat:token", (e) => onContent(e.payload.text)),
     await listen<{ text: string }>("chat:reasoning", (e) => onReasoning(e.payload.text)),
   ];
   try {
-    return await invoke<string>("send_message", { text });
+    return await invoke<{ reply: string; timing: ReplyTiming }>("send_message", { text });
   } finally {
     // Leaking these would cross-wire the next message's tokens into this turn.
     unlisten.forEach((u) => u());
@@ -91,6 +136,20 @@ export function wantsReasoning(error: string): boolean {
     /reasoning/i.test(error) &&
     /mandatory|cannot be disabled|must be enabled|is required|required for this/i.test(error)
   );
+}
+
+/** Keep what is typed and not yet sent, on disk. */
+export function saveDraft(text: string): Promise<void> {
+  return invoke("save_draft", { text });
+}
+
+export function loadDraft(): Promise<string> {
+  return invoke<string>("load_draft");
+}
+
+/** A conversation the last run left unfiled and this launch filed, if any. */
+export function recoveredSession(): Promise<number | null> {
+  return invoke<number | null>("recovered_session");
 }
 
 /** Remove one turn from the conversation still being had. */

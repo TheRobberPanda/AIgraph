@@ -9,8 +9,16 @@
 //! [`SpeechToText`] exists so Whisper can be dropped in later: for the languages
 //! Parakeet doesn't cover, and as insurance against `sherpa-rs` going stale.
 
+// sherpa-onnx has no Android build, so the phone dictates through the system
+// recognizer instead (see `capture_android`). `model` stays on every platform:
+// its downloader also fetches the embedded chat model.
+#[cfg(not(target_os = "android"))]
+pub mod capture;
+#[cfg(target_os = "android")]
+#[path = "capture_android.rs"]
 pub mod capture;
 pub mod model;
+#[cfg(not(target_os = "android"))]
 pub mod parakeet;
 
 /// Audio must reach the model at this rate. Both Parakeet and Silero assume it.

@@ -13,8 +13,10 @@
 //! is short enough to synthesise in one go.
 
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "android"))]
 use std::sync::{Arc, Mutex};
 
+#[cfg(not(target_os = "android"))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::stt::model::{DownloadProgress, ModelError};
@@ -85,6 +87,15 @@ impl Voices {
     /// well under the time it takes to say a sentence, and a reply that is
     /// being read aloud is not a hot loop — holding an ONNX session for a
     /// feature used a few times an hour is memory spent on nothing.
+    ///
+    /// Not on the phone: no sherpa-onnx there. The phone's own voice, which the
+    /// frontend already falls back to, is the only one.
+    #[cfg(target_os = "android")]
+    pub fn speak(&self, _text: &str, _speed: f32) -> Result<(), String> {
+        Err("the downloaded voice is not available on the phone".into())
+    }
+
+    #[cfg(not(target_os = "android"))]
     pub fn speak(&self, text: &str, speed: f32) -> Result<(), String> {
         use sherpa_rs::tts::{VitsTts, VitsTtsConfig};
 
@@ -110,6 +121,7 @@ impl Voices {
 /// Resampled by repetition to whatever the device actually offers. Crude, and
 /// audible only as a very slight roughness — the alternative is a resampling
 /// dependency for one feature that speaks at 22 kHz into a 48 kHz device.
+#[cfg(not(target_os = "android"))]
 fn play(samples: &[f32], sample_rate: u32) -> Result<(), String> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or("no audio output device")?;
