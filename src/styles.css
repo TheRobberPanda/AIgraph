@@ -1923,18 +1923,35 @@ blockquote {
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+/* The context either side is cut short in JavaScript, so the quote itself is
+   always shown whole. It used to be a fixed 6.4rem crop, and a long lead-in
+   pushed the highlighted words under the fade. */
 .recall-card-frame {
   position: relative;
-  max-height: 6.4rem;
+  max-height: min(50vh, 20rem);
   padding: 0.65rem 0.75rem;
-  overflow: hidden;
+  overflow-y: auto;
   font-size: 0.82rem;
   line-height: 1.55;
   color: var(--fg);
-  /* The frame crops rather than shrinks — a fade at the bottom says there is
-     more, the way the bottom of a cropped screenshot does. */
-  mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
 }
+.recall-card-session {
+  display: block;
+  max-width: 100%;
+  margin: 0.5rem 0.75rem 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--gold);
+  font: inherit;
+  font-size: 0.74rem;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.recall-card-session:hover { text-decoration: underline; }
 .recall-card-title {
   padding: 0.5rem 0.75rem 0;
   font-size: 0.8rem;

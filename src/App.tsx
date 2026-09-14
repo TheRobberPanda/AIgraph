@@ -89,6 +89,7 @@ import { modelName } from "./lib/format";
 import { runtimeStatus } from "./lib/settings";
 import { sessionTurns } from "./lib/sessions";
 import { startDictation, stopDictation } from "./lib/dictation";
+import { OPEN_CONVERSATION_EVENT } from "./components/RecallHighlight";
 import {
   continueSession,
   deleteTurn,
@@ -512,6 +513,17 @@ export default function App() {
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // The recall hover card, deep inside a reply, links to the conversation
+  // its quote came from.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const { id, flash } = (e as CustomEvent<{ id: number; flash?: number }>).detail;
+      setDeep({ kind: "conversation", id, flash });
+    };
+    window.addEventListener(OPEN_CONVERSATION_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_CONVERSATION_EVENT, onOpen);
   }, []);
 
   useEffect(() => {

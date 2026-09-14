@@ -6,6 +6,8 @@ import { longDate } from "../lib/format";
 /** What the card shows: the quote the idea was taken from, and its surroundings. */
 interface Source {
   title: string;
+  sessionId: number;
+  sessionTitle: string;
   when: string;
   before: string;
   quote: string;
@@ -20,6 +22,26 @@ interface Place {
 }
 
 const CARD_WIDTH = 416;
+
+/** How much of the text either side of the quote the card keeps. Rust sends
+ *  up to 220 bytes a side, which pushed a long quote below the frame's crop. */
+const CONTEXT_CHARS = 90;
+
+/** The end of `text` nearest the quote, cut back to a whole word. */
+function nearEnd(text: string, side: "before" | "after"): string {
+  const t = text.trim();
+  if (t.length <= CONTEXT_CHARS) return t;
+  if (side === "before") {
+    const cut = t.slice(-CONTEXT_CHARS);
+    return "…" + cut.slice(cut.search(/\s/) + 1).replace(/^…/, "");
+  }
+  const cut = t.slice(0, CONTEXT_CHARS);
+  const at = cut.lastIndexOf(" ");
+  return (at > 0 ? cut.slice(0, at) : cut).replace(/…$/, "") + "…";
+}
+
+/** Asks the app to open a conversation, at the words an idea came from. */
+export const OPEN_CONVERSATION_EVENT = "aigraph:open-conversation";
 
 /**
  * One sentence of a reply that drew on something recorded earlier, with a
@@ -72,10 +94,12 @@ export default function RecallHighlight({
       }
       setSource({
         title: idea.title || idea.claim,
+        sessionId: ev.session_id,
+        sessionTitle: ev.session_title,
         when: ev.started_at,
-        before: ev.before,
+        before: nearEnd(ev.before, "before"),
         quote: ev.quote,
-        after: ev.after,
+        after: nearEnd(ev.after, "after"),
       });
     } catch {
       setSource("error");
@@ -121,7 +145,23 @@ export default function RecallHighlight({
                 : "Finding where this was said…"}
             </div>
             {source && source !== "error" && (
-              <div className="recall-card-title">{source.title}</div>
+              <>
+                <button
+                  className="recall-card-session"
+                  data-tip="Open this conversation"
+                  onClick={() => {
+                    setPlace(null);
+                    window.dispatchEvent(
+                      new CustomEvent(OPEN_CONVERSATION_EVENT, {
+                        detail: { id: source.sessionId, flash: ideaId },
+                      }),
+                    );
+                  }}
+                >
+                  {source.sessionTitle || "Untitled conversation"} ↗
+                </button>
+                <div className="recall-card-title">{source.title}</div>
+              </>
             )}
             <div className="recall-card-frame">
               {source === null ? (
