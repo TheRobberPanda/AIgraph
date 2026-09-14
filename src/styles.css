@@ -677,9 +677,11 @@ input, textarea {
 
 /* The folder's past, beside the conversation being had now. Read one whole,
    or pick one back up where it left off. */
+/* Shared with .rail-handle.open, which has to sit exactly on the rail's edge. */
+:root { --rail-w: 17.05rem; }
 .rail {
   flex: none;
-  width: 17.05rem;
+  width: var(--rail-w);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -3815,7 +3817,7 @@ blockquote {
 .rail-handle:hover { color: var(--fg); border-color: var(--accent); }
 /* Pointing left to bring the panel out, right to send it back. */
 .rail-handle svg { transform: rotate(90deg); }
-.rail-handle.open { right: 15.5rem; }
+.rail-handle.open { right: var(--rail-w); }
 .rail-handle.open svg { transform: rotate(-90deg); }
 
 /* A folder's own language, on its row in the picker. Narrow: it is a
