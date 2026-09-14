@@ -108,9 +108,15 @@ jobs:
           cargo build --release -p sherpa-rs-sys
           cp tauri.windows-bundle.conf.json tauri.windows.conf.json
 
+      # Not `npm run package`: npm runs scripts through cmd on Windows, which
+      # cannot read its `LD_LIBRARY_PATH=…` prefix. Set here instead, where it
+      # only matters on Linux: the rpm step resolves the speech libraries
+      # beside the binary through it.
       - name: Build the installers
         shell: bash
-        run: npm run package -- --bundles ${{ matrix.bundles }}
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/src-tauri/target/release
+        run: npx tauri build --bundles ${{ matrix.bundles }}
 
       - name: Upload to the release
         shell: bash
