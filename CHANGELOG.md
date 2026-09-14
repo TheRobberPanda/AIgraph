@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.3
+
+- **A new chat starts clean.** New and Done go back to the screen the app
+  opens on. Nothing about the conversation just filed is shown any more: no
+  "Filed" card, no "Waiting to be read", no Read it back button, and no
+  waiting count in the status bar.
+- **Write without a model.** A message sent before a model is picked waits
+  in the chat, survives a restart, and goes out once there is one.
+- **Read any message aloud.** Every message has a speaker button on hover.
+- **Calls read replies aloud** in the downloaded voice when it is
+  installed, and the app no longer hears its own voice as an interruption.
+- **Models that need reasoning get it.** One that refuses to answer with
+  reasoning off is asked again with it on, and that is remembered.
+- **Read an unread conversation from its file**, with the Read for ideas
+  button where its ideas would be.
+- **Fewer, better correlations on the map.** A correlation now has to be
+  mutual and stand out from how close each idea is to the rest.
+- **Relation lines cross less.** They curve away from each other on the
+  map.
+- **Chat suggestions can be turned off** from the suggestion itself, and
+  back on in Settings › Conversation.
+
 ## 0.6.2
 
 - **Correlations show on the map.** Ideas that are close in meaning are
