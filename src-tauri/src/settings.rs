@@ -152,6 +152,10 @@ pub struct Settings {
     /// choosing recall titles, the model reading the prompt, and writing.
     /// Off: it is a diagnostic, not something to read every turn.
     pub show_timing: bool,
+    /// Whether a new chat sometimes offers one quick change to how the AI
+    /// behaves. On: it is how most people find those settings at all. Its
+    /// own switch turns it off, and Settings is where it comes back.
+    pub quick_tune: bool,
     /// The folder the app was in when it last closed.
     ///
     /// Everything on screen — the ideas, the map, the Make tab, the digest —
@@ -629,6 +633,7 @@ impl Default for Settings {
             map_lock_nodes: false,
             advanced_swap: false,
             show_timing: false,
+            quick_tune: true,
             current_folder: crate::store::ROOT_FOLDER,
             accent: String::new(),
             presets: default_presets(),

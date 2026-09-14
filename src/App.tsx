@@ -109,7 +109,6 @@ import {
   startup,
   wantsReasoning,
   REASONING_REFUSED,
-  type Archived,
   type Selected,
   type Turn,
 } from "./lib/chat";
@@ -293,7 +292,6 @@ export default function App() {
   // The message that just failed, so an error that can be fixed on the spot
   // can also send it again.
   const failedRef = useRef<string | null>(null);
-  const [justArchived, setJustArchived] = useState<Archived | null>(null);
   const [view, setView] = useState<Tab>(tabFromHash());
   const [ending, setEnding] = useState(false);
   // Which file is open, if any. Deep dives sit above whatever tab you were on,
@@ -697,7 +695,6 @@ export default function App() {
         ...turns.map((t) => ({ role: t.role as Turn["role"], content: t.text })),
         ...now.filter((t) => t.queued),
       ]);
-      setJustArchived(null);
       setDeep(null);
       setPopup(null);
       setExpanded(null);
@@ -750,9 +747,14 @@ export default function App() {
   }, [callMode]);
 
   useEffect(() => {
-    const p = onArchived((a) => {
+    const p = onArchived(() => {
+      // A new chat starts as the app does on launch: nothing from the one
+      // just filed is carried over.
       setTurns((t) => t.filter((x) => x.queued));
-      setJustArchived(a);
+      setRecoveredId(null);
+      setReadingTurn(null);
+      setTurnMenu(null);
+      setError(null);
       setChatNo(nextChatNumber());
       // Filing no longer starts a digest, so the waiting count has to be
       // re-read here rather than arriving on a progress event.
@@ -1204,10 +1206,7 @@ export default function App() {
     try {
       const archived = await endSession("done");
       // A null result means nothing was said — no empty sessions in the archive.
-      if (archived) {
-        setTurns((t) => t.filter((x) => x.queued));
-        setJustArchived(archived);
-      }
+      if (archived) setTurns((t) => t.filter((x) => x.queued));
     } catch (e) {
       // The backend clears the stream only after a successful write, so on
       // failure the conversation is still here and still recoverable.
@@ -1233,9 +1232,10 @@ export default function App() {
     setError(null);
     setEnding(true);
     try {
-      const archived = await endSession("done");
+      await endSession("done");
       setTurns((t) => t.filter((x) => x.queued));
-      setJustArchived(archived);
+      setRecoveredId(null);
+      setReadingTurn(null);
     } catch (e) {
       setError(`Could not file this conversation: ${e}`);
     } finally {
@@ -1569,7 +1569,7 @@ export default function App() {
         )}
 
         <div className="ws-center">
-      <div className={turns.length === 0 && !justArchived ? "think opening" : "think"}>
+      <div className={turns.length === 0 ? "think opening" : "think"}>
       <div className="think-main">
       {/* Import a finished document, at the top left where it is out of the
           way of the thinking but always in reach. */}
@@ -1584,7 +1584,7 @@ export default function App() {
         <span className="think-import-label">Import</span>
       </button>
       <div className="stream">
-        {turns.length === 0 && !justArchived && (
+        {turns.length === 0 && (
           <div className="empty">
             <strong>Think out loud.</strong>
             <CallToggle on={callMode} onToggle={(next) => void toggleCall(next)} />
@@ -1613,63 +1613,6 @@ export default function App() {
                 OK
               </button>
             </div>
-          </div>
-        )}
-
-        {turns.length === 0 && justArchived && (
-          // Pressing Done used to end here, with nothing to do and nothing
-          // visibly happening — so the reading-back is now shown as it runs,
-          // and the map is offered the moment there is one to look at.
-          <div className="filed">
-            <p className="filed-head">
-              {justArchived.reason === "idle"
-                ? "That went quiet, so it has been filed."
-                : "Filed."}{" "}
-              <span className="muted">{justArchived.turn_count} turns kept in {folderName}.</span>
-            </p>
-
-            {digesting?.running?.session_id === justArchived.session_id ? (
-              <p className="filed-status">
-                <span className="spinner" aria-hidden="true" />
-                Reading it back for ideas. This can take a minute on a local model.
-              </p>
-            ) : digesting?.last?.session_id === justArchived.session_id &&
-              !digesting.last.error ? (
-              <>
-                <p className="filed-status">
-                  {digesting.last.ideas > 0
-                    ? `${digesting.last.ideas} idea${digesting.last.ideas === 1 ? "" : "s"} found.`
-                    : "Nothing substantive came out of that one."}
-                </p>
-                {digesting.last.ideas > 0 && (
-                  <div className="row">
-                    {/* Advanced has no map or ideas panels to expand — the
-                        popups take their place. */}
-                    <button
-                      className="btn on"
-                      onClick={() => (layout === "simple" ? setView("map") : setPopup("map"))}
-                    >
-                      See it on the map
-                    </button>
-                    <button
-                      className="btn"
-                      onClick={() => (layout === "simple" ? setView("ideas") : setPopup("ideas"))}
-                    >
-                      Read the ideas
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <p className="filed-status muted">Waiting to be read.</p>
-                <div className="row">
-                  <button className="btn" onClick={() => setShowQueue(true)}>
-                    Read it back
-                  </button>
-                </div>
-              </>
-            )}
           </div>
         )}
 
@@ -2140,9 +2083,6 @@ export default function App() {
           <span className="busy-item">
             reading back session {digesting.running.session_id}
           </span>
-        )}
-        {!digesting?.running && (digesting?.pending ?? 0) > 0 && (
-          <span>{digesting?.pending} waiting to be read</span>
         )}
         {!digesting?.running && digesting?.last && readCost(digesting.last) && (
           <span className="read-cost" data-tip="What the last read cost, as the provider reported it">

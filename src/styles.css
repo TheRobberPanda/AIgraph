@@ -454,6 +454,40 @@ input, textarea {
 .quick-tune-ask { color: var(--fg); }
 .quick-tune .btn { font-size: 0.76rem; padding: 0.22rem 0.6rem; }
 .quick-tune-done { color: var(--muted); }
+.quick-tune-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.2rem;
+  border: none;
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.quick-tune-switch:hover { color: var(--muted); }
+.quick-tune-track {
+  position: relative;
+  width: 1.5rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: background 120ms ease;
+}
+.quick-tune-knob {
+  position: absolute;
+  top: 0.1rem;
+  left: 0.75rem;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--bg);
+  transition: left 120ms ease;
+}
+.quick-tune-switch:hover .quick-tune-track { background: var(--faint); }
+.quick-tune-switch:hover .quick-tune-knob { left: 0.1rem; }
 
 /* ---- Definitions ---- */
 .defs-search {

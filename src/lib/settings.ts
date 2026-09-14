@@ -70,6 +70,8 @@ export interface Settings {
   advanced_swap: boolean;
   /** Show how long each reply took, and where the time went. */
   show_timing: boolean;
+  /** Offer one quick change to how the AI behaves on some new chats. */
+  quick_tune: boolean;
   /** Extra ways of answering, on top of how it responds. */
   answer_styles: AnswerStyle[];
   /** The accent colour id. Empty means the theme's own. */

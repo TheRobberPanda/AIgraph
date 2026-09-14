@@ -116,7 +116,7 @@ export default function QuickTune({ chat }: { chat: number }) {
       .catch(() => {});
   }, [chat]);
 
-  if (chat % 2 !== 0 || !s || state === "gone") return null;
+  if (chat % 2 !== 0 || !s || !s.quick_tune || state === "gone") return null;
 
   const open = QUESTIONS.filter((q) => q.applies(s));
   if (open.length === 0) return null;
@@ -149,6 +149,25 @@ export default function QuickTune({ chat }: { chat: number }) {
       </button>
       <button className="btn" onClick={() => setState("gone")}>
         It's fine
+      </button>
+      {/* Off for good, not just for this chat. Settings › Conversation is
+          where it comes back, which the tooltip says so it isn't a trapdoor. */}
+      <button
+        type="button"
+        className="quick-tune-switch"
+        role="switch"
+        aria-checked={true}
+        data-tip="Stop suggesting these — turn them back on in Settings › Conversation"
+        onClick={() => {
+          void saveSettings({ ...s, quick_tune: false })
+            .then(() => setState("gone"))
+            .catch(() => setState("gone"));
+        }}
+      >
+        <span className="quick-tune-track" aria-hidden="true">
+          <span className="quick-tune-knob" />
+        </span>
+        Suggestions
       </button>
     </div>
   );

@@ -1187,6 +1187,100 @@ function polylineDistance(pts: Pt[], px: number, py: number): number {
   return best;
 }
 
+/** Where two segments cross, if they do. */
+function crossing(a: Pt, b: Pt, c: Pt, d: Pt): Pt | null {
+  const rx = b.x - a.x;
+  const ry = b.y - a.y;
+  const sx = d.x - c.x;
+  const sy = d.y - c.y;
+  const den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / den;
+  const u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / den;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return { x: a.x + rx * t, y: a.y + ry * t };
+}
+
+/** A quadratic curve as a polyline. */
+function sampleQuad(a: Pt, c: Pt, b: Pt, steps: number): Pt[] {
+  const pts: Pt[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    pts.push({ x: quad(a.x, c.x, b.x, t), y: quad(a.y, c.y, b.y, t) });
+  }
+  return pts;
+}
+
+/** A point on a cubic curve. */
+function cubic(
+  p0: number,
+  p1: number,
+  p2: number,
+  p3: number,
+  t: number,
+): number {
+  const u = 1 - t;
+  return (
+    u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3
+  );
+}
+
+function cubicTangent(
+  p0: number,
+  p1: number,
+  p2: number,
+  p3: number,
+  t: number,
+): number {
+  const u = 1 - t;
+  return 3 * u * u * (p1 - p0) + 6 * u * t * (p2 - p1) + 3 * t * t * (p3 - p2);
+}
+
+/** A cubic curve as a polyline. */
+function sampleCubic(a: Pt, c1: Pt, c2: Pt, b: Pt, steps: number): Pt[] {
+  const pts: Pt[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    pts.push({
+      x: cubic(a.x, c1.x, c2.x, b.x, t),
+      y: cubic(a.y, c1.y, c2.y, b.y, t),
+    });
+  }
+  return pts;
+}
+
+/**
+ * How a relation line leaves each of its ideas: the angle off the straight
+ * chord at either end, and how far it carries on that heading, as a fraction
+ * of its length. Turning both ends the same way bows the line; turning them
+ * far lets it leave an idea outward, away from the fan of ties it sits in.
+ */
+interface RelationRoute {
+  ta: number;
+  tb: number;
+  reach: number;
+}
+
+const STRAIGHT: RelationRoute = { ta: 0, tb: 0, reach: 1 / 3 };
+/** Tried in this order, so a tie keeps the line straightest. */
+const ROUTE_ANGLES = [0, 0.45, -0.45, 0.9, -0.9, 1.5, -1.5, 2.2, -2.2];
+/** Longer reaches swing a line wide, round a whole cluster rather than
+ *  through it. */
+const ROUTE_REACHES = [1 / 3, 0.6, 0.95, 1.4];
+
+/** The bowed tie from a conversation to one of its ideas in the node map. */
+function branchControl(sa: Pt, sb: Pt, sideA: string, sideB: string): Pt {
+  const dx = sb.x - sa.x;
+  const dy = sb.y - sa.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const side = sideA < sideB ? 1 : -1;
+  const bend = Math.min(26, len * 0.16) * side;
+  return {
+    x: (sa.x + sb.x) / 2 + (-dy / len) * bend,
+    y: (sa.y + sb.y) / 2 + (dx / len) * bend,
+  };
+}
+
 /** A polyline with rounded corners: the lanes under the forest. */
 function strokeRoute(ctx: CanvasRenderingContext2D, pts: Pt[], radius: number) {
   ctx.beginPath();
@@ -1909,6 +2003,13 @@ export default function Graph({
   const beeRef = useRef<{ link: Link; t: number; speed: number; phase: number }[]>([]);
   const beeSpawnRef = useRef(0);
   const beeFrameRef = useRef<number | null>(null);
+  /** How each relation line leaves its ideas (see `RelationRoute`), chosen
+   *  so it crosses as little as it can. Kept between routings, so a line
+   *  only changes course when that clearly crosses less. */
+  const routeRef = useRef<Map<Link, RelationRoute>>(new Map());
+  /** Where the router is in its sweep over the relation lines, and whether
+   *  the map has held still since a sweep last changed nothing. */
+  const routeStateRef = useRef({ sig: "", settled: false, changed: false, cursor: 0 });
   /** A subject picked out of the legend. Clicking pins it — that is what
    *  reveals titles; hovering only previews the highlight, because a preview
    *  that also rearranged the labels would flicker the map on the way past. */
@@ -2283,6 +2384,10 @@ export default function Graph({
 
     const style = styleRef.current;
     const k = viewRef.current.scale;
+    // Relation lines outside the forest are steered clear of the rest, a
+    // few each frame. Routes are angles and fractions of a line's length,
+    // so they follow their ideas as the layout moves.
+    if (style !== "forest") routeRelations(w, h);
     /**
      * Paint in world units. The arranged shapes — roots, lanes, grass,
      * flowers — are drawn under one transform, so they zoom as one picture: a
@@ -2413,19 +2518,13 @@ export default function Graph({
       // below the flower heads — their names sit above them — and scattered
       // across that path by one wind that gusts over the whole meadow.
       if (style === "sunflower") {
-        const sa = toScreen(a, w, h);
-        const len = Math.hypot(sb.x - sa.x, sb.y - sa.y) || 1;
-        const clear = chordClearance(
-          sa.x,
-          sa.y,
-          sb.x,
-          sb.y,
-          new Set([a.data.id, b.data.id]),
-          w,
-          h,
-        );
-        const cx = (sa.x + sb.x) / 2;
-        const cy = (sa.y + sb.y) / 2 + meadowArch(len, clear);
+        const {
+          a: sa,
+          b: pb,
+          c1,
+          c2,
+          len,
+        } = relationCurve(link, w, h, isRelation(link) ? undefined : STRAIGHT);
         const zoomW = Math.max(0.5, Math.min(1.6, k));
         ctx.fillStyle =
           link.kind === "contradicts"
@@ -2452,14 +2551,14 @@ export default function Graph({
           const size = 0.6 + rnd() * 0.8;
           // Slow, and the heavier grains slower still: carried, not sent.
           const t = (start + now * 0.022 * (1.2 - size * 0.3)) % 1;
-          const tx = quadTangent(sa.x, cx, sb.x, t);
-          const ty = quadTangent(sa.y, cy, sb.y, t);
+          const tx = cubicTangent(sa.x, c1.x, c2.x, pb.x, t);
+          const ty = cubicTangent(sa.y, c1.y, c2.y, pb.y, t);
           const tl = Math.hypot(tx, ty) || 1;
           const mid = Math.sin(t * Math.PI);
           const band = (4 + 9 * mid) * zoomW;
           const off = across * band + Math.sin(now * 0.7 + phase) * 2.5 * zoomW;
-          const px = quad(sa.x, cx, sb.x, t) - (ty / tl) * off + gust * 12 * zoomW * mid;
-          const py = quad(sa.y, cy, sb.y, t) + (tx / tl) * off - Math.abs(gust) * 4 * zoomW * mid;
+          const px = cubic(sa.x, c1.x, c2.x, pb.x, t) - (ty / tl) * off + gust * 12 * zoomW * mid;
+          const py = cubic(sa.y, c1.y, c2.y, pb.y, t) + (tx / tl) * off - Math.abs(gust) * 4 * zoomW * mid;
           ctx.globalAlpha = (lit ? 0.75 : 0.12) * (0.2 + 0.8 * mid);
           ctx.beginPath();
           ctx.arc(px, py, Math.max(0.7, 1.35 * size * zoomW), 0, Math.PI * 2);
@@ -2534,7 +2633,12 @@ export default function Graph({
       if (link.kind === "category") ctx.setLineDash([1, 3]);
       ctx.beginPath();
       ctx.moveTo(sa.x, sa.y);
-      ctx.lineTo(sb.x, sb.y);
+      if (isRelation(link)) {
+        const { c1, c2 } = relationCurve(link, w, h);
+        ctx.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, sb.x, sb.y);
+      } else {
+        ctx.lineTo(sb.x, sb.y);
+      }
       ctx.stroke();
       ctx.setLineDash([]);
     };
@@ -2586,15 +2690,28 @@ export default function Graph({
         bee.t += bee.speed * dt;
         if (bee.t >= 1.15) continue;
         alive.push(bee);
-        const p = toScreen(bee.link.source as Node, w, h);
-        const q = toScreen(bee.link.target as Node, w, h);
+        // Along the stream as it is drawn, bends and all.
+        const {
+          a: p,
+          b: q,
+          c1,
+          c2,
+        } = relationCurve(
+          bee.link,
+          w,
+          h,
+          isRelation(bee.link) ? undefined : STRAIGHT,
+        );
         const t = Math.min(1, Math.max(0, bee.t));
-        const ang = Math.atan2(q.y - p.y, q.x - p.x);
+        const ang = Math.atan2(
+          cubicTangent(p.y, c1.y, c2.y, q.y, t),
+          cubicTangent(p.x, c1.x, c2.x, q.x, t),
+        );
         const wob = Math.sin(nowS * 6 + bee.phase) * 7 * Math.sin(t * Math.PI);
         drawBee(
           ctx,
-          p.x + (q.x - p.x) * t - Math.sin(ang) * wob,
-          p.y + (q.y - p.y) * t + Math.cos(ang) * wob,
+          cubic(p.x, c1.x, c2.x, q.x, t) - Math.sin(ang) * wob,
+          cubic(p.y, c1.y, c2.y, q.y, t) + Math.cos(ang) * wob,
           ang + Math.sin(nowS * 6 + bee.phase) * 0.16,
           Math.max(0.55, Math.min(1.6, viewRef.current.scale)),
         );
@@ -3773,6 +3890,279 @@ function chordClearance(
   return clear;
 }
 
+  function isRelation(link: Link): boolean {
+    return (
+      link.kind === "related" ||
+      link.kind === "recall" ||
+      link.kind === "contradicts"
+    );
+  }
+
+  /**
+   * A relation line as drawn outside the forest: a cubic curve from one idea
+   * to the other. Its natural path is straight — in the meadow, sagging under
+   * the flower heads — and the router turns its ends off that path to keep it
+   * clear of other lines. One definition for drawing, hit test and bees.
+   */
+  function relationCurve(
+    link: Link,
+    w: number,
+    h: number,
+    route: RelationRoute = routeRef.current.get(link) ?? STRAIGHT,
+  ) {
+    const na = link.source as Node;
+    const nb = link.target as Node;
+    const a = toScreen(na, w, h);
+    const b = toScreen(nb, w, h);
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const dx = (b.x - a.x) / len;
+    const dy = (b.y - a.y) / len;
+    // Both controls sag by the same amount, which puts the curve's lowest
+    // point where the meadow's old single-arch stream had it.
+    const sag =
+      styleRef.current === "sunflower"
+        ? (meadowArch(
+            len,
+            chordClearance(
+              a.x,
+              a.y,
+              b.x,
+              b.y,
+              new Set([na.data.id, nb.data.id]),
+              w,
+              h,
+            ),
+          ) *
+            2) /
+          3
+        : 0;
+    const ra = len * route.reach;
+    // The far end turns the mirror way, so equal angles bow to one side.
+    const c1 = {
+      x: a.x + ra * (dx * Math.cos(route.ta) - dy * Math.sin(route.ta)),
+      y: a.y + ra * (dx * Math.sin(route.ta) + dy * Math.cos(route.ta)) + sag,
+    };
+    const c2 = {
+      x: b.x + ra * (-dx * Math.cos(route.tb) - dy * Math.sin(route.tb)),
+      y: b.y + ra * (dx * Math.sin(route.tb) - dy * Math.cos(route.tb)) + sag,
+    };
+    return { a, b, c1, c2, len };
+  }
+
+  /**
+   * Steer the relation lines so each crosses as few of the map's other lines
+   * as it can: the ties between conversations and their ideas (in the meadow,
+   * the petals and stems that stand for them), the other
+   * relation lines, and the nodes it would otherwise pass through. Screen
+   * pixels, because what counts as a crossing is what is drawn.
+   *
+   * A little each frame rather than all at once: a full pass over a dense
+   * map is tens of milliseconds, which as one frame is a stutter. The work
+   * is spread over frames within a small budget, and stops while nothing on
+   * screen moves.
+   */
+  function routeRelations(w: number, h: number) {
+    const style = styleRef.current;
+    const placed = placedRef.current;
+    const k = viewRef.current.scale;
+    const links = linksRef.current;
+    const relations = links.filter(isRelation);
+    const routes = routeRef.current;
+    const state = routeStateRef.current;
+    for (const l of [...routes.keys()]) if (!relations.includes(l)) routes.delete(l);
+    if (!relations.length) return;
+
+    // Where everything is on screen, rounded: while it holds still and a
+    // whole sweep changed nothing, there is nothing left to improve.
+    const v = viewRef.current;
+    let sig = `${style}|${Math.round(v.x)}|${Math.round(v.y)}|${v.scale.toFixed(3)}|${w}|${h}|${relations.length}`;
+    for (const n of nodesRef.current) sig += `|${Math.round(n.x ?? 0)},${Math.round(n.y ?? 0)}`;
+    if (sig === state.sig && state.settled) return;
+    if (sig !== state.sig) {
+      state.sig = sig;
+      state.settled = false;
+      state.changed = false;
+    }
+
+    // Everything else that is drawn as a line, as segments with their boxes,
+    // so a candidate only tests the ones near it.
+    type Seg = { p: Pt; q: Pt; x0: number; y0: number; x1: number; y1: number };
+    const seg = (p: Pt, q: Pt): Seg => ({
+      p,
+      q,
+      x0: Math.min(p.x, q.x),
+      y0: Math.min(p.y, q.y),
+      x1: Math.max(p.x, q.x),
+      y1: Math.max(p.y, q.y),
+    });
+    const toSegs = (pts: Pt[]) => {
+      const out: Seg[] = [];
+      for (let i = 1; i < pts.length; i++) out.push(seg(pts[i - 1], pts[i]));
+      return out;
+    };
+    const fixed: Seg[] = [];
+    // The conversation each idea hangs from, so a line can leave an idea on
+    // the far side from it — out of its fan of ties, not through it.
+    const hubOf = new Map<Node, Node>();
+    for (const l of links) {
+      if (isRelation(l)) continue;
+      const a = l.source as Node;
+      const b = l.target as Node;
+      const sa = toScreen(a, w, h);
+      const sb = toScreen(b, w, h);
+      if (l.kind === "from") {
+        hubOf.set(b, a);
+        if (style === "nodes") {
+          fixed.push(...toSegs(sampleQuad(sa, branchControl(sa, sb, a.data.id, b.data.id), sb, 8)));
+        } else if (style === "simplified" || (style === "sunflower" && placed.petals.has(b))) {
+          fixed.push(seg(sa, sb));
+        }
+      } else {
+        fixed.push(seg(sa, sb));
+      }
+    }
+    if (style === "sunflower") {
+      for (const hub of placed.flowers.keys()) {
+        fixed.push(seg(toScreen(hub, w, h), toScreen({ x: hub.x, y: 0 }, w, h)));
+      }
+    }
+    const discs = nodesRef.current.map((n) => ({
+      n,
+      s: toScreen(n, w, h),
+      r: drawnRadius(n.r, k, w, style) + 3,
+    }));
+
+    const STEPS = 16;
+    const shapeOf = (link: Link, route: RelationRoute) => {
+      const { a, b, c1, c2 } = relationCurve(link, w, h, route);
+      return sampleCubic(a, c1, c2, b, STEPS);
+    };
+    const shapes = new Map<Link, Seg[]>();
+    for (const l of relations) shapes.set(l, toSegs(shapeOf(l, routes.get(l) ?? STRAIGHT)));
+
+    const cost = (link: Link, route: RelationRoute) => {
+      const na = link.source as Node;
+      const nb = link.target as Node;
+      const pts = shapeOf(link, route);
+      const a = pts[0];
+      const b = pts[pts.length - 1];
+      const ra = drawnRadius(na.r, k, w, style) + 4;
+      const rb = drawnRadius(nb.r, k, w, style) + 4;
+      // A meeting at either end is where the line starts, not a crossing.
+      const atEnd = (x: Pt) =>
+        Math.hypot(x.x - a.x, x.y - a.y) < ra || Math.hypot(x.x - b.x, x.y - b.y) < rb;
+      // A line that dodges a crossing by looping across half the map, or off
+      // it, is more clutter, not less. Those are not candidates at all; a
+      // modest detour is allowed, and charged by its extra length.
+      let length = 0;
+      const chord = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const onCanvas = (p: Pt) => p.x >= 0 && p.y >= 0 && p.x <= w && p.y <= h;
+      const reach = chord * 0.35 + 40;
+      for (let i = 1; i < pts.length; i++) {
+        const p = pts[i];
+        length += Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y);
+        if (!onCanvas(p) && onCanvas(a) && onCanvas(b)) return Infinity;
+        // How far this point strays from the straight chord.
+        const off = Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) / chord;
+        if (off > reach) return Infinity;
+      }
+      if (length > chord * 1.35 + 40) return Infinity;
+      const hits = (s: Seg, o: Seg) => {
+        if (s.x1 < o.x0 || o.x1 < s.x0 || s.y1 < o.y0 || o.y1 < s.y0) return false;
+        const x = crossing(s.p, s.q, o.p, o.q);
+        return !!x && !atEnd(x);
+      };
+      let crossings = 0;
+      for (const s of toSegs(pts)) {
+        for (const f of fixed) if (hits(s, f)) crossings++;
+        for (const [other, o] of shapes) {
+          if (other === link) continue;
+          for (const f of o) if (hits(s, f)) crossings++;
+        }
+      }
+      let through = 0;
+      for (const d of discs) {
+        if (d.n === na || d.n === nb) continue;
+        if (polylineDistance(pts, d.s.x, d.s.y) < d.r) through++;
+      }
+      const detour = Math.abs(route.ta) + Math.abs(route.tb);
+      return crossings * 10 + through * 8 + (length / chord - 1) * 12 + detour * 1.5;
+    };
+
+    // The angle, off the chord, that points an end away from its idea's
+    // conversation — measured the way `relationCurve` turns each end.
+    const wrap = (t: number) => Math.atan2(Math.sin(t), Math.cos(t));
+    const outward = (idea: Node, other: Node, far: boolean) => {
+      const hub = hubOf.get(idea);
+      if (!hub) return null;
+      const out = Math.atan2((idea.y ?? 0) - (hub.y ?? 0), (idea.x ?? 0) - (hub.x ?? 0));
+      const chord = Math.atan2((other.y ?? 0) - (idea.y ?? 0), (other.x ?? 0) - (idea.x ?? 0));
+      // Never straight back: a line that doubles back on itself is a loop.
+      return Math.max(-2.2, Math.min(2.2, wrap(far ? chord - out : out - chord)));
+    };
+
+    const improve = (link: Link) => {
+      const held = routes.get(link) ?? STRAIGHT;
+      let route = held;
+      let best = cost(link, route);
+      // Only leave the held route for a clearly better one, so a line does
+      // not flick from course to course as the layout breathes.
+      const consider = (next: RelationRoute) => {
+        const tried = cost(link, next);
+        if (tried < best - 2) {
+          best = tried;
+          route = next;
+        }
+      };
+      const na = link.source as Node;
+      const nb = link.target as Node;
+      const outA = outward(na, nb, false);
+      const outB = outward(nb, na, true);
+      // Out of both fans at once, at each reach.
+      for (const reach of ROUTE_REACHES) {
+        if (outA !== null && outB !== null) consider({ ta: outA, tb: outB, reach });
+        if (outA !== null) consider({ ...route, ta: outA, reach });
+        if (outB !== null) consider({ ...route, tb: outB, reach });
+      }
+      // Then a bow — both ends turned alike — each end on its own, and how
+      // far the ends carry; twice, since a wider reach can make a different
+      // turn worth it.
+      for (let round = 0; round < 2; round++) {
+        for (const t of ROUTE_ANGLES) consider({ ...route, ta: t, tb: t });
+        for (const t of ROUTE_ANGLES) consider({ ...route, ta: t });
+        for (const t of ROUTE_ANGLES) consider({ ...route, tb: t });
+        for (const r of ROUTE_REACHES) consider({ ...route, reach: r });
+      }
+      if (route !== held) {
+        routes.set(link, route);
+        shapes.set(link, toSegs(shapeOf(link, route)));
+        state.changed = true;
+      }
+    };
+
+    // Shortest lines first: they have the least room to go round anything.
+    const order = [...relations].sort(
+      (p, q) => relationCurve(p, w, h, STRAIGHT).len - relationCurve(q, w, h, STRAIGHT).len,
+    );
+    const start = performance.now();
+    let done = 0;
+    while (done < order.length && performance.now() - start < 3) {
+      if (state.cursor >= order.length) {
+        // A whole sweep with no change means the lines are where they
+        // should be until something moves.
+        if (!state.changed) {
+          state.settled = true;
+          state.cursor = 0;
+          return;
+        }
+        state.cursor = 0;
+        state.changed = false;
+      }
+      improve(order[state.cursor++]);
+      done++;
+    }
+  }
+
 /** The nearest correlation or contradiction line, if the click landed close
    *  enough to it — the only edges meant to be clickable. */
   function edgeAt(clientX: number, clientY: number): Link | null {
@@ -3790,9 +4180,7 @@ function chordClearance(
     const style = styleRef.current;
     const placed = placedRef.current;
     for (const link of linksRef.current) {
-      if (link.kind !== "related" && link.kind !== "recall" && link.kind !== "contradicts") continue;
-      const na = link.source as Node;
-      const nb = link.target as Node;
+      if (!isRelation(link)) continue;
       // The drawn line, not the straight chord: a forest relation runs its
       // lane underground and a meadow one arcs over the grass, so testing the
       // chord would put the popup nowhere near the line it describes.
@@ -3802,22 +4190,8 @@ function chordClearance(
         if (!route) continue;
         pts = route.map((p) => toScreen(p, w, h));
       } else {
-        const a = toScreen(na, w, h);
-        const b = toScreen(nb, w, h);
-        if (style === "sunflower") {
-          const straight = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-          const clear = chordClearance(a.x, a.y, b.x, b.y, new Set([na.data.id, nb.data.id]), w, h);
-          const midX = (a.x + b.x) / 2;
-          const midY = (a.y + b.y) / 2 + meadowArch(straight, clear);
-          const steps = Math.min(160, Math.max(24, Math.ceil(straight / 4)));
-          pts = [];
-          for (let i = 0; i <= steps; i++) {
-            const t = i / steps;
-            pts.push({ x: quad(a.x, midX, b.x, t), y: quad(a.y, midY, b.y, t) });
-          }
-        } else {
-          pts = [a, b];
-        }
+        const { a, b, c1, c2, len } = relationCurve(link, w, h);
+        pts = sampleCubic(a, c1, c2, b, Math.min(160, Math.max(24, Math.ceil(len / 4))));
       }
       const d = polylineDistance(pts, px, py);
       if (d < bestDist) {

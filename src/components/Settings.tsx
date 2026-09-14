@@ -535,6 +535,25 @@ export default function Settings() {
             <Section
               hint={
                 <>
+                  Every second new chat, one question under the call toggle
+                  offering a quick change to how the AI behaves — like having
+                  it push back, or keep replies brief.
+                </>
+              }
+            >
+              Suggestions
+            </Section>
+            <div className="row">
+              <button
+                className={s.quick_tune ? "btn on" : "btn"}
+                onClick={() => void update({ quick_tune: !s.quick_tune })}
+              >
+                {s.quick_tune ? "Offered on new chats" : "Off"}
+              </button>
+            </div>
+            <Section
+              hint={
+                <>
                   A conversation files when you press Done. It can also file
                   itself after a stretch of quiet.
                 </>
