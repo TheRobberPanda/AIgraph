@@ -1437,6 +1437,31 @@ input, textarea {
 
 .error { color: var(--danger); font-size: 0.82rem; }
 .error .error-action { margin-left: 0.6rem; vertical-align: baseline; }
+
+/* Something done on your behalf: shown, held long enough to read, then gone. */
+.notice-warn {
+  position: fixed;
+  top: calc(var(--topbar) + 0.6rem);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: 0.45rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--gold) 16%, var(--surface-lift));
+  color: var(--gold);
+  font-size: 0.8rem;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+  pointer-events: none;
+  animation: notice-fade 7s ease-in forwards;
+}
+@keyframes notice-fade {
+  0% { opacity: 0; }
+  5% { opacity: 1; }
+  55% { opacity: 1; }
+  100% { opacity: 0; }
+}
 .muted { color: var(--muted); }
 
 /* ---- Controls ---- */
@@ -1664,7 +1689,9 @@ textarea.field:focus-visible { outline-offset: -3px; }
 .stream {
   flex: 1;
   overflow-y: auto;
-  padding: 1.1rem 1.5rem 0.5rem;
+  /* Clear of the Import button (0.6rem down, 1.9rem tall), which sat over
+     the first line of the first message. */
+  padding: 3rem 1.5rem 0.5rem;
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
@@ -3118,6 +3145,31 @@ blockquote {
 /* Ask the last question again, under the answer it replaces. */
 .remake { margin-top: 0.4rem; font-size: 0.72rem; padding: 0.15rem 0.5rem; color: var(--faint); }
 .remake:hover:not(:disabled) { color: var(--fg); }
+
+/* Read aloud: out of the way until the message is pointed at. */
+.turn { position: relative; }
+.turn-read {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0.2rem;
+  border: none;
+  background: none;
+  opacity: 0;
+  color: var(--faint);
+  transition: opacity 0.15s;
+}
+.turn-read svg { width: 100%; height: 100%; }
+.turn:hover .turn-read, .turn-read:focus-visible, .turn-read.on { opacity: 1; }
+.turn-read:hover, .turn-read.on { color: var(--fg); }
+.turn.has-read { padding-right: 1.8rem; }
+
+/* Written with no model to answer; sent once there is one. */
+.turn.user.queued { border-left-style: dashed; color: var(--muted); }
+.queued-note { display: block; margin-top: 0.3rem; font-size: 0.72rem; color: var(--faint); white-space: normal; }
+.queued-note .btn { margin-left: 0.4rem; font-size: 0.7rem; padding: 0.1rem 0.45rem; }
 
 /* What a Make button will produce, on the button itself. A quiet second line
    rather than a word beside the name: the name is what you are looking for,

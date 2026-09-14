@@ -15,6 +15,9 @@ export interface Turn {
   content: string;
   /** How long the reply took, on replies written in this window. */
   timing?: ReplyTiming;
+  /** Written with no model to answer it, and waiting for one. Only on screen
+   *  (and in local storage) — the backend has not seen it yet. */
+  queued?: boolean;
 }
 
 /** Where the time went for one reply — see `ReplyTiming` in commands.rs. */
@@ -97,6 +100,14 @@ export function selectProvider(
   return invoke<Selected>("select_provider", { kind, host, model });
 }
 
+export interface SentReply {
+  reply: string;
+  timing: ReplyTiming;
+  /** The model would not answer with reasoning off, so the backend switched
+   *  the setting on and asked again. Missing from an older backend. */
+  reasoning_on?: boolean;
+}
+
 /**
  * Send a message and stream the reply.
  *
@@ -108,13 +119,13 @@ export async function sendMessage(
   text: string,
   onContent: (chunk: string) => void,
   onReasoning: (chunk: string) => void,
-): Promise<{ reply: string; timing: ReplyTiming }> {
+): Promise<SentReply> {
   const unlisten: UnlistenFn[] = [
     await listen<{ text: string }>("chat:token", (e) => onContent(e.payload.text)),
     await listen<{ text: string }>("chat:reasoning", (e) => onReasoning(e.payload.text)),
   ];
   try {
-    return await invoke<{ reply: string; timing: ReplyTiming }>("send_message", { text });
+    return await invoke<SentReply>("send_message", { text });
   } finally {
     // Leaking these would cross-wire the next message's tokens into this turn.
     unlisten.forEach((u) => u());

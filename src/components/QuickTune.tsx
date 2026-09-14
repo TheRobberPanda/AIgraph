@@ -134,8 +134,10 @@ export default function QuickTune({ chat }: { chat: number }) {
   return (
     <div className="quick-tune">
       <span className="quick-tune-ask">{q.ask}</span>
+      {/* Plain, not `on`: the tint is what a setting already switched on looks
+          like, and this is only offering to switch it. */}
       <button
-        className="btn on"
+        className="btn"
         onClick={() => {
           const next = { ...s, ...q.patch(s) };
           void saveSettings(next)

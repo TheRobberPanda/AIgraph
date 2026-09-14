@@ -16,9 +16,12 @@ import {
   IconMaximize,
   IconClose,
   IconSpeaker,
+  IconStop,
   IconCall,
   IconChevron,
 } from "./components/Icons";
+import Notice from "./components/Notice";
+import { enableReasoningFor, notify, REASONING_TURNED_ON } from "./lib/notice";
 import { ConversationFile, IdeaFile } from "./components/Deep";
 import { t as tr, useLang } from "./lib/i18n";
 import { useUndoable } from "./lib/undo";
@@ -151,6 +154,7 @@ const SETUP: Tab[] = ["settings"];
 
 /** Where the draft is also kept in the browser, written on every keystroke. */
 const DRAFT_KEY = "aigraph-draft";
+const QUEUED_KEY = "aigraph-queued";
 
 /** Tokens, briefly: 12.4k rather than 12,431. */
 function tokens(n: number): string {
@@ -283,6 +287,8 @@ export default function App() {
   // slow model reads as working rather than frozen.
   const [thoughtChars, setThoughtChars] = useState(0);
   const [provider, setProvider] = useState<Selected | null>(null);
+  /** The first look for a model has finished, found one or not. */
+  const [modelChecked, setModelChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The message that just failed, so an error that can be fixed on the spot
   // can also send it again.
@@ -410,6 +416,55 @@ export default function App() {
   const [chatNo, setChatNo] = useState(nextChatNumber);
   /** A conversation the last run left unfiled, filed at this launch. */
   const [recoveredId, setRecoveredId] = useState<number | null>(null);
+  /** Which message "Read aloud" was last pressed on, for its stop button. */
+  const [readingTurn, setReadingTurn] = useState<number | null>(null);
+
+  // Messages written with no model to answer them. Kept in local storage so
+  // a restart before a model turns up does not lose them.
+  const queuedLoaded = useRef(false);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(QUEUED_KEY) ?? "[]");
+      if (Array.isArray(saved) && saved.length > 0) {
+        // Only into a window that has none on screen. This runs again on a
+        // remount, and appending each time doubled the queue — then saved
+        // the doubled one, to be doubled again.
+        setTurns((t) =>
+          t.some((x) => x.queued)
+            ? t
+            : [
+                ...t,
+                ...saved
+                  .filter((s): s is string => typeof s === "string" && !!s.trim())
+                  .map((content) => ({ role: "user" as const, content, queued: true })),
+              ],
+        );
+      }
+    } catch {
+      // Unreadable or unavailable storage: nothing to bring back.
+    }
+    queuedLoaded.current = true;
+  }, []);
+  const queuedTexts = turns.filter((t) => t.queued).map((t) => t.content);
+  const queuedJson = JSON.stringify(queuedTexts);
+  useEffect(() => {
+    if (!queuedLoaded.current) return;
+    try {
+      if (queuedTexts.length) localStorage.setItem(QUEUED_KEY, queuedJson);
+      else localStorage.removeItem(QUEUED_KEY);
+    } catch {
+      // Storage can be unavailable; they are still on screen.
+    }
+  }, [queuedJson]);
+
+  // A model is here now: send what was written while there wasn't one. All of
+  // it goes as one message, so it gets one answer rather than a reply to each
+  // half-thought in turn.
+  useEffect(() => {
+    if (!provider || streaming || queuedTexts.length === 0) return;
+    const from = turns.findIndex((t) => t.queued);
+    void sendText(queuedTexts.join("\n\n"), false, from);
+  }, [provider, streaming, queuedJson]);
 
   // What is typed and not yet sent is kept as it is typed: in the browser's
   // storage on every keystroke, and on disk a moment after typing stops. A
@@ -503,7 +558,8 @@ export default function App() {
       .then((s) => {
         setProvider(s.selected);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(String(e)))
+      .finally(() => setModelChecked(true));
     void getSettings()
       .then((s) => setCallSilence(s.call_silence_seconds))
       .catch(() => {});
@@ -636,7 +692,11 @@ export default function App() {
     try {
       await continueSession(sessionId);
       const turns = await sessionTurns(sessionId);
-      setTurns(turns.map((t) => ({ role: t.role as Turn["role"], content: t.text })));
+      // Anything still waiting for a model follows onto the resumed one.
+      setTurns((now) => [
+        ...turns.map((t) => ({ role: t.role as Turn["role"], content: t.text })),
+        ...now.filter((t) => t.queued),
+      ]);
       setJustArchived(null);
       setDeep(null);
       setPopup(null);
@@ -691,7 +751,7 @@ export default function App() {
 
   useEffect(() => {
     const p = onArchived((a) => {
-      setTurns([]);
+      setTurns((t) => t.filter((x) => x.queued));
       setJustArchived(a);
       setChatNo(nextChatNumber());
       // Filing no longer starts a digest, so the waiting count has to be
@@ -870,15 +930,17 @@ export default function App() {
   }
 
   /** `from`, when given, is where this exchange goes — the turns from there on are replaced. */
-  async function sendText(text: string, resend = false, from?: number) {
+  async function sendText(text: string, resend = false, from?: number, retried = false) {
     if (!text || streaming) return;
-    // Said rather than swallowed. Without this, pressing Send with no model
-    // did nothing at all — the same thing a broken button does.
+    // No model yet: kept on screen as written, and sent once there is one.
+    // Pressing Send used to do nothing here, and then only raise an error.
     if (!provider) {
-      setError("No model is loaded. Pick one and the message will send.");
-      setShowModels(true);
+      setDraft("");
+      setError(null);
+      setTurns((t) => [...t, { role: "user", content: text, queued: true }]);
       return;
     }
+    let refusedWithoutReasoning: unknown = null;
 
     setDraft("");
     setError(null);
@@ -904,7 +966,7 @@ export default function App() {
     ]);
 
     try {
-      const { reply, timing } = await sendMessage(
+      const { reply, timing, reasoning_on } = await sendMessage(
         text,
         (chunk) => {
           // Talked over: the model is still writing, but nothing more of it
@@ -948,6 +1010,7 @@ export default function App() {
         },
       );
 
+      if (reasoning_on) notify(REASONING_TURNED_ON);
       if (interruptedRef.current) {
         // Unwound below, in `finally` — nothing here should still act on a
         // reply that's about to be discarded.
@@ -981,8 +1044,13 @@ export default function App() {
       }
     } catch (e) {
       if (!interruptedRef.current) {
-        failedRef.current = text;
-        setError(String(e));
+        // A model that will not answer with reasoning off gets it switched on
+        // and is asked again, once — below, after this attempt has settled.
+        if (!retried && wantsReasoning(String(e))) refusedWithoutReasoning = e;
+        else {
+          failedRef.current = text;
+          setError(String(e));
+        }
         setTurns((t) => t.slice(0, -1));
       }
     } finally {
@@ -1003,6 +1071,15 @@ export default function App() {
       }
       setThinking(false);
       inputRef.current?.focus();
+    }
+    if (refusedWithoutReasoning !== null) {
+      const on = await enableReasoningFor(refusedWithoutReasoning).catch(() => false);
+      if (on) {
+        await sendText(text, false, base, true);
+      } else {
+        failedRef.current = text;
+        setError(String(refusedWithoutReasoning));
+      }
     }
   }
 
@@ -1128,7 +1205,7 @@ export default function App() {
       const archived = await endSession("done");
       // A null result means nothing was said — no empty sessions in the archive.
       if (archived) {
-        setTurns([]);
+        setTurns((t) => t.filter((x) => x.queued));
         setJustArchived(archived);
       }
     } catch (e) {
@@ -1157,7 +1234,7 @@ export default function App() {
     setEnding(true);
     try {
       const archived = await endSession("done");
-      setTurns([]);
+      setTurns((t) => t.filter((x) => x.queued));
       setJustArchived(archived);
     } catch (e) {
       setError(`Could not file this conversation: ${e}`);
@@ -1596,22 +1673,68 @@ export default function App() {
           </div>
         )}
 
-        {turns.map((t, i) => (
+        {turns.map((t, i) => {
+          // Not while it is still being written: half an answer read out
+          // would stop where the text happened to have got to.
+          const readable = !!t.content && !t.queued && !(streaming && i === turns.length - 1);
+          const reading = readable && readingTurn === i && talking;
+          return (
           <div
             key={i}
-            className={`turn ${t.role}`}
+            className={`turn ${t.role}${t.queued ? " queued" : ""}${readable ? " has-read" : ""}`}
             onContextMenu={(e) => {
-              if (streaming) return;
+              // A queued message is not in the conversation yet, so deleting
+              // or rewinding to it has nothing on the backend to act on.
+              if (streaming || t.queued) return;
               e.preventDefault();
               setTurnMenu({ x: e.clientX, y: e.clientY, index: i, text: t.content });
             }}
           >
+            {readable && (
+              <button
+                className={reading ? "turn-read on" : "turn-read"}
+                data-tip={reading ? "Stop reading" : "Read aloud"}
+                aria-label={reading ? "Stop reading" : "Read aloud"}
+                onClick={() => {
+                  if (reading) {
+                    stopSpeaking();
+                    setReadingTurn(null);
+                  } else {
+                    setReadingTurn(i);
+                    speak(t.content, voiceKind === "neural");
+                  }
+                }}
+              >
+                {reading ? <IconStop /> : <IconSpeaker />}
+              </button>
+            )}
             {/* The user's own words stay verbatim — they are what quotes get
                 matched against, and markdown would render some of them away. */}
             {t.role === "assistant" && t.content ? (
               <Markdown>{t.content}</Markdown>
             ) : (
               t.content
+            )}
+            {t.queued && (
+              <span className="queued-note">
+                {i === turns.map((x) => !!x.queued).lastIndexOf(true) && (
+                  <>
+                    Waiting for a model — it sends as soon as one is picked.
+                    <button className="btn" onClick={() => setShowModels(true)}>
+                      Pick a model
+                    </button>
+                  </>
+                )}
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setTurns((ts) => ts.filter((_, j) => j !== i));
+                    setDraft((d) => d || t.content);
+                  }}
+                >
+                  Unsend
+                </button>
+              </span>
             )}
             {t.role === "assistant" && showTiming && t.timing && (
               <div className="reply-timing">{timingLine(t.timing)}</div>
@@ -1639,7 +1762,8 @@ export default function App() {
               </span>
             )}
           </div>
-        ))}
+          );
+        })}
 
         {turnMenu && (
           <ContextMenu
@@ -1727,8 +1851,13 @@ export default function App() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={provider ? tr("chat_placeholder_ready") : tr("chat_placeholder_connecting")}
-          disabled={!provider}
+          placeholder={
+            provider
+              ? tr("chat_placeholder_ready")
+              : modelChecked
+                ? tr("chat_placeholder_offline")
+                : tr("chat_placeholder_connecting")
+          }
           rows={1}
           autoFocus
         />
@@ -1773,7 +1902,7 @@ export default function App() {
           <button
             className="btn btn-send"
             onClick={() => void send()}
-            disabled={!draft.trim() || streaming || !provider}
+            disabled={!draft.trim() || streaming}
             data-tip={tr("chat_send_tip")}
           >
             <IconSend />
@@ -1992,6 +2121,7 @@ export default function App() {
       )}
 
       <Tooltip />
+      <Notice />
 
       <div className="statusbar">
         {provider?.kind === "embedded" && <Vitals onChanged={() => void recheck()} />}

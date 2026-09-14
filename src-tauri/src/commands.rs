@@ -445,6 +445,9 @@ pub struct ReplyTiming {
 pub struct SentReply {
     reply: String,
     timing: ReplyTiming,
+    /// Reasoning was off, the model would not answer without it, and it has
+    /// been switched on — so the window can say so.
+    reasoning_on: bool,
 }
 
 /// The titles attached to one message: the folder's ideas closest to it.
@@ -703,7 +706,20 @@ pub async fn send_message(
     timing.total_ms = started.elapsed().as_millis() as u64;
     timing.reply_chars = reply.chars().count();
     log_timing(&timing, prep_ms, call_mode, reasoning);
-    Ok(SentReply { reply, timing })
+
+    // Asked again with reasoning on, because this model refuses to answer
+    // without it (see `openai_compat`). The setting follows, so it says what
+    // is actually happening rather than a switch the model ignores.
+    let reasoning_on = !reasoning && crate::llm::openai_compat::reasoning_mandatory(&request.model);
+    if reasoning_on {
+        let mut s = state.settings.lock().await;
+        s.reasoning = true;
+        if let Err(e) = s.save(&state.data_dir) {
+            tracing::error!(error = %e, "could not save reasoning being switched on");
+        }
+        let _ = app.emit("settings:changed", s.clone());
+    }
+    Ok(SentReply { reply, timing, reasoning_on })
 }
 
 /// One line per reply in the log, naming where the time went.

@@ -195,6 +195,10 @@ struct Delta {
     /// stream chain-of-thought here, separately from `content`.
     #[serde(default)]
     reasoning_content: Option<String>,
+    /// OpenRouter's name for the same thing. Unread, a reasoning model there
+    /// showed nothing at all for however long it thought.
+    #[serde(default)]
+    reasoning: Option<String>,
 }
 
 /// What came back over a streamed response.
@@ -298,7 +302,7 @@ async fn drain_sse(
                     finish_reason = Some(reason);
                 }
                 // Shown, but deliberately not accumulated into `full`.
-                if let Some(text) = choice.delta.reasoning_content {
+                if let Some(text) = choice.delta.reasoning_content.or(choice.delta.reasoning) {
                     if !text.is_empty() {
                         on_chunk(ChunkKind::Reasoning, &text);
                     }
@@ -341,6 +345,25 @@ fn error_text(err: &serde_json::Value) -> String {
     format!("{code}: {said}")
 }
 
+/// Models that refused to answer with reasoning off, this run.
+static REASONING_MANDATORY: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Whether this model has refused to answer without reasoning, so it is asked
+/// with it on from the start instead of failing first every time.
+pub fn reasoning_mandatory(model: &str) -> bool {
+    REASONING_MANDATORY.lock().unwrap_or_else(|p| p.into_inner()).contains(model)
+}
+
+/// "Reasoning is mandatory for this endpoint and cannot be disabled."
+fn refuses_without_reasoning(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("reasoning")
+        && (m.contains("mandatory")
+            || m.contains("cannot be disabled")
+            || m.contains("must be enabled"))
+}
+
 #[async_trait]
 impl ChatProvider for OpenAiCompat {
     async fn chat_stream(
@@ -359,33 +382,36 @@ impl ChatProvider for OpenAiCompat {
                 "content": m.content,
             })
         }));
-        let mut body = serde_json::json!({
-            "model": req.model,
-            "messages": messages,
-            "stream": true,
-        });
-        // Two spellings because two families of server read different ones and
-        // both ignore the other: llama.cpp takes `reasoning`, and the
-        // `enable_thinking` template argument is what LM Studio and vLLM pass
-        // through to the chat template. Sending both is how one request works
-        // against either.
-        // In whichever dialect this server speaks. OpenRouter's `reasoning` is
-        // an object and it rejects the string llama.cpp wants, so sending both
-        // spellings at once fails against it outright.
-        if self.label == "openrouter" {
-            body["reasoning"] = serde_json::json!({ "enabled": req.reasoning });
-        } else {
-            // The embedded server is started with thinking off, so a request
-            // that wants it has to ask.
-            body["reasoning"] = serde_json::json!(if req.reasoning { "on" } else { "off" });
-            if !req.reasoning {
-                body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+        let body = |reasoning: bool| {
+            let mut body = serde_json::json!({
+                "model": req.model,
+                "messages": messages,
+                "stream": true,
+            });
+            // Two spellings because two families of server read different ones
+            // and both ignore the other: llama.cpp takes `reasoning`, and the
+            // `enable_thinking` template argument is what LM Studio and vLLM
+            // pass through to the chat template.
+            // In whichever dialect this server speaks. OpenRouter's `reasoning`
+            // is an object and it rejects the string llama.cpp wants, so
+            // sending both spellings at once fails against it outright.
+            if self.label == "openrouter" {
+                body["reasoning"] = serde_json::json!({ "enabled": reasoning });
+            } else {
+                // The embedded server is started with thinking off, so a
+                // request that wants it has to ask.
+                body["reasoning"] = serde_json::json!(if reasoning { "on" } else { "off" });
+                if !reasoning {
+                    body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+                }
             }
-        }
+            body
+        };
 
-        let resp = self
+        let reasoning = req.reasoning || reasoning_mandatory(&req.model);
+        let mut resp = self
             .post("/chat/completions")
-            .json(&body)
+            .json(&body(reasoning))
             .send()
             .await
             .map_err(|e| self.connect_error(&e))?;
@@ -393,10 +419,62 @@ impl ChatProvider for OpenAiCompat {
         if !resp.status().is_success() {
             let status = resp.status();
             let detail = resp.text().await.unwrap_or_default();
-            return Err(http_error(status, detail));
+            // Some models cannot think less than they do — "Reasoning is
+            // mandatory for this endpoint and cannot be disabled." Asked again
+            // with it on, and remembered, rather than every message failing
+            // until someone finds the switch.
+            if reasoning || !refuses_without_reasoning(&detail) {
+                return Err(http_error(status, detail));
+            }
+            tracing::info!(model = %req.model, "reasoning is mandatory here; asking again with it on");
+            REASONING_MANDATORY.lock().unwrap_or_else(|p| p.into_inner()).insert(req.model.clone());
+            resp = self
+                .post("/chat/completions")
+                .json(&body(true))
+                .send()
+                .await
+                .map_err(|e| self.connect_error(&e))?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let detail = resp.text().await.unwrap_or_default();
+                return Err(http_error(status, detail));
+            }
         }
 
-        Ok(drain_sse(resp, on_chunk).await?.content)
+        // A dropped connection before a word of the answer arrived is asked
+        // again, once. Nothing else retried a chat message, so a reset while a
+        // model was still thinking ended in a raw transport error. Not once
+        // the answer has started: a second copy would append to the first.
+        let answered = std::sync::atomic::AtomicBool::new(false);
+        let counted = |kind: ChunkKind, text: &str| {
+            if kind == ChunkKind::Content {
+                answered.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            on_chunk(kind, text);
+        };
+        match drain_sse(resp, &counted).await {
+            Ok(s) => Ok(s.content),
+            Err(e)
+                if !answered.load(std::sync::atomic::Ordering::Relaxed)
+                    && looks_transient(&e.to_string()) =>
+            {
+                tracing::warn!(error = %e, "chat stream dropped before answering; asking again");
+                let reasoning = req.reasoning || reasoning_mandatory(&req.model);
+                let resp = self
+                    .post("/chat/completions")
+                    .json(&body(reasoning))
+                    .send()
+                    .await
+                    .map_err(|e| self.connect_error(&e))?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let detail = resp.text().await.unwrap_or_default();
+                    return Err(http_error(status, detail));
+                }
+                Ok(drain_sse(resp, on_chunk).await?.content)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn model_id(&self) -> String {

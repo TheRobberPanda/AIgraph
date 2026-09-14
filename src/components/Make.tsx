@@ -25,6 +25,7 @@ import {
   type Preset,
 } from "../lib/settings";
 import { REASONING_REFUSED, wantsReasoning } from "../lib/chat";
+import { enableReasoningFor } from "../lib/notice";
 import PresetPreview from "./PresetPreview";
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { composeSaveOutput, listMakeOutputs, type MakeOutput } from "../lib/outputs";
@@ -278,6 +279,7 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     setBusy(true);
     setDraft("");
     const label = (name?.trim() || text).slice(0, 60);
+    let retry = false;
     setMaking({ name: label, status: "working", outputId: null, error: null });
     setThread((t) => [
       ...t,
@@ -328,9 +330,14 @@ export default function Make({ folder, compact = false }: { folder: number | nul
         });
       }
     } catch (e) {
-      failedAsk.current = { text, format, name };
-      setError(String(e));
-      setMaking({ name: label, status: "failed", outputId: null, error: String(e) });
+      // A model that will not answer with reasoning off: switched on, with a
+      // notice, and asked again once this attempt has settled.
+      retry = await enableReasoningFor(e).catch(() => false);
+      if (!retry) {
+        failedAsk.current = { text, format, name };
+        setError(String(e));
+        setMaking({ name: label, status: "failed", outputId: null, error: String(e) });
+      }
       // The question goes too — it never reached the model, and leaving it on
       // screen under an error reads as an answer that failed rather than one
       // that was never asked.
@@ -338,6 +345,7 @@ export default function Make({ folder, compact = false }: { folder: number | nul
     } finally {
       setBusy(false);
     }
+    if (retry) void ask(text, format, name);
   },
     // `sourceSessions` reads state that is current when the ask is made, not
     // when the callback was first built.
