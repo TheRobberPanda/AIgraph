@@ -670,8 +670,7 @@ mod sync_tests {
     fn updates_and_cascading_deletes_are_logged() {
         let conn = db();
         let s = add_session(&conn);
-        let turn_uid: String =
-            conn.query_row("SELECT uid FROM turns", [], |r| r.get(0)).unwrap();
+        let turn_uid: String = conn.query_row("SELECT uid FROM turns", [], |r| r.get(0)).unwrap();
         conn.execute("DELETE FROM sync_log", []).unwrap();
 
         conn.execute("UPDATE sessions SET title = 'x' WHERE id = ?1", [s]).unwrap();

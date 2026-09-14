@@ -422,9 +422,11 @@ mod tests {
     fn answer_styles_add_their_fixed_lines() {
         let mut c = Conversation::new("m");
         c.set_answer_styles(vec![crate::settings::AnswerStyle::Brief]);
-        assert!(c.to_request().system.unwrap().contains(style::answer_style(
-            crate::settings::AnswerStyle::Brief
-        )));
+        assert!(c
+            .to_request()
+            .system
+            .unwrap()
+            .contains(style::answer_style(crate::settings::AnswerStyle::Brief)));
     }
 
     #[test]

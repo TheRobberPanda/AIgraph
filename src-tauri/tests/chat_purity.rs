@@ -112,7 +112,10 @@ fn recall_adds_nothing_until_it_is_asked_for() {
         "nothing recorded reaches the chat unless recall is switched on"
     );
     assert!(with.starts_with(&sys), "recall is appended, never woven in");
-    assert!(!with.contains("Entitlement"), "the system prompt stays constant; titles ride on the message");
+    assert!(
+        !with.contains("Entitlement"),
+        "the system prompt stays constant; titles ride on the message"
+    );
     assert!(said.starts_with("ownership is a debt"), "the person's words go first, untouched");
     // Titles, and only titles. A claim, a quote, or a transcript reaching the
     // chat would be a different feature with a different cost.

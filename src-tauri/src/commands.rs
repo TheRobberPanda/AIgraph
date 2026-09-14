@@ -474,9 +474,7 @@ async fn choose_recall(
 /// Waits a moment for it rather than giving up at once. Extraction holds it
 /// while it embeds a session's claims, and giving up on the first try is how
 /// recall quietly fell back to "most recent" whenever anything else had it.
-async fn embedder_ready(
-    state: &AppState,
-) -> Option<tokio::sync::MutexGuard<'_, Option<Embedder>>> {
+async fn embedder_ready(state: &AppState) -> Option<tokio::sync::MutexGuard<'_, Option<Embedder>>> {
     let mut guard =
         tokio::time::timeout(std::time::Duration::from_millis(1500), state.embedder.lock())
             .await
@@ -547,7 +545,7 @@ fn rank_by_words(recent: &[(i64, String)], message: &str) -> Vec<(i64, String)> 
         .map(|(i, (_, title))| (words(title).intersection(&said).count(), i))
         .filter(|(n, _)| *n > 0)
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|a| std::cmp::Reverse(a.0));
     scored.into_iter().take(RECALL_PER_MESSAGE).map(|(_, i)| recent[i].clone()).collect()
 }
 
@@ -730,13 +728,8 @@ pub async fn rewind_conversation(state: State<'_, AppState>, index: usize) -> Re
 /// A failure is logged loudly and not returned: refusing to answer because
 /// the disk is full would lose the conversation a second way.
 async fn persist_live(state: &AppState, pending: Option<&str>) {
-    let messages = state
-        .conversation
-        .lock()
-        .await
-        .as_ref()
-        .map(|c| c.messages().to_vec())
-        .unwrap_or_default();
+    let messages =
+        state.conversation.lock().await.as_ref().map(|c| c.messages().to_vec()).unwrap_or_default();
     let (started_at, model) = state
         .session
         .lock()
@@ -768,7 +761,8 @@ pub async fn recover_live(state: &AppState) {
     if let Some(p) = live.pending.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         let draft = crate::journal::load_draft(&state.data_dir);
         if !draft.contains(p) {
-            let joined = if draft.trim().is_empty() { p.to_string() } else { format!("{draft}\n{p}") };
+            let joined =
+                if draft.trim().is_empty() { p.to_string() } else { format!("{draft}\n{p}") };
             if let Err(e) = crate::journal::save_draft(&state.data_dir, &joined) {
                 tracing::error!(error = %e, "could not put an unsent message back in the draft");
                 return;
@@ -804,13 +798,19 @@ pub async fn recover_live(state: &AppState) {
     };
     match filed {
         Ok(id) => {
-            tracing::info!(session = id, turns = live.messages.len(), "recovered an unfiled conversation");
+            tracing::info!(
+                session = id,
+                turns = live.messages.len(),
+                "recovered an unfiled conversation"
+            );
             if let Err(e) = crate::journal::retire_live(&state.data_dir, id) {
                 tracing::warn!(error = %e, "recovered, but the journal could not be moved aside");
             }
             *state.recovered.lock().await = Some(id);
         }
-        Err(e) => tracing::error!(error = %e, "could not file the recovered conversation; kept in the journal"),
+        Err(e) => {
+            tracing::error!(error = %e, "could not file the recovered conversation; kept in the journal")
+        }
     }
 }
 

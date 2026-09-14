@@ -237,7 +237,13 @@ async fn drain_sse(
         // is listening to. What arrived before the stop is kept: the person
         // ended it, they did not hit an error.
         if ticket.cancelled() {
-            return Ok(Streamed { content: full, finish_reason, provider, cancelled: true, usage: usage.clone() });
+            return Ok(Streamed {
+                content: full,
+                finish_reason,
+                provider,
+                cancelled: true,
+                usage: usage.clone(),
+            });
         }
         buf.extend_from_slice(&chunk.map_err(|e| LlmError::Transport(e.to_string()))?);
 
@@ -252,7 +258,13 @@ async fn drain_sse(
             let payload = payload.trim();
 
             if payload == "[DONE]" {
-                return Ok(Streamed { content: full, finish_reason, provider, cancelled: false, usage: usage.clone() });
+                return Ok(Streamed {
+                    content: full,
+                    finish_reason,
+                    provider,
+                    cancelled: false,
+                    usage: usage.clone(),
+                });
             }
             if payload.is_empty() {
                 continue;

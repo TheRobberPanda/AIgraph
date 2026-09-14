@@ -130,8 +130,11 @@ mod tests {
     use crate::llm::types::Role;
 
     fn scratch(name: &str) -> PathBuf {
-        let d = std::env::temp_dir()
-            .join(format!("aigraph-journal-{name}-{}-{}", std::process::id(), stamp()));
+        let d = std::env::temp_dir().join(format!(
+            "aigraph-journal-{name}-{}-{}",
+            std::process::id(),
+            stamp()
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
