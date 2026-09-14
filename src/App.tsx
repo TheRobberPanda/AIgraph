@@ -185,7 +185,7 @@ type Deep =
   /** `flash` is set when this was reached by clicking an idea's quote: the
    *  transcript goes to those words and pulses them, rather than opening at
    *  the top and leaving them to be found. */
-  | { kind: "conversation"; id: number; flash?: number }
+  | { kind: "conversation"; id: number; flash?: number; quote?: string }
   | null;
 
 /**
@@ -1087,6 +1087,32 @@ export default function App() {
     inputRef.current?.focus();
   }
 
+  /**
+   * Start over, keeping what was said.
+   *
+   * This used to only clear the stream. The backend still held the
+   * conversation, so it never reached the rail, and the next message was
+   * appended to it — out of sight. Filing it first is what "stays in the
+   * rail" actually needs, and the "kept" card that follows (from the archived
+   * event too, so it can't be suppressed here without a race) says so.
+   */
+  async function startNew() {
+    stopSpeaking();
+    if (streaming || ending) return;
+    setError(null);
+    setEnding(true);
+    try {
+      const archived = await endSession("done");
+      setTurns([]);
+      setJustArchived(archived);
+    } catch (e) {
+      setError(`Could not file this conversation: ${e}`);
+    } finally {
+      setEnding(false);
+    }
+    inputRef.current?.focus();
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Undo first: it is the only shortcut here that must beat everything else,
     // and it is the one people press without looking.
@@ -1359,7 +1385,7 @@ export default function App() {
         <Boundary what="Definitions">
           <Definitions
             folder={folderId}
-            onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
+            onOpenConversation={(id, quote) => setDeep({ kind: "conversation", id, quote })}
           />
         </Boundary>
       ) : layout === "simple" && view === "make" ? (
@@ -1690,10 +1716,8 @@ export default function App() {
             <button
               className="btn"
               data-tip="Start a new conversation — this one stays in the rail"
-              onClick={() => {
-                setTurns([]);
-                setJustArchived(null);
-              }}
+              onClick={() => void startNew()}
+              disabled={streaming || ending}
             >
               New
             </button>
@@ -1837,7 +1861,7 @@ export default function App() {
             ) : popup === "definitions" ? (
               <Definitions
                 folder={folderId}
-                onOpenConversation={(id) => setDeep({ kind: "conversation", id })}
+                onOpenConversation={(id, quote) => setDeep({ kind: "conversation", id, quote })}
               />
             ) : (
               <Ideas folder={folderId} onContinue={(id) => void resume(id)} />
@@ -1860,6 +1884,7 @@ export default function App() {
             <ConversationFile
               sessionId={deep.id}
               highlightIdea={deep.flash}
+              flashQuote={deep.quote}
               onClose={() => setDeep(null)}
             />
           )}
