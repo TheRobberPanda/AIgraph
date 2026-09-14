@@ -2926,7 +2926,7 @@ pub async fn reset_presets(
     state: State<'_, AppState>,
 ) -> Result<Settings, String> {
     let mut settings = state.settings.lock().await.clone();
-    settings.presets = crate::settings::default_presets();
+    settings.presets = crate::settings::restore_default_presets(&settings.presets);
     settings.save(&state.data_dir).map_err(|e| e.to_string())?;
     *state.settings.lock().await = settings.clone();
     let _ = app.emit("settings:changed", settings.clone());

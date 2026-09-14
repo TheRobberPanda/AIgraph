@@ -237,23 +237,67 @@ impl OutputFormat {
 
 /// What the buttons say out of the box.
 ///
-/// One, deliberately. Six shipped presets are six guesses at what someone
+/// Few, deliberately. Six shipped presets are six guesses at what someone
 /// wants to make, and a row of them reads as the menu rather than as a
 /// starting point — the button that matters is the one that adds your own.
 /// The instruction is written out in full rather than as a keyword, because
 /// that is what makes it editable: whoever wants a blunter script can see the
 /// sentence that made it polite and change that sentence.
 pub fn default_presets() -> Vec<Preset> {
-    vec![Preset::new(
-        "book",
-        "A book",
-        "Write this as a book. Open with what the thinking is about, work through it \
-         in chapters that follow the argument rather than the order it was said in, \
-         and close with what it amounts to and what is still open. Keep the voice of \
-         the transcripts — the phrasing, the bluntness, the way points get made. \
-         Quote directly where the original wording is better than a paraphrase.",
-        OutputFormat::Pdf,
-    )]
+    vec![
+        Preset::new(
+            "book",
+            "A book",
+            "Write this as a book. Open with what the thinking is about, work through it \
+             in chapters that follow the argument rather than the order it was said in, \
+             and close with what it amounts to and what is still open. Keep the voice of \
+             the transcripts — the phrasing, the bluntness, the way points get made. \
+             Quote directly where the original wording is better than a paraphrase.",
+            OutputFormat::Pdf,
+        ),
+        // The form of Industrial Society and Its Future, not its content. The
+        // closing check is there because numbered prose fails in one way above
+        // all: counts that restart, and cross-references to paragraphs that
+        // say something else.
+        Preset::new("dissection", "A dissection", DISSECTION, OutputFormat::Pdf),
+    ]
+}
+
+const DISSECTION: &str = r#"
+Write this as a dissection in the form of Industrial Society and Its Future: a long treatise made of short, numbered paragraphs, grouped under plain section headings, that takes the thinking in these transcripts apart and argues it through to its conclusions.
+
+FORM
+- Number every paragraph. The numbering runs straight through the whole document, 1, 2, 3 and on, and does not restart under a new heading. Section headings are not numbered and do not count as paragraphs.
+- Each paragraph makes one point in roughly 2 to 6 sentences. If a paragraph is doing two things, split it.
+- Headings are short and flat, in capitals: INTRODUCTION, THE PROBLEM WITH X, HOW Y WORKS, OBJECTIONS, WHAT FOLLOWS, and so on. Name them after what the material is actually about.
+- Open with an INTRODUCTION of a few paragraphs that states the thesis bluntly in its first sentence and says what the rest will do.
+- Close with a section on what follows from all this and what is still unresolved, then a short NOTES section. Notes are numbered 1, 2, 3, marked in the text as (Note 1), and each one qualifies or expands a point instead of repeating it.
+
+VOICE
+- Plain, dry, declarative. Short sentences. No flourishes, no rhetorical questions, no exclamation marks, no motivational language, no metaphors where a literal statement will do.
+- Write in the first person plural ("we argue", "we call this") as the author of the treatise, but every position argued must be one the person actually took in the transcripts.
+- When a key idea first comes up, give it a name and define it in one sentence, then use that exact term the same way every time after. Do not switch to synonyms.
+- Build the argument step by step. Show the reasoning, not just the conclusion. Where it helps, give a concrete example from the transcripts.
+- State the strongest objections to the argument and answer each one, or admit plainly where it can't be answered.
+- Refer back to earlier points by number, as in "(see paragraph 14)". Only cite a paragraph that exists and actually says what you claim it says.
+- Quote the person directly where their wording is sharper than yours, in quotation marks.
+
+LIMITS
+- This is about the form and the analytical manner only. Do not take on the original's subject, its politics, or its call to action, and never argue for violence or harm to anyone. The subject is whatever these transcripts are about.
+- Do not invent positions, facts, statistics, sources or quotes. If the material doesn't support a section, leave it out or say in one paragraph that the material stops there.
+- Be long because the material supports it, not by padding. No paragraph may restate an earlier one.
+
+BEFORE YOU FINISH
+Check three things and fix anything wrong: the paragraph numbers run in order with no gaps or repeats; every "(see paragraph N)" points at a paragraph that says what you claim; every (Note N) has a matching note and every note is cited.
+"#;
+
+/// The shipped presets put back, with every one the person wrote kept after
+/// them. A preset counts as shipped by its id, so an edited original is
+/// restored to its wording and a renamed one is not duplicated.
+pub fn restore_default_presets(current: &[Preset]) -> Vec<Preset> {
+    let shipped = default_presets();
+    let own = current.iter().filter(|p| !shipped.iter().any(|d| d.id == p.id)).cloned();
+    shipped.iter().cloned().chain(own).collect()
 }
 
 /// Where a fresh settings file, or one from before folders were remembered,
@@ -711,6 +755,20 @@ mod tests {
     fn idle_timeout_never_collapses_to_nothing() {
         let s = Settings { idle_minutes: 0, ..Settings::default() };
         assert_eq!(s.idle_timeout().as_secs(), 60, "a pause to think is not the end");
+    }
+
+    /// Putting the originals back must not cost the person their own.
+    #[test]
+    fn restoring_presets_keeps_the_ones_you_wrote() {
+        let mut edited = default_presets()[0].clone();
+        edited.prompt = "shorter".into();
+        let mine = Preset::new("mine", "Mine", "my words", OutputFormat::Markdown);
+        let back = restore_default_presets(&[edited, mine.clone()]);
+
+        let ids: Vec<&str> = back.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["book", "dissection", "mine"]);
+        assert_eq!(back[0], default_presets()[0], "an edited original goes back to its wording");
+        assert_eq!(back[2], mine);
     }
 
     #[test]
