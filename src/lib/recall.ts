@@ -87,6 +87,20 @@ export function markRecall(text: string): string {
   return out + src.slice(from);
 }
 
+/**
+ * The marked sentences on their own, with the idea each draws on — for a
+ * place that shows a reply's short version, where the sentences themselves
+ * are not on screen to highlight.
+ */
+export function recallSentences(text: string): { ideaId: number; sentence: string }[] {
+  const out: { ideaId: number; sentence: string }[] = [];
+  for (const m of markRecall(text).matchAll(/\[([^\]]+)\]\(recall:(\d+)\)/g)) {
+    const sentence = m[1].replace(/\*\*|__|`/g, "").trim();
+    if (sentence) out.push({ ideaId: Number(m[2]), sentence });
+  }
+  return out;
+}
+
 /** A reply with every marker removed, for anywhere that cannot highlight. */
 export function stripRecall(text: string): string {
   return dropPartial(text).replace(MARKER, "");

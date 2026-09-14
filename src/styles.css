@@ -455,8 +455,18 @@ input, textarea {
 .quick-tune-done { color: var(--muted); }
 
 /* ---- Definitions ---- */
-.defs-search { width: 100%; max-width: 22rem; margin: 0.3rem 0 0.9rem; }
-.def-item { padding: 0.7rem 0; border-bottom: 1px solid var(--line); }
+.defs-search {
+  max-width: 22rem; margin: 0.3rem 0 0.9rem;
+  /* WebKit draws a search input as its own control and ignores the field look. */
+  appearance: none; -webkit-appearance: none;
+}
+.defs-search::placeholder { color: var(--faint); }
+.def-item {
+  padding: 0.7rem 0.55rem; margin: 0 -0.55rem;
+  border-bottom: 1px solid var(--line); border-radius: 8px;
+  cursor: pointer; transition: background 120ms ease;
+}
+.def-item:hover { background: var(--surface); }
 .def-item:last-child { border-bottom: none; }
 .def-head { display: flex; align-items: baseline; gap: 0.6rem; }
 .def-term { font-weight: 600; color: var(--fg); }
@@ -477,7 +487,7 @@ input, textarea {
   font-style: italic;
   cursor: pointer;
 }
-.def-quote:hover { color: var(--fg); border-left-color: var(--accent); }
+.def-item:hover .def-quote { color: var(--fg); border-left-color: var(--accent); }
 .def-meta { font-size: 0.72rem; color: var(--faint); margin-top: 0.25rem; }
 /* The layout switch lives beside what model is in use — both are "how the app
    is set up right now" rather than things to go hunting for in Settings. */
@@ -1848,6 +1858,18 @@ blockquote {
      findable, and only the means is motion. */
   .extracted.flashing { animation: none; background: var(--tag-color); }
 }
+/* A definition's words, gone to from the list of definitions. Plain until it
+   flashes, then plain again — the same pulse as an idea's, in the accent. */
+.quote-hit { --tag-color: var(--accent); border-radius: 3px; }
+.quote-hit.flashing { animation: quote-flash 620ms ease-in-out 4; }
+@media (prefers-reduced-motion: reduce) {
+  .quote-hit.flashing { animation: none; background: color-mix(in srgb, var(--accent) 45%, transparent); }
+}
+
+/* Under a reply's short version: the sentences in it that recalled something. */
+.reply-recall { margin-top: 0.5rem; font-size: 0.84rem; line-height: 1.5; }
+.reply-recall p { margin: 0.2rem 0 0; }
+.reply-recall-head { font-size: 0.7rem; color: var(--faint); }
 
 .why {
   display: none; position: absolute; left: 0; top: calc(100% + 0.35rem); z-index: 30;

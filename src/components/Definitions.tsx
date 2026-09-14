@@ -18,7 +18,8 @@ export default function Definitions({
   onOpenConversation,
 }: {
   folder: number | null;
-  onOpenConversation: (sessionId: number) => void;
+  /** Opens the conversation at the words the definition was said in. */
+  onOpenConversation: (sessionId: number, quote: string) => void;
 }) {
   const [rows, setRows] = useState<Definition[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +65,8 @@ export default function Definitions({
 
       {rows !== null && rows.length > 0 && (
         <input
-          className="defs-search"
+          className="field defs-search"
+          type="search"
           placeholder="Find a term"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -79,25 +81,37 @@ export default function Definitions({
       ) : (
         <div>
           {shown.map((d) => (
-            <div key={d.id} className="def-item">
+            // The whole entry goes to where it was said, not just the quote:
+            // the term is what the eye lands on, so it is what gets clicked.
+            <div
+              key={d.id}
+              className="def-item"
+              role="link"
+              tabIndex={0}
+              data-tip="Go to where you said this"
+              onClick={() => onOpenConversation(d.session_id, d.quote)}
+              onKeyDown={(e) => {
+                if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                  e.preventDefault();
+                  onOpenConversation(d.session_id, d.quote);
+                }
+              }}
+            >
               <div className="def-head">
                 <span className="def-term">{d.term}</span>
                 <button
                   className="icon-btn"
                   data-tip="Take it off the list"
-                  onClick={() => setRemoving(d)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRemoving(d);
+                  }}
                 >
                   <IconTrash />
                 </button>
               </div>
               <p className="def-text">{d.definition}</p>
-              <button
-                className="def-quote"
-                data-tip="Open the conversation"
-                onClick={() => onOpenConversation(d.session_id)}
-              >
-                “{d.quote}”
-              </button>
+              <span className="def-quote">“{d.quote}”</span>
               <div className="def-meta">
                 {d.session_title || `Conversation ${d.session_id}`}
                 {d.started_at && ` · ${longDate(d.started_at)}`}

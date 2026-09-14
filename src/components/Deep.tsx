@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Markdown from "./Markdown";
+import RecallHighlight from "./RecallHighlight";
+import { recallSentences } from "../lib/recall";
 import SpeakInto from "./SpeakInto";
 import { useUndoable } from "../lib/undo";
 import Sheet from "./Sheet";
@@ -40,6 +42,45 @@ function paragraphs(segments: Segment[]): Segment[][] {
     out[out.length - 1].push(seg);
   }
   return out;
+}
+
+/**
+ * Where `quote` sits in `text`, as a [start, end) range of `text`.
+ *
+ * Matched on letters and digits only: the verifier lets a quote through with
+ * small differences in punctuation and spacing, so an exact search would miss
+ * words it has already vouched for.
+ */
+function locate(text: string, quote: string): [number, number] | null {
+  const keep = /[\p{L}\p{N}]/u;
+  const at: number[] = [];
+  let flat = "";
+  for (let i = 0; i < text.length; i++) {
+    if (keep.test(text[i])) {
+      flat += text[i].toLowerCase();
+      at.push(i);
+    }
+  }
+  const q = [...quote].filter((c) => keep.test(c)).join("").toLowerCase();
+  if (!q) return null;
+  const s = flat.indexOf(q);
+  return s === -1 ? null : [at[s], at[s + q.length - 1] + 1];
+}
+
+/** A segment's text, with the part inside `hit` wrapped so it can be flashed.
+ *  `from` is where the segment starts in its turn. */
+function withHit(text: string, from: number, hit: [number, number] | null): React.ReactNode {
+  if (!hit) return text;
+  const a = Math.max(hit[0] - from, 0);
+  const b = Math.min(hit[1] - from, text.length);
+  if (a >= b) return text;
+  return (
+    <>
+      {text.slice(0, a)}
+      <span className="quote-hit">{text.slice(a, b)}</span>
+      {text.slice(b)}
+    </>
+  );
 }
 
 /**
@@ -313,6 +354,7 @@ function Nudges({
 export function ConversationFile({
   sessionId,
   highlightIdea,
+  flashQuote,
   onTrace,
   onClose,
   repeatWarning = false,
@@ -322,6 +364,9 @@ export function ConversationFile({
    *  opened by clicking that idea's quote somewhere else. A citation that
    *  drops you at the top of a transcript has not taken you anywhere. */
   highlightIdea?: number | null;
+  /** Words to go to and flash that are not an idea's — a definition's quote,
+   *  when the file was opened from the list of definitions. */
+  flashQuote?: string;
   /** Pointing at one of these picks it out on the map behind the panel. */
   onTrace?: (ideaId: number | null) => void;
   onClose: () => void;
@@ -370,12 +415,15 @@ export function ConversationFile({
   function show(ideaId: number): HTMLElement | null {
     const box = transcriptRef.current;
     const mark = box?.querySelector<HTMLElement>(`mark[data-idea="${ideaId}"]`);
-    if (!box || !mark) return null;
+    return mark ? centre(mark) : null;
+  }
+
+  function centre(mark: HTMLElement): HTMLElement {
     // The transcript's own column is the scroller, not the whole file. It used
     // to be the pane: running the pointer down the list of extracted ideas
     // scrolled the entire page, so the list you were reading slid out from
     // under the pointer as each row answered it.
-    const scroller = box.closest<HTMLElement>(".deep-main");
+    const scroller = mark.closest<HTMLElement>(".deep-main");
     if (!scroller) return mark;
     const top =
       mark.getBoundingClientRect().top -
@@ -411,6 +459,32 @@ export function ConversationFile({
     // restart the flash for as long as the file is open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, highlightIdea]);
+
+  // A definition's words, found in whichever of the person's turns holds them.
+  const quoteHit = useMemo(() => {
+    if (!view || !flashQuote) return null;
+    for (const turn of view.turns) {
+      if (turn.role !== "user") continue;
+      const range = locate(turn.segments.map((s) => s.text).join(""), flashQuote);
+      if (range) return { turnId: turn.id, range };
+    }
+    return null;
+  }, [view, flashQuote]);
+
+  // Gone to and flashed the same way an idea's words are. The words can run
+  // across several segments, so every piece of them flashes together.
+  useEffect(() => {
+    if (!quoteHit) return;
+    const id = requestAnimationFrame(() => {
+      const hits = transcriptRef.current?.querySelectorAll<HTMLElement>(".quote-hit");
+      if (!hits?.length) return;
+      centre(hits[0]);
+      hits.forEach((h) => h.classList.add("flashing"));
+      window.setTimeout(() => hits.forEach((h) => h.classList.remove("flashing")), 2600);
+    });
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteHit]);
 
   const load = useCallback(
     () => conversationView(sessionId).then(setView).catch((e) => setError(String(e))),
@@ -530,8 +604,10 @@ export function ConversationFile({
           <div className="deep-split">
           <div className="deep-main">
           <div className="deep-transcript" ref={transcriptRef}>
-            {view.turns.map((turn) =>
-              turn.role === "user" ? (
+            {view.turns.map((turn) => {
+              const hit = quoteHit?.turnId === turn.id ? quoteHit.range : null;
+              let offset = 0;
+              return turn.role === "user" ? (
                 <div key={turn.id} className="turn user">
                   {paragraphs(turn.segments).map((para, p, all) => (
                   <p key={p} className="turn-para">
@@ -541,9 +617,11 @@ export function ConversationFile({
                         paragraph" — which is otherwise impossible in a wall
                         of text with no landmarks. */}
                     {all.length > 1 && <span className="para-n">{p + 1}</span>}
-                  {para.map((seg, i) =>
-                    seg.idea_id === null ? (
-                      <span key={i}>{seg.text}</span>
+                  {para.map((seg, i) => {
+                    const from = offset;
+                    offset += seg.text.length;
+                    return seg.idea_id === null ? (
+                      <span key={i}>{withHit(seg.text, from, hit)}</span>
                     ) : (
                       <mark
                         key={i}
@@ -572,15 +650,15 @@ export function ConversationFile({
                         }}
                         onClick={() => seg.idea_id && setOpenIdea(seg.idea_id)}
                       >
-                        {seg.text}
+                        {withHit(seg.text, from, hit)}
                         {seg.reasoning && (
                           <span className="why">
                             <em>{seg.reasoning}</em>
                           </span>
                         )}
                       </mark>
-                    ),
-                  )}
+                    );
+                  })}
                   </p>
                   ))}
                 </div>
@@ -591,8 +669,8 @@ export function ConversationFile({
                   digest={turn.digest}
                   stance={STANCE_WORD[view.ai_profile.stance ?? ""]}
                 />
-              ),
-            )}
+              );
+            })}
           </div>
 
           </div>
@@ -672,6 +750,23 @@ function Reply({
   const clip = clipReply(text, 420);
   const long = clip.clipped;
 
+  // The sentences that drew on something said before. The short version is
+  // written afresh and carries no markers, so without these the recall the
+  // chat showed was gone from the record of it.
+  const recalls = recallSentences(text);
+  const shownIds = new Set(recallSentences(clip.shown).map((r) => r.ideaId));
+  const recallNote = (items: typeof recalls) =>
+    items.length > 0 && (
+      <div className="reply-recall">
+        <span className="reply-recall-head">Drew on what you said before</span>
+        {items.map((r, i) => (
+          <p key={i}>
+            <RecallHighlight ideaId={r.ideaId}>{r.sentence}</RecallHighlight>
+          </p>
+        ))}
+      </div>
+    );
+
   if (digest && !full) {
     return (
       <div className="turn assistant">
@@ -681,6 +776,7 @@ function Reply({
             version there is nothing left to tell them apart. */}
         {stance && <span className="stance-tag">{stance}</span>}
         <div className="digest">{digest}</div>
+        {recallNote(recalls)}
         <button className="icon-btn expand-toggle" data-tip="Read the answer in full" onClick={() => setFull(true)}>
           <IconChevron />
         </button>
@@ -691,6 +787,8 @@ function Reply({
   return (
     <div className={`turn assistant${!digest && long && !full ? " clipped" : ""}`}>
       <Markdown>{!digest && long && !full ? `${clip.shown}…` : text}</Markdown>
+      {/* Cut short, a recalled sentence past the cut would go unseen. */}
+      {!digest && long && !full && recallNote(recalls.filter((r) => !shownIds.has(r.ideaId)))}
       {(digest || long) && (
         <button
           className={`icon-btn expand-toggle${digest || full ? " flip" : ""}`}
