@@ -545,6 +545,11 @@ export function speakNeural(text: string): Promise<void> {
   return invoke("speak", { text });
 }
 
+/** Load the downloaded voice before it is needed. */
+export function warmVoice(): Promise<void> {
+  return invoke("warm_voice");
+}
+
 
 /** What the embedded model is doing right now, from llama-server's own /slots. */
 export interface RuntimeStatus {

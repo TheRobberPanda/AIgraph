@@ -82,6 +82,8 @@ import {
   speak,
   speakNext,
   stopSpeaking,
+  isEcho,
+  downloadedVoiceReady,
   takeSentences,
   visibleReply,
 } from "./lib/voice";
@@ -373,6 +375,15 @@ export default function App() {
    *  the rest of them are read. */
   const [callMode, setCallMode] = useState(false);
   const voiceOn = voiceSetting || callMode;
+  /** The downloaded voice is on disk. Checked when a call starts. */
+  const [neuralReady, setNeuralReady] = useState(false);
+  /**
+   * Which voice reads replies. A call uses the downloaded one whenever it is
+   * there, whatever the read-aloud setting says: with read-aloud off the
+   * setting never chose a voice, and the machine's own voice is the one that
+   * can turn out silent under WebKitGTK.
+   */
+  const neuralVoice = voiceKind === "neural" || (callMode && neuralReady);
   const [micTimeout, setMicTimeout] = useState(0);
   /** A document being read back into ideas from the Think tab. */
   const [importingDoc, setImportingDoc] = useState(false);
@@ -444,10 +455,15 @@ export default function App() {
       call_mode?: boolean;
       layout?: "simple" | "advanced";
       show_timing?: boolean;
+      call_silence_seconds?: number;
     }>(
       "settings:changed",
       (e) => {
       if (e.payload.show_timing !== undefined) setShowTiming(e.payload.show_timing);
+      // Read once at startup and never again, so moving the slider changed
+      // the saved file and nothing about the call until the app restarted.
+      if (e.payload.call_silence_seconds !== undefined)
+        setCallSilence(e.payload.call_silence_seconds);
         // Only the setting. Whether a call is in progress is this window's
         // business, not something a saved settings file should turn on.
       if (e.payload.voice !== undefined) {
@@ -639,32 +655,39 @@ export default function App() {
   /**
    * Talking over the model: interrupt it.
    *
-   * Firing on `hearing` catches the moment speech starts rather than waiting
-   * for a phrase to finish transcribing, so reading stops the instant someone
-   * begins talking rather than a beat later. Two different moments this can
-   * happen in: while the model is still writing (`streaming`), where nothing
-   * can be unwound until that settles — `sendText`'s `finally` handles that
-   * case — or while a finished reply is only being read aloud (`talking`),
-   * where the exchange is already fully committed and there is nothing left
-   * to wait for, so it is unwound right here.
+   * Fired by a transcribed phrase that is not the app's own voice, rather
+   * than by the voice detector. The detector was quicker, but it cannot tell
+   * a person from the speakers: every reply that started being read out was
+   * heard, taken for an interruption, and thrown away a word in.
+   *
+   * Two different moments this can happen in: while the model is still
+   * writing, where nothing can be unwound until that settles — `sendText`'s
+   * `finally` handles that case — or while a finished reply is only being
+   * read aloud, where the exchange is already fully committed and there is
+   * nothing left to wait for, so it is unwound right here.
    */
-  useEffect(() => {
-    if (!callMode || !hearing) return;
+  function interrupt() {
     if (!activeExchangeRef.current || interruptedRef.current) return;
-    if (!streaming && !talking) return;
+    if (!streamingRef.current && !talking) return;
     interruptedRef.current = true;
     stopSpeaking();
     // And stop the model, rather than letting it finish an answer nobody will
     // see. This used to only stop the reading: the reply was discarded, but a
     // local model went on filling a slot for however long it had left.
     void stopGeneration().catch(() => {});
-    if (!streaming) {
+    if (!streamingRef.current) {
       const ex = activeExchangeRef.current;
       activeExchangeRef.current = null;
       interruptedRef.current = false;
       unwindInterrupted(ex);
     }
-  }, [hearing, callMode, streaming, talking]);
+  }
+
+  // Look for the downloaded voice when a call starts, so it can read the
+  // replies. Checked each time: it may have been downloaded since.
+  useEffect(() => {
+    if (callMode) void downloadedVoiceReady().then(setNeuralReady);
+  }, [callMode]);
 
   useEffect(() => {
     const p = onArchived((a) => {
@@ -747,6 +770,10 @@ export default function App() {
       setDraft((d) => (d ? `${d.trimEnd()} ${text}` : text));
       return;
     }
+    // The speakers, heard back through the microphone. Kept, it would be sent
+    // to the model as the next question — the reply answering itself.
+    if (isEcho(text)) return;
+    interrupt();
     heardRef.current = heardRef.current ? `${heardRef.current} ${text}` : text;
     setHeardText(heardRef.current);
     setHeld(false);
@@ -909,7 +936,7 @@ export default function App() {
           // The navigation marker is on the front of the first sentence and
           // must not be read out. `speakNext` strips it, but only if it is
           // still at the start of the piece it is given.
-          for (const piece of spoken) speakNext(piece, voiceKind === "neural");
+          for (const piece of spoken) speakNext(piece, neuralVoice);
         },
         // The scratchpad itself is never rendered — putting the model's thinking
         // in front of the user's own is exactly backwards for this app. Only the
@@ -949,7 +976,7 @@ export default function App() {
         if (voiceOn) {
           const tail = pendingSpeech.current.trim();
           pendingSpeech.current = "";
-          if (tail) speakNext(tail, voiceKind === "neural");
+          if (tail) speakNext(tail, neuralVoice);
         }
       }
     } catch (e) {
@@ -1854,7 +1881,7 @@ export default function App() {
           thinking={streaming}
           heard={heardText}
           sendingIn={streaming || held ? null : sendingIn}
-          silence={Math.max(1, callSilence)}
+          silence={callSilence}
           progress={readProgress}
           talking={talking}
           onStopTalking={stopSpeaking}

@@ -129,6 +129,7 @@ pub fn run() {
             commands::voice_status,
             commands::install_voice,
             commands::speak,
+            commands::warm_voice,
             commands::delete_session,
             commands::list_trash,
             commands::restore_trash_item,

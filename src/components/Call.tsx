@@ -223,7 +223,7 @@ function Ring({ seconds, total }: { seconds: number; total: number }) {
           strokeWidth="3"
           strokeLinecap="round"
           strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - Math.max(0, seconds) / Math.max(1, total))}
+          strokeDashoffset={circumference * (1 - Math.max(0, seconds) / Math.max(0.1, total))}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>

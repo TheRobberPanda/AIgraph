@@ -7,7 +7,20 @@
  * downloaded one sounds better and is synthesised in the backend.
  */
 
-import { speakNeural } from "./settings";
+import { speakNeural, voiceStatus, warmVoice } from "./settings";
+
+/**
+ * Whether the downloaded voice is on disk, so a call can use it — and, if it
+ * is, load it now rather than in front of the first sentence of the answer.
+ */
+export function downloadedVoiceReady(): Promise<boolean> {
+  return voiceStatus()
+    .then((s) => {
+      if (s.installed) void warmVoice().catch(() => {});
+      return s.installed;
+    })
+    .catch(() => false);
+}
 
 export type OpenTarget = "map" | "ideas" | "conversations";
 
@@ -152,6 +165,7 @@ export function takeSentences(buffer: string): { spoken: string[]; rest: string 
 export function speakNext(text: string, neural = false): void {
   const said = forSpeech(text);
   if (!said) return;
+  remember(said);
   queue.push(said);
   if (!draining) void drain(neural);
 }
@@ -166,32 +180,103 @@ async function drain(neural: boolean) {
       if (neural) await speakNeural(next);
       else await sayWithSystemVoice(next);
     } catch {
-      // A voice that fails should not take the rest of the answer with it.
+      // A voice that fails should not take the rest of the answer with it:
+      // each one falls back to the other.
+      if (generation !== mine) break;
       try {
-        await sayWithSystemVoice(next);
+        if (neural) await sayWithSystemVoice(next);
+        else await speakNeural(next);
       } catch {
         /* nothing left to fall back to */
       }
     }
   }
-  draining = false;
-  announce(false);
+  // Only if this drain is still the live one: a stop bumps `generation` and a
+  // new drain may already have started, and clearing its flag would let a
+  // third run alongside it.
+  if (generation === mine) {
+    draining = false;
+    lastSpokeAt = performance.now();
+    announce(false);
+  }
 }
 
-/** Resolves when the utterance has finished, so the queue paces itself. */
+/**
+ * Resolves when the utterance has finished, so the queue paces itself.
+ *
+ * Rejects when the machine's voice never starts. WebKitGTK exposes
+ * `speechSynthesis` even where nothing behind it can make a sound, and an
+ * utterance there neither ends nor errors: the queue waited on it forever and
+ * a call answered in silence. Rejecting hands the sentence to the downloaded
+ * voice instead.
+ */
 function sayWithSystemVoice(said: string): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const synth = window.speechSynthesis;
-    if (!synth) return resolve();
+    if (!synth) return reject(new Error("no system voice"));
     const u = new SpeechSynthesisUtterance(said);
     current = u;
+    let started = false;
+    const noStart = window.setTimeout(() => {
+      if (started) return;
+      synth.cancel();
+      reject(new Error("the system voice did not start"));
+    }, 2500);
+    u.onstart = () => {
+      started = true;
+    };
     u.onend = () => {
+      window.clearTimeout(noStart);
       if (current === u) current = null;
       resolve();
     };
-    u.onerror = () => resolve();
+    u.onerror = () => {
+      window.clearTimeout(noStart);
+      if (started) resolve();
+      else reject(new Error("the system voice failed"));
+    };
     synth.speak(u);
   });
+}
+
+/**
+ * What has been read out lately, to recognise it coming back in.
+ *
+ * Without echo cancellation the microphone hears the speakers. The voice
+ * detector took the reply's own voice for someone talking over it, stopped
+ * the reading a word in and threw the answer away; and the transcriber, left
+ * alone, would have sent the reply back to the model as the next question.
+ */
+let spokenLately = "";
+/** When the last piece finished, since the tail of it is still in the room. */
+let lastSpokeAt = 0;
+
+function remember(said: string) {
+  spokenLately = `${spokenLately} ${said}`.slice(-2000);
+}
+
+function words(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s']/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Whether a phrase that was just heard is the app's own voice.
+ *
+ * Only while speaking or just after. Most of its words appearing in what was
+ * read counts, rather than an exact match, because transcription of speech
+ * played through a speaker is never word-perfect.
+ */
+export function isEcho(heard: string): boolean {
+  if (!draining && performance.now() - lastSpokeAt > 1500) return false;
+  const said = new Set(words(spokenLately));
+  const h = words(heard);
+  if (h.length === 0) return true;
+  const hits = h.filter((w) => said.has(w)).length;
+  return hits / h.length >= 0.6;
 }
 
 /**
@@ -205,6 +290,7 @@ export function speak(text: string, neural = false): void {
   const said = forSpeech(text);
   if (!said) return;
   stopSpeaking();
+  remember(said);
   if (neural) {
     void speakNeural(said).catch(() => system(said));
     return;

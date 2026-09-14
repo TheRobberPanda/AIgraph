@@ -1643,6 +1643,10 @@ textarea.field:focus-visible { outline-offset: -3px; }
   gap: 0.9rem;
 }
 .stream > * { width: 100%; max-width: 52rem; margin: 0 auto; }
+/* Above the Import button (z-index 3): in a narrow window the messages scroll
+   under its corner, and the words being read matter more than the button. It
+   stays clickable wherever no message covers it. */
+.stream > * { position: relative; z-index: 4; }
 
 .turn { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.9rem; }
 .turn .md { white-space: normal; }

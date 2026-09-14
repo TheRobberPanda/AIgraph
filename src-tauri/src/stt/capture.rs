@@ -191,7 +191,16 @@ fn run(
                 while !vad.is_empty() {
                     let segment = vad.front();
                     vad.pop();
-                    match recognizer.transcribe(&segment.samples) {
+                    // Logged because in a call this is part of the wait for
+                    // an answer: nothing is sent until the phrase is text.
+                    let t = std::time::Instant::now();
+                    let heard = recognizer.transcribe(&segment.samples);
+                    tracing::info!(
+                        transcribe_ms = t.elapsed().as_millis() as u64,
+                        speech_ms = segment.samples.len() as u64 * 1000 / SAMPLE_RATE as u64,
+                        "dictation: transcribed a phrase"
+                    );
+                    match heard {
                         Ok(text) if !text.is_empty() => on_event(Event::Phrase(text)),
                         Ok(_) => {}
                         Err(e) => on_event(Event::Error(e.to_string())),

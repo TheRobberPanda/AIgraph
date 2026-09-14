@@ -605,15 +605,15 @@ export default function Settings() {
                   type="range"
                   className="scale-slider"
                   min={0}
-                  max={15}
-                  step={1}
+                  max={5}
+                  step={0.1}
                   value={s.call_silence_seconds}
                   onChange={(e) => setS({ ...s, call_silence_seconds: Number(e.target.value) })}
                   onMouseUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
                   onKeyUp={() => void update({ call_silence_seconds: s.call_silence_seconds })}
                 />
                 <span className="knob-value">
-                  {s.call_silence_seconds > 0 ? `${s.call_silence_seconds}s` : "off"}
+                  {s.call_silence_seconds > 0 ? `${s.call_silence_seconds.toFixed(1)}s` : "off"}
                 </span>
                 <span className="knob-hint">
                   How long a call waits after you stop talking before it sends what

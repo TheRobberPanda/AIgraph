@@ -594,7 +594,13 @@ pub async fn send_message(
     // The earlier ideas closest to what was just said, chosen again for every
     // message so a reply can connect this message — not the opening line —
     // to what came before. They go out with this message only.
-    let titles = if recall {
+    //
+    // Not in a call. Choosing them embeds the message and ranks the folder
+    // before the model sees a word, and the titles lengthen the prompt it has
+    // to read — seconds of dead air on a line where a pause reads as a
+    // dropped call, for connections nobody can click in a conversation
+    // they are only hearing.
+    let titles = if recall && !call_mode {
         let folder = *state.current_folder.lock().await;
         let chose = std::time::Instant::now();
         let (titles, considered, ranked) = choose_recall(&state, folder, &text).await;
@@ -621,6 +627,8 @@ pub async fn send_message(
     persist_live(&state, None).await;
     timing.system_chars = request.system.as_ref().map(|s| s.chars().count()).unwrap_or(0);
 
+    // Everything before the model is asked: saving, recall, building the prompt.
+    let prep_ms = started.elapsed().as_millis() as u64;
     let emitter = app.clone();
     let sent_at = std::time::Instant::now();
     let first_any = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
@@ -694,7 +702,47 @@ pub async fn send_message(
     timing.first_content_ms = at(&first_content);
     timing.total_ms = started.elapsed().as_millis() as u64;
     timing.reply_chars = reply.chars().count();
+    log_timing(&timing, prep_ms, call_mode, reasoning);
     Ok(SentReply { reply, timing })
+}
+
+/// One line per reply in the log, naming where the time went.
+///
+/// A slow reply has four places to be slow, and each has a different fix: the
+/// app before the model is asked (recall, saving), the model reading the
+/// prompt (prompt size, cache misses), thinking before it answers (reasoning),
+/// and writing the answer (length, tokens a second). `slowest` names the
+/// biggest so the line answers the question without arithmetic.
+fn log_timing(t: &ReplyTiming, prep_ms: u64, call_mode: bool, reasoning: bool) {
+    let sent = t.total_ms.saturating_sub(prep_ms);
+    let reading = t.first_token_ms.unwrap_or(sent);
+    let answering = t.first_content_ms.unwrap_or(sent);
+    let thinking = answering.saturating_sub(reading);
+    let writing = sent.saturating_sub(answering);
+    let slowest =
+        [("prep", prep_ms), ("reading", reading), ("thinking", thinking), ("writing", writing)]
+            .into_iter()
+            .max_by_key(|p| p.1)
+            .map_or("", |p| p.0);
+    // Measured from the first word, so it describes the model rather than
+    // the wait before it.
+    let chars_per_s = (t.reply_chars as u64 * 1000).checked_div(writing).unwrap_or(0);
+    tracing::info!(
+        call_mode,
+        reasoning,
+        total_ms = t.total_ms,
+        prep_ms,
+        recall_ms = t.recall_ms.unwrap_or(0),
+        recall_titles = t.recall_titles,
+        system_chars = t.system_chars,
+        reading_ms = reading,
+        thinking_ms = thinking,
+        writing_ms = writing,
+        reply_chars = t.reply_chars,
+        chars_per_s,
+        slowest,
+        "reply timing"
+    );
 }
 
 /// Remove one turn from the conversation still being had, without touching
@@ -2243,6 +2291,13 @@ pub async fn speak(state: State<'_, AppState>, text: String) -> Result<(), Strin
     tauri::async_runtime::spawn_blocking(move || voices.speak(&text, 1.0))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Load the downloaded voice ahead of the first sentence, when a call starts.
+#[tauri::command]
+pub async fn warm_voice(state: State<'_, AppState>) -> Result<(), String> {
+    let voices = crate::tts::Voices::new(&state.data_dir);
+    tauri::async_runtime::spawn_blocking(move || voices.warm()).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

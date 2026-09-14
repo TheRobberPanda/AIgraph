@@ -92,12 +92,14 @@ pub struct Settings {
     /// go on, and a model that guesses wrong answers a Polish speaker in
     /// English. Naming it settles the question.
     pub language: Language,
-    /// Seconds of quiet in a call before what you said is sent.
+    /// Seconds of quiet in a call before what you said is sent. Zero means
+    /// nothing sends itself.
     ///
-    /// Thinking out loud has pauses in it, and a short wait cuts people off
-    /// mid-sentence. Five is long enough to gather a thought and short enough
-    /// not to feel stuck.
-    pub call_silence_seconds: u32,
+    /// Fractional, because the wait that makes a call feel like a call is
+    /// under a second. 0.7 is roughly the gap people leave before answering
+    /// each other; anyone who pauses longer mid-thought can raise it.
+    /// Settings saved as whole seconds read back unchanged.
+    pub call_silence_seconds: f32,
     /// Seconds of open microphone with nothing said before dictation stops
     /// itself. Zero means never, and is the default: dictation is something
     /// someone actively started, and stopping it for them is a decision they
@@ -613,7 +615,7 @@ impl Default for Settings {
             // you" is a strong thing to be by default.
             chat_stance: ChatStance::Neutral,
             answer_styles: Vec::new(),
-            call_silence_seconds: 5,
+            call_silence_seconds: 0.7,
             mic_timeout_seconds: 0,
             runtime: Runtime::default(),
             layout: Layout::default(),

@@ -83,10 +83,10 @@ impl Voices {
 
     /// Speak, blocking until the last sample has been played.
     ///
-    /// The voice is built per utterance rather than held open. Loading it costs
-    /// well under the time it takes to say a sentence, and a reply that is
-    /// being read aloud is not a hot loop — holding an ONNX session for a
-    /// feature used a few times an hour is memory spent on nothing.
+    /// The voice is loaded once and kept. It used to be built per sentence,
+    /// which was fine for reading a reply out now and then — but a call reads
+    /// every reply a sentence at a time, and the load came before every one
+    /// of them, as a gap in the middle of the answer.
     ///
     /// Not on the phone: no sherpa-onnx there. The phone's own voice, which the
     /// frontend already falls back to, is the only one.
@@ -95,14 +95,51 @@ impl Voices {
         Err("the downloaded voice is not available on the phone".into())
     }
 
+    #[cfg(target_os = "android")]
+    pub fn warm(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     #[cfg(not(target_os = "android"))]
     pub fn speak(&self, text: &str, speed: f32) -> Result<(), String> {
+        // Held only while synthesising, so playback does not keep the next
+        // sentence from being prepared.
+        let audio = {
+            let mut slot = LOADED.lock().map_err(|e| e.to_string())?;
+            self.load_into(&mut slot)?;
+            let tts = slot.as_mut().ok_or("the voice did not load")?;
+            let t = std::time::Instant::now();
+            let audio = tts.create(text, 0, speed.clamp(0.5, 2.0)).map_err(|e| e.to_string())?;
+            tracing::info!(
+                synth_ms = t.elapsed().as_millis() as u64,
+                chars = text.chars().count(),
+                audio_ms = audio.samples.len() as u64 * 1000 / audio.sample_rate.max(1) as u64,
+                "voice: synthesised a sentence"
+            );
+            audio
+        };
+        play(&audio.samples, audio.sample_rate)
+    }
+
+    /// Load the voice now, so the first sentence of a call does not wait on it.
+    #[cfg(not(target_os = "android"))]
+    pub fn warm(&self) -> Result<(), String> {
+        let mut slot = LOADED.lock().map_err(|e| e.to_string())?;
+        self.load_into(&mut slot)
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn load_into(&self, slot: &mut Option<sherpa_rs::tts::VitsTts>) -> Result<(), String> {
         use sherpa_rs::tts::{VitsTts, VitsTtsConfig};
 
+        if slot.is_some() {
+            return Ok(());
+        }
         if !self.is_installed() {
             return Err("the voice has not been downloaded yet".into());
         }
-        let mut tts = VitsTts::new(VitsTtsConfig {
+        let t = std::time::Instant::now();
+        *slot = Some(VitsTts::new(VitsTtsConfig {
             model: self.model().to_string_lossy().to_string(),
             tokens: self.dir().join("tokens.txt").to_string_lossy().to_string(),
             data_dir: self.dir().join("espeak-ng-data").to_string_lossy().to_string(),
@@ -110,11 +147,16 @@ impl Voices {
             noise_scale: 0.667,
             noise_scale_w: 0.8,
             ..Default::default()
-        });
-        let audio = tts.create(text, 0, speed.clamp(0.5, 2.0)).map_err(|e| e.to_string())?;
-        play(&audio.samples, audio.sample_rate)
+        }));
+        tracing::info!(load_ms = t.elapsed().as_millis() as u64, "voice: loaded");
+        Ok(())
     }
 }
+
+/// The downloaded voice, once loaded. There is only one voice, so nothing
+/// needs to say which this is.
+#[cfg(not(target_os = "android"))]
+static LOADED: Mutex<Option<sherpa_rs::tts::VitsTts>> = Mutex::new(None);
 
 /// Play mono f32 samples at the rate they were produced.
 ///
