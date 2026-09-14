@@ -90,8 +90,10 @@ jobs:
       # itself is in the cache above. Both platforms: on Windows a fully
       # restored cache left the staging step below with nothing to build, so
       # the DLLs the installer lists were never copied (0.6.5's first run).
+      # `--release`: without it `clean -p` only clears the debug profile, and
+      # removed nothing here.
       - name: Put the speech libraries back into target
-        run: cargo clean -p sherpa-rs-sys
+        run: cargo clean --release -p sherpa-rs-sys
         working-directory: src-tauri
 
       # The installer has to carry the sherpa-onnx DLLs beside the exe, or the
