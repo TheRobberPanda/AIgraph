@@ -1,10 +1,10 @@
 # Every push: the things that would embarrass a release if they broke.
 name: Check
 
+# Manual only: builds run on the dev machine now (scripts/release.sh), because
+# a runner compiling this from cold takes far too long. Kept for a one-off run.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   check:

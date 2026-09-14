@@ -30,15 +30,21 @@ by accident.
    - `package.json`
    - `src-tauri/Cargo.toml`
    - `src-tauri/tauri.conf.json`
-3. Commit, tag, push:
+3. Commit, then build and upload from this machine:
 
    ```bash
-   git tag v0.1.0
-   git push origin main --tags
+   scripts/release.sh
    ```
 
-4. The `Release` workflow builds on Ubuntu and Windows and opens a **draft**
-   release with the installers attached. Check them, write the notes, publish.
+   It runs the checks CI used to run, builds the Linux installers, tags
+   `vX.Y.Z`, pushes `main` and the tag, and opens a **draft** release with the
+   installers attached. Check them, write the notes, publish.
+
+Nothing compiles on GitHub any more — the workflows are manual-only, because a
+cold runner takes far too long. The cost is Windows: its installers cannot be
+built on Linux, so a release has none unless the `Release` workflow is run by
+hand (Actions → Release → Run workflow) or the build is done on a Windows
+machine.
 
 Drafts rather than direct publication on purpose: a release is the one thing
 here that cannot be taken back once people have downloaded it.

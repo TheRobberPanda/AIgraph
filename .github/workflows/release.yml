@@ -8,9 +8,10 @@
 # Triggered by a tag, and by hand for a dry run before committing to one.
 name: Release
 
+# Manual only: releases are built locally with scripts/release.sh, which also
+# pushes the tag — so a tag push must not start this. Run it by hand only if a
+# Windows installer is ever needed, since that cannot be built on Linux.
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
