@@ -34,14 +34,12 @@ npm run build
   cargo test --no-default-features
 )
 
-# rpm needs rpmbuild; skip that format rather than fail the whole build.
-bundles="deb,appimage"
-command -v rpmbuild >/dev/null && bundles="deb,rpm,appimage"
-npm run package -- --bundles "$bundles"
+# deb and AppImage here; rpm and Windows are built on GitHub, below.
+npm run package -- --bundles deb,appimage
 
 bundle_dir=src-tauri/target/release/bundle
-mapfile -t files < <(find "$bundle_dir/deb" "$bundle_dir/rpm" "$bundle_dir/appimage" \
-  -maxdepth 1 -type f \( -name "*_${version}_*.deb" -o -name "*-${version}-*.rpm" -o -name "*_${version}_*.AppImage" \) 2>/dev/null)
+mapfile -t files < <(find "$bundle_dir/deb" "$bundle_dir/appimage" \
+  -maxdepth 1 -type f \( -name "*_${version}_*.deb" -o -name "*_${version}_*.AppImage" \) 2>/dev/null)
 if [[ ${#files[@]} -eq 0 ]]; then
   echo "No installers for $version found under $bundle_dir." >&2
   exit 1
@@ -59,4 +57,9 @@ else
   gh release create "$tag" "${files[@]}" --draft \
     --title "AIgraph $tag" --notes "See CHANGELOG.md. Downloads are below."
 fi
+
+# Windows and rpm cannot be built here. Started only now, so the release they
+# upload into already exists.
+gh workflow run release.yml -f tag="$tag"
+echo "Windows and rpm installers are building on GitHub: gh run watch"
 gh release view "$tag" --json url -q .url

@@ -36,15 +36,18 @@ by accident.
    scripts/release.sh
    ```
 
-   It runs the checks CI used to run, builds the Linux installers, tags
-   `vX.Y.Z`, pushes `main` and the tag, and opens a **draft** release with the
-   installers attached. Check them, write the notes, publish.
+   It runs the checks CI used to run, builds the deb and AppImage, tags
+   `vX.Y.Z`, pushes `main` and the tag, and opens a **draft** release with
+   them attached. Then it starts the `Release` workflow on GitHub, which builds
+   the Windows installers (NSIS and MSI) and the rpm and uploads them into the
+   same draft.
+4. Wait for that run (`gh run watch`), check the files, publish.
 
-Nothing compiles on GitHub any more — the workflows are manual-only, because a
-cold runner takes far too long. The cost is Windows: its installers cannot be
-built on Linux, so a release has none unless the `Release` workflow is run by
-hand (Actions → Release → Run workflow) or the build is done on a Windows
-machine.
+Only Windows and rpm are built on GitHub, because they can't be built here:
+Windows installers cannot be made on Linux, and this machine has no
+`rpmbuild`. Everything else stays local because a cold runner takes far too
+long. To add them to a release that already exists, run the workflow by hand
+(Actions → Release → Run workflow) with its tag.
 
 Drafts rather than direct publication on purpose: a release is the one thing
 here that cannot be taken back once people have downloaded it.

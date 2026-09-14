@@ -1,51 +1,47 @@
-# Installers for a tagged release.
+# The installers this machine cannot make: Windows, and rpm.
 #
 # Windows installers cannot be cross-compiled from Linux — the toolchain, the
-# webview headers and the NSIS packaging all want to run there — so the matrix
-# is the only way to produce them at all, and it costs nothing to build the
-# Linux ones the same way.
-#
-# Triggered by a tag, and by hand for a dry run before committing to one.
+# webview headers and the NSIS packaging all want to run there. rpm could be
+# built locally but needs rpmbuild, which this machine does not have. The deb
+# and AppImage are still built locally by scripts/release.sh, which is what
+# starts this, for the tag it just pushed, once the draft release exists —
+# so there is always a release here to upload into.
 name: Release
 
-# Manual only: releases are built locally with scripts/release.sh, which also
-# pushes the tag — so a tag push must not start this. Run it by hand only if a
-# Windows installer is ever needed, since that cannot be built on Linux.
+# Not on a tag push: release.sh force-pushes the tag, and a push-triggered run
+# would race it to the release. It dispatches this itself instead.
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and upload to, e.g. v0.6.3"
+        required: true
 
 jobs:
   build:
     permissions:
       contents: write
     strategy:
-      # One platform failing should not throw away the other's artifacts —
-      # a Linux build that worked is still worth having.
+      # One platform failing should not throw away the other's installers.
       fail-fast: false
       matrix:
         include:
           - platform: ubuntu-24.04
-            # This was 22.04, on the reasoning that glibc is backwards
-            # compatible and not forwards, so building on the oldest sensible
-            # Ubuntu keeps the binary runnable on the most machines. That
-            # reasoning is right in general and did not apply here: the
-            # prebuilt onnxruntime `ort-sys` downloads is itself compiled
-            # against glibc 2.38 and GCC 13's libstdc++, so it never linked on
-            # 22.04 and no Linux build was ever produced —
-            # `undefined symbol: __isoc23_strtol` and `_M_replace_cold`.
-            #
-            # The floor is set by that dependency, not by the runner. Building
-            # here on 22.04 could not have produced a binary that ran on
-            # glibc 2.35 either; it could only fail. So this costs nothing
-            # that was not already spent, and it is the difference between a
-            # Linux download existing and not.
-            args: ""
+            # Not 22.04: the prebuilt onnxruntime `ort-sys` downloads is
+            # compiled against glibc 2.38 and GCC 13's libstdc++, so it never
+            # links there (`undefined symbol: __isoc23_strtol`). The floor is
+            # set by that dependency, not by the runner.
+            bundles: rpm
+            files: src-tauri/target/release/bundle/rpm/*.rpm
           - platform: windows-latest
-            args: ""
+            bundles: nsis,msi
+            files: src-tauri/target/release/bundle/nsis/*.exe src-tauri/target/release/bundle/msi/*.msi
 
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Linux build dependencies
         if: matrix.platform == 'ubuntu-24.04'
@@ -76,8 +72,6 @@ jobs:
           cache-directories: |
             ~/.cache/sherpa-rs
             ~/.cache/ort.pyke.io
-            ~/Library/Caches/sherpa-rs
-            ~/Library/Caches/ort.pyke.io
             ~/AppData/Local/sherpa-rs
             ~/AppData/Local/ort.pyke.io
 
@@ -88,32 +82,24 @@ jobs:
 
       - run: npm ci
 
-      - name: Check before building
-        run: npm run build
+      # No checks or tests here: release.sh ran them all before tagging.
 
       # A restored `target` can come back without the speech libraries beside
       # the binaries, and cargo will not rerun the build script that copies
-      # them there, so the tests then die with "libsherpa-onnx-c-api.so:
-      # cannot open shared object file" (exit 127). Cleaning just this crate
-      # reruns that script; the download itself is in the cache above.
+      # them there. Cleaning just this crate reruns that script; the download
+      # itself is in the cache above.
       - name: Put the speech libraries back into target
+        if: matrix.platform == 'ubuntu-24.04'
         run: cargo clean -p sherpa-rs-sys
-        working-directory: src-tauri
-
-      # From src-tauri so cargo picks up .cargo/config.toml (the rpath) —
-      # see check.yml.
-      - name: Test before building
-        run: cargo test --no-default-features
         working-directory: src-tauri
 
       # The installer has to carry the sherpa-onnx DLLs beside the exe, or the
       # app will not start ("sherpa-onnx-c-api.dll not found"). Tauri checks
       # bundled resources at compile time, in every profile, so the list
-      # cannot live in tauri.windows.conf.json permanently: the debug build
-      # above, and `tauri dev` on Windows, would fail on files that only
-      # exist after a release build. So build the speech library in release
-      # first — its build script copies the DLLs into target/release — and
-      # only then switch the list on.
+      # cannot live in tauri.windows.conf.json permanently: `tauri dev` on
+      # Windows would fail on files that only exist after a release build. So
+      # build the speech library in release first — its build script copies
+      # the DLLs into target/release — and only then switch the list on.
       - name: Stage the speech DLLs for the Windows installer
         if: matrix.platform == 'windows-latest'
         working-directory: src-tauri
@@ -122,20 +108,12 @@ jobs:
           cargo build --release -p sherpa-rs-sys
           cp tauri.windows-bundle.conf.json tauri.windows.conf.json
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build the installers
+        shell: bash
+        run: npm run package -- --bundles ${{ matrix.bundles }}
+
+      - name: Upload to the release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # linuxdeploy resolves the binary's shared libraries by scanning the
-          # loader path. The speech runtimes are not on it — they sit beside
-          # the binary and are found at run time through an $ORIGIN rpath — so
-          # without this the AppImage step fails with "Could not find
-          # dependency: libsherpa-onnx-c-api.so" after everything else has
-          # already built.
-          LD_LIBRARY_PATH: ${{ github.workspace }}/src-tauri/target/release
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "AIgraph ${{ github.ref_name }}"
-          releaseBody: "See CHANGELOG.md. Downloads are below."
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ inputs.tag }}" ${{ matrix.files }} --clobber
