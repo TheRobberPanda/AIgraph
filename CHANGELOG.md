@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.4
+
+- **The conversations rail's arrow sits on the rail's edge again.** It had
+  been left inside the rail since the rail got wider.
+
 ## 0.6.3
 
 - **A new chat starts clean.** New and Done go back to the screen the app
