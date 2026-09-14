@@ -6,17 +6,28 @@ import {
   setSessionArchived,
   type SessionSummary,
 } from "../lib/chat";
-import { onIdeasChanged, reextractSession } from "../lib/ideas";
+import {
+  extractionProgress,
+  extractSession,
+  onExtractionProgress,
+  onIdeasChanged,
+  reextractSession,
+} from "../lib/ideas";
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 import { repeatedAmong } from "../lib/similarity";
 import { ConversationFile } from "./Deep";
 import Sheet from "./Sheet";
 import MoveTo from "./MoveTo";
-import { IconArrowRight, IconBook } from "./Icons";
+import { IconArrowRight, IconBook, IconChevron } from "./Icons";
 import ContextMenu from "./ContextMenu";
 import Confirm from "./Confirm";
 import { isImportConversation } from "../lib/import";
+
+/** Not read for ideas yet: waiting, or being read now. */
+function isUnread(s: SessionSummary): boolean {
+  return !s.archived && (s.extract_state === "pending" || s.extract_state === "extracting");
+}
 
 /**
  * The folder's conversations, beside the one being had.
@@ -52,6 +63,17 @@ export default function ConversationsRail({
   const [moving, setMoving] = useState<number | null>(null);
   /** Archived ones are out of the way, not gone — one toggle brings them back. */
   const [showArchived, setShowArchived] = useState(false);
+  /** The conversation being read for ideas right now, from here or anywhere —
+   *  reading is one at a time, so every Read button waits on it. */
+  const [readingId, setReadingId] = useState<number | null>(null);
+  /** Whether "Not read yet" is unfolded, remembered between visits. */
+  const [unreadOpen, setUnreadOpen] = useState(() => {
+    try {
+      return localStorage.getItem("rail.unreadOpen") !== "0";
+    } catch {
+      return true;
+    }
+  });
 
   const refresh = useCallback(() => {
     listSessions(folder)
@@ -74,7 +96,44 @@ export default function ConversationsRail({
     };
   }, [refresh]);
 
-  const here = folders.find((f) => f.id === (folder ?? ROOT_FOLDER))?.name ?? "this folder";
+  useEffect(() => {
+    void extractionProgress()
+      .then((p) => setReadingId(p.running?.session_id ?? null))
+      .catch(() => {});
+    const p = onExtractionProgress((pr) => setReadingId(pr.running?.session_id ?? null));
+    return () => {
+      void p.then((un) => un());
+    };
+  }, []);
+
+  function toggleUnread() {
+    setUnreadOpen((v) => {
+      try {
+        localStorage.setItem("rail.unreadOpen", v ? "0" : "1");
+      } catch {
+        // Not remembered, which only costs a click next time.
+      }
+      return !v;
+    });
+  }
+
+  /** Read one conversation for ideas, and only that one. */
+  function readOne(id: number) {
+    setReadingId(id);
+    extractSession(id)
+      .then(() => {
+        // The progress event says so too; this covers a missed one, which
+        // would otherwise leave every Read button waiting.
+        setReadingId(null);
+        refresh();
+      })
+      .catch((e) => {
+        setReadingId(null);
+        setError(String(e));
+      });
+  }
+
+  const here =folders.find((f) => f.id === (folder ?? ROOT_FOLDER))?.name ?? "this folder";
   const shown = (sessions ?? []).filter((s) => s.archived === showArchived);
   const archivedCount = (sessions ?? []).filter((s) => s.archived).length;
   // Conversations that are likely the same thinking said twice, so the rail can
@@ -91,7 +150,32 @@ export default function ConversationsRail({
   );
   // Conversations that produced nothing. Worth clearing in one go, since they
   // are clutter that costs a read each to find out nothing was in them.
-  const emptyOnes = shown.filter((s) => s.idea_count === 0);
+  const emptyOnes = shown.filter((s) => s.idea_count === 0 && !isUnread(s));
+  // Not read yet goes first and on its own: "0 ideas" on one of these means
+  // nobody has looked, not that nothing was there. The archived view is
+  // one list, as before.
+  const unread = showArchived ? [] : shown.filter(isUnread);
+  const rest = showArchived ? shown : shown.filter((s) => !isUnread(s));
+  const sections = [
+    {
+      key: "unread",
+      list: unread,
+      open: unreadOpen,
+      head: (
+        <button className="rail-section-head" aria-expanded={unreadOpen} onClick={toggleUnread}>
+          <IconChevron className={unreadOpen ? "flip" : undefined} />
+          Not read yet ({unread.length})
+        </button>
+      ),
+    },
+    {
+      key: "rest",
+      list: rest,
+      open: true,
+      head:
+        unread.length > 0 ? <div className="rail-section-head static">Conversations</div> : null,
+    },
+  ].filter((sec) => sec.list.length > 0);
 
   async function deleteEmpty() {
     setConfirmEmpty(false);
@@ -136,8 +220,12 @@ export default function ConversationsRail({
       ) : shown.length === 0 ? (
         <p className="muted rail-empty">Nothing here yet.</p>
       ) : (
+        sections.map((sec) => (
+          <div key={sec.key} className="rail-section">
+            {sec.head}
+            {sec.open && (
         <ul className="rail-list">
-          {shown.map((s) => (
+          {sec.list.map((s) => (
             <li
               key={s.id}
               className="rail-item"
@@ -179,9 +267,15 @@ export default function ConversationsRail({
                   </span>
                   <span className="rail-meta">
                     {s.started_at ? longDate(s.started_at) : ""} · {s.turn_count} turns ·{" "}
-                    <span className={s.idea_count === 0 ? "rail-ideas none" : "rail-ideas"}>
-                      {s.idea_count} {s.idea_count === 1 ? "idea" : "ideas"}
-                    </span>
+                    {/* "0 ideas" on one nobody has read yet reads as a
+                        verdict that nothing was in it. */}
+                    {isUnread(s) ? (
+                      <span className="rail-ideas">not read yet</span>
+                    ) : (
+                      <span className={s.idea_count === 0 ? "rail-ideas none" : "rail-ideas"}>
+                        {s.idea_count} {s.idea_count === 1 ? "idea" : "ideas"}
+                      </span>
+                    )}
                   </span>
                 </button>
               )}
@@ -199,6 +293,16 @@ export default function ConversationsRail({
                   !
                 </button>
               )}
+              {isUnread(s) && (
+                <button
+                  className="btn rail-read"
+                  data-tip="Read this conversation for ideas now"
+                  disabled={readingId !== null}
+                  onClick={() => readOne(s.id)}
+                >
+                  {readingId === s.id ? "reading…" : "Read"}
+                </button>
+              )}
               <button
                 className="icon-btn rail-continue"
                 data-tip="Continue this conversation"
@@ -209,6 +313,9 @@ export default function ConversationsRail({
             </li>
           ))}
         </ul>
+            )}
+          </div>
+        ))
       )}
 
       {menu && (

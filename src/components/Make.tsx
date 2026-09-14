@@ -97,6 +97,11 @@ interface Exchange {
  * the box and sends it, so what happened is visible and arguable rather than
  * hidden behind a label — and the wording itself is editable in Settings.
  */
+/** Not read for ideas yet, so it has none to offer however it is picked. */
+function isUnread(c: { extract_state: string }): boolean {
+  return c.extract_state === "pending" || c.extract_state === "extracting";
+}
+
 export default function Make({ folder, compact = false }: { folder: number | null; /** In the advanced layout's narrow panel the titles fold away; simple mode shows them. */ compact?: boolean }) {
   const [packed, setPacked] = useState<Packed | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -153,6 +158,8 @@ export default function Make({ folder, compact = false }: { folder: number | nul
   const [picking, setPicking] = useState(false);
   /** A preset whose wording is being read before it is sent. */
   const [previewing, setPreviewing] = useState<Preset | null>(null);
+  /** Whether the picker's "Not read yet" group is unfolded. */
+  const [unreadOpen, setUnreadOpen] = useState(true);
   /** Writing a new instruction to sit beside the others. */
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -785,8 +792,27 @@ export default function Make({ folder, compact = false }: { folder: number | nul
                   {allOn ? "Deselect all" : "Select all"}
                 </button>
               </div>
+              {([
+                ["Not read yet", tree.filter(isUnread)],
+                ["Read", tree.filter((c) => !isUnread(c))],
+              ] as const).map(([label, list], gi, groups) =>
+                list.length === 0 ? null : (
+                  <div key={label} className="pick-group">
+                    {/* Headings only when both groups are there: one heading
+                        over the whole list says nothing. */}
+                    {groups.every(([, l]) => l.length > 0) && (
+                      <button
+                        className="rail-section-head"
+                        disabled={gi !== 0}
+                        onClick={() => setUnreadOpen((v) => !v)}
+                      >
+                        {gi === 0 && <IconChevron className={unreadOpen ? "flip" : undefined} />}
+                        {label} ({list.length})
+                      </button>
+                    )}
+                    {(gi !== 0 || unreadOpen) && (
               <ul className="pick-tree">
-                {tree.map((c) => {
+                {list.map((c) => {
                   const open = expanded.has(c.session_id);
                   const on = pickedSessions.has(c.session_id);
                   const some = c.ideas.some((i) => pickedIdeas.has(i.idea_id));
@@ -822,7 +848,9 @@ export default function Make({ folder, compact = false }: { folder: number | nul
                               c.ideas.length === 0 ? "row-meta idea-count none" : "row-meta idea-count"
                             }
                           >
-                            {c.ideas.length} {c.ideas.length === 1 ? "idea" : "ideas"}
+                            {isUnread(c)
+                              ? "not read yet"
+                              : `${c.ideas.length} ${c.ideas.length === 1 ? "idea" : "ideas"}`}
                           </span>
                         </button>
                       </div>
@@ -854,6 +882,10 @@ export default function Make({ folder, compact = false }: { folder: number | nul
                   );
                 })}
               </ul>
+                    )}
+                  </div>
+                ),
+              )}
             </div>
           )}
         </div>

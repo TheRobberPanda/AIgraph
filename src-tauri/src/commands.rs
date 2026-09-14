@@ -518,15 +518,16 @@ async fn rank_by_relevance(
         let mut guard = embedder_ready(state).await?;
         guard.as_mut()?.embed_one(message).ok()?
     };
-    let mut scored: Vec<(f32, usize)> = recent
-        .iter()
-        .enumerate()
-        .filter_map(|(i, (id, _))| vectors.get(id).map(|v| (crate::embed::cosine(&query, v), i)))
-        .filter(|(score, _)| *score >= RECALL_MIN_SCORE)
-        .collect();
-    // Stable, so ties keep their recency order.
-    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    Some(scored.into_iter().take(RECALL_PER_MESSAGE).map(|(_, i)| recent[i].clone()).collect())
+    // In recency order, so ties keep it: `nearest` sorts stably. The map's
+    // correlations rank with the same function.
+    let pool: Vec<(i64, Vec<f32>)> =
+        recent.iter().filter_map(|(id, _)| vectors.get(id).map(|v| (*id, v.clone()))).collect();
+    Some(
+        crate::embed::nearest(&query, &pool, RECALL_MIN_SCORE, RECALL_PER_MESSAGE)
+            .into_iter()
+            .filter_map(|(id, _)| recent.iter().find(|(r, _)| *r == id).cloned())
+            .collect(),
+    )
 }
 
 /// Titles sharing the most words with the message, for when there is no

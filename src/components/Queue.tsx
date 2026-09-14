@@ -116,7 +116,11 @@ export default function Queue({
     return (first ?? "").slice(0, 90) || `Conversation ${s.id}`;
   }
 
-  const archivedCount = (archivedRows?.length ?? 0) + (archivedIdeaRows?.length ?? 0);
+  // The tab counts conversations. Archived ideas are listed under it too, but
+  // they are not conversations set aside, and counting them made a folder
+  // with none look like it had a hundred.
+  const archivedCount = archivedRows?.length ?? 0;
+  const setAsideCount = archivedCount + (archivedIdeaRows?.length ?? 0);
 
   return (
     <Sheet onClose={onClose}>
@@ -274,15 +278,10 @@ export default function Queue({
               </div>
             )}
 
-            <p className="blurb">
-              Reading is a choice, not a consequence of finishing a
-              conversation. Setting one aside keeps it — under Archived, above —
-              without spending a model's time on it.
-            </p>
           </>
         ) : (
           <>
-            {archivedCount === 0 ? (
+            {setAsideCount === 0 ? (
               <p className="empty">Nothing set aside.</p>
             ) : (
               <ul className="list">
@@ -349,18 +348,18 @@ export default function Queue({
               </ul>
             )}
 
-            {archivedCount > 0 && (
+            {setAsideCount > 0 && (
               <div className="row queue-read-row">
                 <button className="btn" onClick={() => setBinningAll(true)}>
                   <IconTrash />
-                  Move all {archivedCount} to the trash bin
+                  Move all {setAsideCount} to the trash bin
                 </button>
               </div>
             )}
 
             {binningAll && (
               <Confirm
-                title={`Move all ${archivedCount} to the trash bin? You can restore them from there.`}
+                title={`Move all ${setAsideCount} to the trash bin? You can restore them from there.`}
                 danger
                 onConfirm={() => void binAll()}
                 onCancel={() => setBinningAll(false)}

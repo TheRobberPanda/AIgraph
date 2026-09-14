@@ -36,7 +36,7 @@ export interface GraphEdge {
   id?: number;
   source: string;
   target: string;
-  kind: "from" | "related" | "contradicts" | "category" | "answers";
+  kind: "from" | "related" | "recall" | "contradicts" | "category" | "answers";
   weight: number;
   /** Why the two relate, where reconciliation said so. Absent on structural
    *  edges and on links drawn from a similarity score alone. */

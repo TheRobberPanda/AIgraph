@@ -850,7 +850,7 @@ function dive(from: Pt, to: Pt): Pt {
 function routeLanes(placed: Placed, links: Link[], top: number) {
   const LANE = 14;
   const runs = links
-    .filter((l) => l.kind === "related" || l.kind === "contradicts")
+    .filter((l) => l.kind === "related" || l.kind === "recall" || l.kind === "contradicts")
     .map((l) => {
       const a = l.source as Node;
       const b = l.target as Node;
@@ -2062,7 +2062,7 @@ export default function Graph({
   const [panelSide, setPanelSide] = useState<"left" | "right">("right");
   const [panelWidth, setPanelWidth] = useState<number | null>(null);
   const [edgeHover, setEdgeHover] = useState<{
-    kind: "related" | "contradicts";
+    kind: "related" | "recall" | "contradicts";
     a: GraphNode;
     b: GraphNode;
     reasoning?: string;
@@ -2072,7 +2072,7 @@ export default function Graph({
   /** Mirror of `edgeHover` for the draw loop and the handlers, which read it
    *  every frame; the state is for the popup that renders it. */
   const edgeHoverRef = useRef<{
-    kind: "related" | "contradicts";
+    kind: "related" | "recall" | "contradicts";
     a: GraphNode;
     b: GraphNode;
     reasoning?: string;
@@ -2261,7 +2261,7 @@ export default function Graph({
         if (!!edge !== !!was) {
           if (edge) {
             const next = {
-              kind: edge.kind as "related" | "contradicts",
+              kind: edge.kind as "related" | "recall" | "contradicts",
               a: (edge.source as Node).data,
               b: (edge.target as Node).data,
               reasoning: edge.reasoning,
@@ -2338,7 +2338,8 @@ export default function Graph({
           ctx.globalAlpha = !focus || inFocus(a) || inFocus(b) ? 1 : 0.18;
           ctx.strokeStyle = link.kind === "contradicts" ? C.contradicts : C.related;
           ctx.lineWidth = 1.6 / k;
-          ctx.setLineDash([4 / k, 4 / k]);
+          // Recall's correlations are dotted: close in meaning, not judged.
+          ctx.setLineDash(link.kind === "recall" ? [1.5 / k, 3 / k] : [4 / k, 4 / k]);
           strokeRoute(ctx, route, 10);
         }
         ctx.setLineDash([]);
@@ -2429,7 +2430,7 @@ export default function Graph({
         ctx.fillStyle =
           link.kind === "contradicts"
             ? C.contradicts
-            : link.kind === "related"
+            : link.kind === "related" || link.kind === "recall"
               ? C.related
               : C.pollen;
         const now = performance.now() / 1000;
@@ -2519,7 +2520,7 @@ export default function Graph({
       ctx.strokeStyle =
         link.kind === "contradicts"
           ? C.contradicts
-          : link.kind === "related"
+          : link.kind === "related" || link.kind === "recall"
             ? C.related
             : link.kind === "answers"
               ? // The colour of the claim being answered, so the tether
@@ -2529,6 +2530,7 @@ export default function Graph({
               : C.category;
       ctx.lineWidth = link.kind === "category" ? 1 : link.kind === "answers" ? 1 : 1.6;
       if (link.kind === "related" || link.kind === "contradicts") ctx.setLineDash([4, 4]);
+      if (link.kind === "recall") ctx.setLineDash([1.5, 3]);
       if (link.kind === "category") ctx.setLineDash([1, 3]);
       ctx.beginPath();
       ctx.moveTo(sa.x, sa.y);
@@ -3788,7 +3790,7 @@ function chordClearance(
     const style = styleRef.current;
     const placed = placedRef.current;
     for (const link of linksRef.current) {
-      if (link.kind !== "related" && link.kind !== "contradicts") continue;
+      if (link.kind !== "related" && link.kind !== "recall" && link.kind !== "contradicts") continue;
       const na = link.source as Node;
       const nb = link.target as Node;
       // The drawn line, not the straight chord: a forest relation runs its
@@ -4034,7 +4036,7 @@ function chordClearance(
           if (edge) {
             const rect = canvasRef.current?.getBoundingClientRect();
             const next = {
-              kind: edge.kind as "related" | "contradicts",
+              kind: edge.kind as "related" | "recall" | "contradicts",
               a: (edge.source as Node).data,
               b: (edge.target as Node).data,
               reasoning: edge.reasoning,
@@ -4415,6 +4417,9 @@ function chordClearance(
               only moment anything knew. Absent on the older links, and on the
               ones drawn from a similarity score alone. */}
           {edgeHover.reasoning && <div className="relation-why">{edgeHover.reasoning}</div>}
+          {edgeHover.kind === "recall" && (
+            <div className="relation-why">Close in meaning, by the same measure recall uses in the chat.</div>
+          )}
           {/* Otherwise the line is only ever a complaint. Said here because
               this is the moment somebody is looking at it. */}
           {edgeHover.kind === "contradicts" && (

@@ -29,8 +29,7 @@ pub fn build(sample: &str, avoid: &[String]) -> String {
          Include that it must keep the person's own words and positions from the \
          conversations and not invent facts, quotes or opinions.\n",
     );
-    let avoid: Vec<&str> =
-        avoid.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect();
+    let avoid: Vec<&str> = avoid.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect();
     if !avoid.is_empty() {
         out.push_str(
             "\nThe result must NEVER do any of the following. Give them their own \

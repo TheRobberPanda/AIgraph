@@ -85,6 +85,30 @@ impl Embedder {
 /// fastembed returns normalized vectors, so this is a dot product — but the
 /// normalization is not re-checked here, and a caller storing vectors from
 /// elsewhere would silently get wrong numbers. Hence the explicit division.
+/// How close two ideas have to be for the map to draw a correlation, as the
+/// cosine of their claims. Higher than recall's floor for a message, because
+/// two claims score higher against each other than a chatty message does
+/// against a claim: at 0.3 almost every idea on a real map touched every
+/// other, and the lines stopped meaning anything.
+pub const MAP_CORRELATION_MIN: f32 = 0.42;
+
+/// Correlations drawn from any one idea, at most.
+pub const MAP_CORRELATION_PER_IDEA: usize = 2;
+
+/// The closest vectors in `pool` to `query`: at least `min`, best first, at
+/// most `k`. Stable, so ties keep the pool's order. Chat recall and the map's
+/// correlations both rank with this, so they agree on what "close" means.
+pub fn nearest(query: &[f32], pool: &[(i64, Vec<f32>)], min: f32, k: usize) -> Vec<(i64, f32)> {
+    let mut scored: Vec<(i64, f32)> = pool
+        .iter()
+        .map(|(id, v)| (*id, cosine(query, v)))
+        .filter(|(_, score)| *score >= min)
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    scored.truncate(k);
+    scored
+}
+
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -148,5 +172,27 @@ mod tests {
     fn packing_round_trips() {
         let v = vec![0.1, -0.25, 1e-7, 12345.6];
         assert_eq!(unpack(&pack(&v)), v);
+    }
+}
+
+#[cfg(test)]
+mod nearest_tests {
+    use super::nearest;
+
+    #[test]
+    fn nearest_keeps_the_closest_above_the_floor_best_first() {
+        let pool = vec![
+            (1, vec![1.0, 0.0]),
+            (2, vec![0.0, 1.0]),
+            (3, vec![0.9, 0.1]),
+            (4, vec![0.7, 0.7]),
+        ];
+        let got = nearest(&[1.0, 0.0], &pool, 0.5, 2);
+        let ids: Vec<i64> = got.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, vec![1, 3], "best first, capped at k");
+        assert!(
+            nearest(&[1.0, 0.0], &pool, 0.5, 10).iter().all(|(id, _)| *id != 2),
+            "below the floor is dropped"
+        );
     }
 }

@@ -127,6 +127,8 @@ pub struct Selectable {
     pub session_id: i64,
     pub title: String,
     pub started_at: String,
+    /// `pending` or `extracting` until it has been read for ideas.
+    pub extract_state: String,
     pub ideas: Vec<SelectableIdea>,
 }
 
@@ -1517,7 +1519,7 @@ impl Store {
     /// twice and then sends it twice.
     pub fn selectable(&self, folder: Option<i64>) -> Result<Vec<Selectable>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, COALESCE(s.title, ''), s.started_at, i.id, i.title, i.claim
+            "SELECT s.id, COALESCE(s.title, ''), s.started_at, i.id, i.title, i.claim, s.extract_state
              FROM sessions s
              LEFT JOIN evidence e ON e.session_id = s.id
              LEFT JOIN ideas i ON i.id = e.idea_id
@@ -1532,15 +1534,22 @@ impl Store {
                 r.get::<_, Option<i64>>(3)?,
                 r.get::<_, Option<String>>(4)?,
                 r.get::<_, Option<String>>(5)?,
+                r.get::<_, String>(6)?,
             ))
         })?;
 
         let mut out: Vec<Selectable> = Vec::new();
         let mut seen: std::collections::HashSet<i64> = Default::default();
         for row in rows {
-            let (id, title, started_at, idea_id, idea_title, claim) = row?;
+            let (id, title, started_at, idea_id, idea_title, claim, extract_state) = row?;
             if out.last().map(|c: &Selectable| c.session_id != id).unwrap_or(true) {
-                out.push(Selectable { session_id: id, title, started_at, ideas: Vec::new() });
+                out.push(Selectable {
+                    session_id: id,
+                    title,
+                    started_at,
+                    extract_state,
+                    ideas: Vec::new(),
+                });
             }
             let Some(idea_id) = idea_id else { continue };
             if !seen.insert(idea_id) {
@@ -1939,6 +1948,51 @@ impl Store {
                 }
             }
             prev = Some((id, category));
+        }
+
+        // Correlations, found the way chat recall finds ideas: by how close
+        // two claims' stored vectors are, not by a model's verdict. The judged
+        // "related" links above need a model to agree, only ever happen at
+        // extraction, and in practice almost never get written — so a map
+        // relying on them had no correlations at all. Stored vectors only, so
+        // no embedder has to be loaded to draw a map.
+        let pair = |a: i64, b: i64| (a.min(b), a.max(b));
+        let idea_of = |node: &str| node.strip_prefix('i').and_then(|n| n.parse::<i64>().ok());
+        let mut drawn: std::collections::HashSet<(i64, i64)> = g
+            .edges
+            .iter()
+            .filter(|e| e.kind == "related" || e.kind == "contradicts")
+            .filter_map(|e| Some(pair(idea_of(&e.source)?, idea_of(&e.target)?)))
+            .collect();
+        let pool: Vec<(i64, Vec<f32>)> = self
+            .ideas_with_embeddings()?
+            .into_iter()
+            .filter(|(id, _, _)| on_map_ideas.contains(id))
+            .map(|(id, _, v)| (id, v))
+            .collect();
+        for (id, v) in &pool {
+            // One more than wanted, since an idea is always nearest itself.
+            let near = embed::nearest(
+                v,
+                &pool,
+                embed::MAP_CORRELATION_MIN,
+                embed::MAP_CORRELATION_PER_IDEA + 1,
+            );
+            for (other, score) in
+                near.into_iter().filter(|(o, _)| o != id).take(embed::MAP_CORRELATION_PER_IDEA)
+            {
+                if !drawn.insert(pair(*id, other)) {
+                    continue;
+                }
+                g.edges.push(GraphEdge {
+                    source: format!("i{id}"),
+                    target: format!("i{other}"),
+                    id: None,
+                    kind: "recall".into(),
+                    weight: score,
+                    reasoning: None,
+                });
+            }
         }
 
         Ok(g)
@@ -4074,6 +4128,58 @@ mod tests {
         assert_eq!(to_idea.len(), 2);
         assert!(to_idea.contains(&format!("s{s1}")));
         assert!(to_idea.contains(&format!("s{s2}")));
+    }
+
+    #[test]
+    fn ideas_close_in_meaning_are_joined_by_a_recall_correlation() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut idea = |said: &str, title: &str| {
+            let (s, t) = session_with(&mut store, said);
+            store
+                .apply_decision(
+                    s,
+                    &verified(title, said, &t),
+                    &Decision::New { related: vec![] },
+                    "t",
+                    "m",
+                )
+                .unwrap()
+        };
+        let a = idea("latency is the problem", "Latency");
+        let b = idea("throughput matters more", "Throughput");
+        let c = idea("gardening is calming", "Gardening");
+        let unit = |pairs: &[(usize, f32)]| {
+            let mut v = vec![0.0f32; 384];
+            for &(i, x) in pairs {
+                v[i] = x;
+            }
+            v
+        };
+        store.set_embedding(a, &unit(&[(0, 1.0)])).unwrap();
+        store.set_embedding(b, &unit(&[(0, 0.9), (1, 0.1)])).unwrap();
+        store.set_embedding(c, &unit(&[(2, 1.0)])).unwrap();
+
+        let g = store.graph(None).unwrap();
+        let recall: Vec<_> = g.edges.iter().filter(|e| e.kind == "recall").collect();
+        assert_eq!(
+            recall.len(),
+            1,
+            "one line for the close pair, drawn once, none to the far idea"
+        );
+        let ends = [recall[0].source.clone(), recall[0].target.clone()];
+        assert!(ends.contains(&format!("i{a}")) && ends.contains(&format!("i{b}")));
+    }
+
+    #[test]
+    fn the_make_picker_knows_which_conversations_are_unread() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (s1, _) = session_with(&mut store, "latency is the problem");
+        assert_eq!(store.selectable(None).unwrap()[0].extract_state, "pending");
+        store
+            .conn
+            .execute("UPDATE sessions SET extract_state = 'done' WHERE id = ?1", [s1])
+            .unwrap();
+        assert_eq!(store.selectable(None).unwrap()[0].extract_state, "done");
     }
 
     #[test]

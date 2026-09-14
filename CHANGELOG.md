@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.2
+
+- **Correlations show on the map.** Ideas that are close in meaning are
+  joined by green dotted lines, found the same way recall finds earlier
+  ideas in the chat. The old correlation lines needed a model to judge each
+  pair, and almost never appeared.
+- **Unread conversations come first.** On the Think tab, conversations not
+  yet read for ideas sit in their own "Not read yet" section at the top of
+  the list, each with a Read button that reads just that one. The Make tab
+  lists them in their own group too.
+- **The Archived count counts conversations.** The digest window added every
+  archived idea to the number on its Archived tab.
+- **Remake a reply.** A button under the latest answer asks the same thing
+  again and replaces the answer.
+- **Write a Make prompt from an example.** In Settings, under Prompts, paste
+  text that reads the way you want, list what it must never do, and the
+  model writes the instruction.
+- **Brief mode answers every point.** A long message with several points
+  gets each one answered briefly, instead of a few sentences overall.
+- The version number is shown at the bottom right.
+
 ## 0.6.1
 
 - **The recall card shows the whole quote.** The text around the words an

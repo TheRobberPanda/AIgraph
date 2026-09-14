@@ -437,6 +437,7 @@ input, textarea {
 .statusbar .spacer { margin-left: auto; }
 .statusbar .busy-item { color: var(--accent); }
 .statusbar .read-cost { color: var(--faint); font-variant-numeric: tabular-nums; }
+.statusbar .app-version { color: var(--faint); font-variant-numeric: tabular-nums; }
 
 /* ---- Quick tune: one question under the call toggle, every second new chat ---- */
 .quick-tune {
@@ -753,6 +754,34 @@ input, textarea {
   color: var(--gold);
 }
 .rail-import-mark svg { width: 0.72rem; height: 0.72rem; }
+
+/* Conversations not read for ideas yet, first and folded on their own. */
+.rail-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.5rem 0.9rem 0.3rem;
+  background: none;
+  border: none;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  text-align: left;
+  cursor: pointer;
+}
+.rail-section-head:hover:not(:disabled) { color: var(--fg); }
+.rail-section-head.static,
+.rail-section-head:disabled { cursor: default; }
+.rail-section-head svg { width: 0.7rem; height: 0.7rem; }
+.rail-read {
+  align-self: center;
+  font-size: 0.7rem;
+  padding: 0.12rem 0.45rem;
+  white-space: nowrap;
+}
 .rail-meta {
   display: block;
   margin-top: 0.1rem;
@@ -2176,7 +2205,8 @@ blockquote {
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
-.relation-kind.related { color: var(--verdant); }
+.relation-kind.related,
+.relation-kind.recall { color: var(--verdant); }
 .relation-kind.contradicts { color: var(--danger); }
 .relation-side { font-size: 0.8rem; color: var(--fg); }
 .relation-why {

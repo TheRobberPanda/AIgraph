@@ -1998,6 +1998,7 @@ export default function App() {
             {wantsReasoning(error) ? REASONING_REFUSED : error}
           </span>
         )}
+        <span className="app-version">v{__APP_VERSION__}</span>
       </div>
     </main>
   );

@@ -27,6 +27,8 @@ export interface Selectable {
   session_id: number;
   title: string;
   started_at: string;
+  /** `pending` or `extracting` means not read for ideas yet. */
+  extract_state: string;
   ideas: { idea_id: number; title: string }[];
 }
 
