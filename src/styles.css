@@ -645,7 +645,7 @@ input, textarea {
    or pick one back up where it left off. */
 .rail {
   flex: none;
-  width: 15.5rem;
+  width: 17.05rem;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -776,12 +776,6 @@ input, textarea {
 .rail-section-head.static,
 .rail-section-head:disabled { cursor: default; }
 .rail-section-head svg { width: 0.7rem; height: 0.7rem; }
-.rail-read {
-  align-self: center;
-  font-size: 0.7rem;
-  padding: 0.12rem 0.45rem;
-  white-space: nowrap;
-}
 .rail-meta {
   display: block;
   margin-top: 0.1rem;
@@ -880,6 +874,39 @@ input, textarea {
   background: var(--surface);
 }
 .file-panel .deep-aside .taken-head { background: var(--surface); }
+/* Not read yet: the empty list is dimmed under a cover, and the one thing to
+   do about it sits on top in the accent colour. */
+.deep-file .deep-aside.covered { position: relative; overflow: hidden; }
+.read-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 1rem;
+  background: color-mix(in srgb, #000 55%, transparent);
+  border-radius: 8px;
+  text-align: center;
+}
+.read-now {
+  padding: 0.55rem 1.3rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 0 18px -4px var(--accent);
+  transition: filter 100ms ease, transform 100ms ease;
+}
+.read-now:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+.read-now:disabled { opacity: 0.75; cursor: default; }
+.read-cover-note { font-size: 0.78rem; color: #e8e8e8; opacity: 0.8; }
 /* The two scroll regions of a conversation's file scroll with the wheel;
    their tracks are not part of what is being read, and drew a gutter down
    both columns. */

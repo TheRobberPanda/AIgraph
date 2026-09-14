@@ -1970,29 +1970,21 @@ impl Store {
             .filter(|(id, _, _)| on_map_ideas.contains(id))
             .map(|(id, _, v)| (id, v))
             .collect();
-        for (id, v) in &pool {
-            // One more than wanted, since an idea is always nearest itself.
-            let near = embed::nearest(
-                v,
-                &pool,
-                embed::MAP_CORRELATION_MIN,
-                embed::MAP_CORRELATION_PER_IDEA + 1,
-            );
-            for (other, score) in
-                near.into_iter().filter(|(o, _)| o != id).take(embed::MAP_CORRELATION_PER_IDEA)
-            {
-                if !drawn.insert(pair(*id, other)) {
-                    continue;
-                }
-                g.edges.push(GraphEdge {
-                    source: format!("i{id}"),
-                    target: format!("i{other}"),
-                    id: None,
-                    kind: "recall".into(),
-                    weight: score,
-                    reasoning: None,
-                });
+        // Mutual and stand-out, not just nearest: see `embed::correlations`.
+        for (a, b, score) in
+            embed::correlations(&pool, embed::MAP_CORRELATION_MIN, embed::MAP_CORRELATION_PER_IDEA)
+        {
+            if !drawn.insert(pair(a, b)) {
+                continue;
             }
+            g.edges.push(GraphEdge {
+                source: format!("i{a}"),
+                target: format!("i{b}"),
+                id: None,
+                kind: "recall".into(),
+                weight: score,
+                reasoning: None,
+            });
         }
 
         Ok(g)

@@ -33,6 +33,7 @@ import { useUndoable } from "../lib/undo";
 import Markdown from "./Markdown";
 import { DocThumb, ExportFiles, MakeOutputs, OutputFile } from "./Outputs";
 import { IconSend, IconPlus, IconChevron, IconStop } from "./Icons";
+import { useRememberedOpen } from "../lib/remembered";
 
 /**
  * What each format asks the model to actually write.
@@ -159,7 +160,8 @@ export default function Make({ folder, compact = false }: { folder: number | nul
   /** A preset whose wording is being read before it is sent. */
   const [previewing, setPreviewing] = useState<Preset | null>(null);
   /** Whether the picker's "Not read yet" group is unfolded. */
-  const [unreadOpen, setUnreadOpen] = useState(true);
+  const [unreadOpen, toggleUnreadOpen] = useRememberedOpen("make.unreadOpen");
+  const [readOpen, toggleReadOpen] = useRememberedOpen("make.readOpen");
   /** Writing a new instruction to sit beside the others. */
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -795,22 +797,26 @@ export default function Make({ folder, compact = false }: { folder: number | nul
               {([
                 ["Not read yet", tree.filter(isUnread)],
                 ["Read", tree.filter((c) => !isUnread(c))],
-              ] as const).map(([label, list], gi, groups) =>
-                list.length === 0 ? null : (
+              ] as const).map(([label, list], gi, groups) => {
+                if (list.length === 0) return null;
+                // Headings only when both groups are there: one heading over
+                // the whole list says nothing — and with no heading there is
+                // nothing to unfold it by, so it is always open.
+                const both = groups.every(([, l]) => l.length > 0);
+                const groupOpen = !both || (gi === 0 ? unreadOpen : readOpen);
+                return (
                   <div key={label} className="pick-group">
-                    {/* Headings only when both groups are there: one heading
-                        over the whole list says nothing. */}
-                    {groups.every(([, l]) => l.length > 0) && (
+                    {both && (
                       <button
                         className="rail-section-head"
-                        disabled={gi !== 0}
-                        onClick={() => setUnreadOpen((v) => !v)}
+                        aria-expanded={groupOpen}
+                        onClick={gi === 0 ? toggleUnreadOpen : toggleReadOpen}
                       >
-                        {gi === 0 && <IconChevron className={unreadOpen ? "flip" : undefined} />}
+                        <IconChevron className={groupOpen ? "flip" : undefined} />
                         {label} ({list.length})
                       </button>
                     )}
-                    {(gi !== 0 || unreadOpen) && (
+                    {groupOpen && (
               <ul className="pick-tree">
                 {list.map((c) => {
                   const open = expanded.has(c.session_id);
@@ -884,8 +890,8 @@ export default function Make({ folder, compact = false }: { folder: number | nul
               </ul>
                     )}
                   </div>
-                ),
-              )}
+                );
+              })}
             </div>
           )}
         </div>

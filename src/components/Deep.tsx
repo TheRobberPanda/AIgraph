@@ -25,6 +25,7 @@ import {
   type IdeaView,
 } from "../lib/views";
 import { isImportConversation } from "../lib/import";
+import { extractionProgress, extractSession, onExtractionProgress } from "../lib/ideas";
 
 /**
  * Group a turn's runs into paragraphs.
@@ -358,8 +359,16 @@ export function ConversationFile({
   onTrace,
   onClose,
   repeatWarning = false,
+  unread = false,
+  onRead,
 }: {
   sessionId: number;
+  /** Not read for ideas yet: its empty list is covered by a button that
+   *  reads it, since "nothing was recorded" there would be a verdict nobody
+   *  has reached. */
+  unread?: boolean;
+  /** Told once a read started from here has finished. */
+  onRead?: () => void;
   /** An idea whose words to go straight to and flash — set when this file was
    *  opened by clicking that idea's quote somewhere else. A citation that
    *  drops you at the top of a transcript has not taken you anywhere. */
@@ -387,6 +396,35 @@ export function ConversationFile({
    * transcript to look at something that was meant to sit beside it.
    */
   const [openIdea, setOpenIdea] = useState<number | null>(null);
+  /** Read from here during this visit, so the cover can go. */
+  const [readHere, setReadHere] = useState(false);
+  /** Whichever conversation is being read right now, anywhere — reading is
+   *  one at a time, so this one waits on it. */
+  const [runningId, setRunningId] = useState<number | null>(null);
+  const covered = unread && !readHere;
+
+  useEffect(() => {
+    if (!covered) return;
+    void extractionProgress()
+      .then((p) => setRunningId(p.running?.session_id ?? null))
+      .catch(() => {});
+    const p = onExtractionProgress((pr) => setRunningId(pr.running?.session_id ?? null));
+    return () => {
+      void p.then((un) => un());
+    };
+  }, [covered]);
+
+  function readNow() {
+    setRunningId(sessionId);
+    extractSession(sessionId)
+      .then(() => {
+        setReadHere(true);
+        void load();
+        onRead?.();
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setRunningId(null));
+  }
 
   // One entry per idea, with the words it came from.
   const taken = (view?.turns ?? [])
@@ -508,10 +546,28 @@ export function ConversationFile({
   // the document view — an import is read back as a document, but what came out
   // of it is the same list either way.
   const aside = view && (
-    <aside className="deep-aside">
+    <aside className={covered ? "deep-aside covered" : "deep-aside"}>
       <h2 className="taken-head">Extracted ideas</h2>
+      {covered && (
+        <div className="read-cover">
+          <button
+            className="read-now"
+            disabled={runningId !== null}
+            onClick={readNow}
+          >
+            {runningId === sessionId
+              ? "Reading…"
+              : runningId !== null
+                ? "Another is being read…"
+                : "Read for ideas"}
+          </button>
+          <span className="read-cover-note">Not read yet — nothing has been taken from it.</span>
+        </div>
+      )}
       {taken.length === 0 ? (
-        <p className="blurb">Nothing was recorded from this one.</p>
+        <p className="blurb">
+          {covered ? "Not read for ideas yet." : "Nothing was recorded from this one."}
+        </p>
       ) : (
         <ul className="list" onMouseLeave={() => onTrace?.(null)}>
           {taken.map((t) => (

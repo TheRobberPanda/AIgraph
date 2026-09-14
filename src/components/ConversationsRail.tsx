@@ -6,13 +6,8 @@ import {
   setSessionArchived,
   type SessionSummary,
 } from "../lib/chat";
-import {
-  extractionProgress,
-  extractSession,
-  onExtractionProgress,
-  onIdeasChanged,
-  reextractSession,
-} from "../lib/ideas";
+import { onIdeasChanged, reextractSession } from "../lib/ideas";
+import { useRememberedOpen } from "../lib/remembered";
 import { listFolders, ROOT_FOLDER, type Folder } from "../lib/folders";
 import { longDate } from "../lib/format";
 import { repeatedAmong } from "../lib/similarity";
@@ -63,17 +58,9 @@ export default function ConversationsRail({
   const [moving, setMoving] = useState<number | null>(null);
   /** Archived ones are out of the way, not gone — one toggle brings them back. */
   const [showArchived, setShowArchived] = useState(false);
-  /** The conversation being read for ideas right now, from here or anywhere —
-   *  reading is one at a time, so every Read button waits on it. */
-  const [readingId, setReadingId] = useState<number | null>(null);
-  /** Whether "Not read yet" is unfolded, remembered between visits. */
-  const [unreadOpen, setUnreadOpen] = useState(() => {
-    try {
-      return localStorage.getItem("rail.unreadOpen") !== "0";
-    } catch {
-      return true;
-    }
-  });
+  /** Which sections are unfolded, remembered between visits and restarts. */
+  const [unreadOpen, toggleUnread] = useRememberedOpen("rail.unreadOpen");
+  const [restOpen, toggleRest] = useRememberedOpen("rail.restOpen");
 
   const refresh = useCallback(() => {
     listSessions(folder)
@@ -96,44 +83,7 @@ export default function ConversationsRail({
     };
   }, [refresh]);
 
-  useEffect(() => {
-    void extractionProgress()
-      .then((p) => setReadingId(p.running?.session_id ?? null))
-      .catch(() => {});
-    const p = onExtractionProgress((pr) => setReadingId(pr.running?.session_id ?? null));
-    return () => {
-      void p.then((un) => un());
-    };
-  }, []);
-
-  function toggleUnread() {
-    setUnreadOpen((v) => {
-      try {
-        localStorage.setItem("rail.unreadOpen", v ? "0" : "1");
-      } catch {
-        // Not remembered, which only costs a click next time.
-      }
-      return !v;
-    });
-  }
-
-  /** Read one conversation for ideas, and only that one. */
-  function readOne(id: number) {
-    setReadingId(id);
-    extractSession(id)
-      .then(() => {
-        // The progress event says so too; this covers a missed one, which
-        // would otherwise leave every Read button waiting.
-        setReadingId(null);
-        refresh();
-      })
-      .catch((e) => {
-        setReadingId(null);
-        setError(String(e));
-      });
-  }
-
-  const here =folders.find((f) => f.id === (folder ?? ROOT_FOLDER))?.name ?? "this folder";
+  const here = folders.find((f) => f.id === (folder ?? ROOT_FOLDER))?.name ?? "this folder";
   const shown = (sessions ?? []).filter((s) => s.archived === showArchived);
   const archivedCount = (sessions ?? []).filter((s) => s.archived).length;
   // Conversations that are likely the same thinking said twice, so the rail can
@@ -171,9 +121,15 @@ export default function ConversationsRail({
     {
       key: "rest",
       list: rest,
-      open: true,
+      // Alone, it has no heading to unfold it by, so it cannot stay folded.
+      open: restOpen || unread.length === 0,
       head:
-        unread.length > 0 ? <div className="rail-section-head static">Conversations</div> : null,
+        unread.length > 0 ? (
+          <button className="rail-section-head" aria-expanded={restOpen} onClick={toggleRest}>
+            <IconChevron className={restOpen ? "flip" : undefined} />
+            Conversations ({rest.length})
+          </button>
+        ) : null,
     },
   ].filter((sec) => sec.list.length > 0);
 
@@ -291,16 +247,6 @@ export default function ConversationsRail({
                   }}
                 >
                   !
-                </button>
-              )}
-              {isUnread(s) && (
-                <button
-                  className="btn rail-read"
-                  data-tip="Read this conversation for ideas now"
-                  disabled={readingId !== null}
-                  onClick={() => readOne(s.id)}
-                >
-                  {readingId === s.id ? "reading…" : "Read"}
                 </button>
               )}
               <button
@@ -428,6 +374,11 @@ export default function ConversationsRail({
           )}
           <ConversationFile
             sessionId={open}
+            unread={(() => {
+              const s = sessions?.find((x) => x.id === open);
+              return s ? isUnread(s) : false;
+            })()}
+            onRead={refresh}
             repeatWarning={openRepeat}
             onClose={() => {
               setOpen(null);
