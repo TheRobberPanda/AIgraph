@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1
+
+- **The recall card shows the whole quote.** The text around the words an
+  idea came from could fill the card and push the highlighted words out of
+  sight. The text on either side is now cut to about a line, so the quote is
+  always shown whole.
+- **The recall card links to its conversation.** Click the conversation's
+  name on the card to open it at the words the idea came from.
+- The release build passes its checks again: 0.6.0 failed the formatting
+  and lint steps.
+
 ## 0.6.0
 
 ### Nothing you type is lost
