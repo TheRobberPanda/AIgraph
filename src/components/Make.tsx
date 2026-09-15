@@ -35,6 +35,7 @@ import { useUndoable } from "../lib/undo";
 import Markdown from "./Markdown";
 import { DocThumb, ExportFiles, MakeOutputs, OutputFile } from "./Outputs";
 import { IconSend, IconPlus, IconChevron, IconStop } from "./Icons";
+import Mic from "./Mic";
 import { useRememberedOpen } from "../lib/remembered";
 
 /**
@@ -118,6 +119,13 @@ export default function Make({ folder, compact = false }: { folder: number | nul
   const [requestedOutput, setRequestedOutput] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const undoDraft = useUndoable(draft, setDraft);
+  /** The chat's dictation timeout — one setting, shared by every mic. */
+  const [micTimeout, setMicTimeout] = useState(0);
+  useEffect(() => {
+    void getSettings()
+      .then((s) => setMicTimeout(s.mic_timeout_seconds))
+      .catch(() => {});
+  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The ask that just failed, so an error that one switch fixes can also
@@ -741,6 +749,17 @@ export default function Make({ folder, compact = false }: { folder: number | nul
           }}
         />
         <div className="bar">
+          {/* As in the chat: what is heard goes into the box to be edited,
+              and nothing is sent until Ask is pressed. */}
+          <Mic
+            onPhrase={(text) => setDraft((d) => (d.trim() ? `${d.trimEnd()} ${text}` : text))}
+            disabled={!packed || busy || nothing}
+            timeoutSeconds={micTimeout}
+            onTimeoutChange={(secs) => {
+              setMicTimeout(secs);
+              void getSettings().then((s) => saveSettings({ ...s, mic_timeout_seconds: secs }));
+            }}
+          />
           {thread.length > 0 && (
             <button
               className="btn"

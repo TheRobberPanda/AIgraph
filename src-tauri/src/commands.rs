@@ -46,6 +46,10 @@ pub struct AppState {
     /// here is ever archived or extracted, so letting it share the live
     /// session would put a request for a TikTok script into the map.
     compose: Mutex<Option<Composing>>,
+    /// The Ask tab's conversation. Apart from `compose` for the same reason
+    /// that one is apart from the chat: asking a question of one folder must
+    /// not wipe out a document being made from another.
+    ask: Mutex<Option<Composing>>,
     /// One revision thread per output, for the AI chat on the outputs page.
     ///
     /// Kept apart from `compose` — that one reads a folder; these read one
@@ -89,8 +93,8 @@ pub struct AppState {
     /// Position in the current drain: (which one, how many). Read by the
     /// progress display so "digesting" can say how far along it is.
     queue_progress: Mutex<(i64, i64)>,
-    /// Set when someone asks a drain to stop. Checked between conversations —
-    /// stopping mid-read would waste the reading already done.
+    /// Set when someone asks a drain to stop. The read in flight is abandoned
+    /// on the spot and its conversation goes back to waiting, unread.
     stop_drain: Mutex<bool>,
     /// The archived conversation being added to, if one was picked back up.
     /// Set by `continue_session` and cleared when the session ends.
@@ -113,6 +117,7 @@ impl AppState {
         Ok(Self {
             conversation: Mutex::new(None),
             compose: Mutex::new(None),
+            ask: Mutex::new(None),
             output_threads: Mutex::new(Default::default()),
             active: Mutex::new(None),
             session: Mutex::new(None),
@@ -521,8 +526,7 @@ async fn rank_by_relevance(
         let mut guard = embedder_ready(state).await?;
         guard.as_mut()?.embed_one(message).ok()?
     };
-    // In recency order, so ties keep it: `nearest` sorts stably. The map's
-    // correlations rank with the same function.
+    // In recency order, so ties keep it: `nearest` sorts stably.
     let pool: Vec<(i64, Vec<f32>)> =
         recent.iter().filter_map(|(id, _)| vectors.get(id).map(|v| (*id, v.clone()))).collect();
     Some(
@@ -833,6 +837,9 @@ async fn persist_live(state: &AppState, pending: Option<&str>) {
     };
     if let Err(e) = crate::journal::save_live(&state.data_dir, &live) {
         tracing::error!(error = %e, "could not write the live journal");
+    }
+    if let Err(e) = crate::journal::save_readable(&state.data_dir, &live) {
+        tracing::error!(error = %e, "could not write the readable conversation");
     }
 }
 
@@ -1236,15 +1243,59 @@ pub async fn extract_session_inner(
     pin_language_for(state).await;
     let known = state.store.lock().await.categories_in(folder).unwrap_or_default();
 
-    let result =
-        crate::extract::run_with_progress(extractor.as_ref(), &turns, &known, &move |phase| {
-            let _ = tx.send(phase);
-        })
-        .await;
+    // Raced against the Stop button rather than left to run out. Waiting for
+    // the read to finish made Stop mean "in a few minutes", and dropping the
+    // future drops the request, which closes the connection — so the model
+    // stops working too, not just this end listening.
+    let on_phase = move |phase| {
+        let _ = tx.send(phase);
+    };
+    let mut work = std::pin::pin!(crate::extract::run_with_progress(
+        extractor.as_ref(),
+        &turns,
+        &known,
+        &on_phase
+    ));
+    let result = loop {
+        tokio::select! {
+            r = &mut work => break Some(r),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(150)) => {
+                if *state.stop_drain.lock().await {
+                    break None;
+                }
+            }
+        }
+    };
 
     pump.abort();
     let seconds = (chrono::Utc::now() - started).num_seconds();
     let cost = crate::llm::meter::read();
+
+    let Some(result) = result else {
+        // Back to waiting, with no error: nothing went wrong, and nothing was
+        // saved — ideas are only written once a read completes.
+        let _ = state.store.lock().await.set_extract_state(session_id, "pending", None);
+        tracing::info!(session = session_id, seconds, "read stopped part way; left unread");
+        finish(
+            app,
+            state,
+            LastExtraction {
+                session_id,
+                ideas: 0,
+                dropped: 0,
+                definitions: 0,
+                drop_rate: 0.0,
+                seconds,
+                retried: false,
+                cost,
+                read_per_second: cost.read_per_second(),
+                wrote_per_second: cost.wrote_per_second(),
+                error: Some(STOPPED_READ.to_string()),
+            },
+        )
+        .await;
+        return Err(STOPPED_READ.to_string());
+    };
 
     match result {
         Ok(extraction) => {
@@ -1332,6 +1383,10 @@ pub async fn extract_session_inner(
     }
 }
 
+/// What a read ends with when Stop was pressed during it. Matched on, by the
+/// drain and by the frontend, to tell a stop from a failure.
+pub const STOPPED_READ: &str = "stopped before it finished";
+
 /// How far through the queue a drain is, so progress is a fraction rather than
 /// a spinner. Reset when a drain finishes.
 async fn set_queue(state: &AppState, index: i64, total: i64) {
@@ -1375,6 +1430,7 @@ pub async fn extract_session(
     session_id: i64,
 ) -> Result<usize, String> {
     let _guard = state.drain_lock.lock().await;
+    *state.stop_drain.lock().await = false;
     let n = extract_session_inner(&app, &state, session_id).await?;
     let _ = app.emit("ideas:changed", ());
     Ok(n)
@@ -1428,6 +1484,12 @@ pub async fn extraction_trouble(
         }
     }
     Ok(stalled)
+}
+
+/// What has come back over the wire lately, for the debug log in Settings.
+#[tauri::command]
+pub fn wire_log() -> crate::llm::wire::Snapshot {
+    crate::llm::wire::snapshot()
 }
 
 /// The conversations waiting to be read, in the order they will be.
@@ -1493,9 +1555,7 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
     let total = pending.len() as i64;
     let now = chrono::Utc::now();
     for (i, id) in pending.into_iter().enumerate() {
-        // Between conversations, not during one — stopping mid-read would
-        // throw away the reading already done and leave nothing to show for
-        // the minutes it took.
+        // A stop during a read ends that read too; see `extract_session_inner`.
         if *state.stop_drain.lock().await {
             tracing::info!("digest stopped between conversations");
             break;
@@ -1518,6 +1578,8 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
                 // like the ideas never arriving at all.
                 let _ = app.emit("ideas:changed", ());
             }
+            // Stopped, not failed: no backoff, and nothing after it is read.
+            Err(e) if e == STOPPED_READ => break,
             Err(e) => {
                 let mut backoff = state.retry_after.lock().await;
                 let attempts = backoff.get(&id).map(|(_, n)| *n).unwrap_or(0) + 1;
@@ -1567,7 +1629,8 @@ pub async fn drain_pending(app: &tauri::AppHandle, state: &AppState) {
     release_model_if_asked(state).await;
 }
 
-/// Ask a running digest to stop after the conversation it is on.
+/// Stop a running digest now. The conversation being read goes back to
+/// waiting, unread, and nothing after it is started.
 #[tauri::command]
 pub async fn stop_digest(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     // Only when there is something to stop. The flags are cleared by the drain
@@ -2276,6 +2339,7 @@ pub async fn reset_runtime(
     settings.runtime = crate::settings::Runtime::default();
     settings.save(&state.data_dir).map_err(|e| e.to_string())?;
     crate::settings::pin_language(settings.language);
+    crate::llm::openai_compat::pin_router_routes(settings.router_routes.clone());
     *state.settings.lock().await = settings.clone();
     let _ = app.emit("settings:changed", settings.clone());
     Ok(settings)
@@ -2423,8 +2487,9 @@ pub async fn start_embedded(
 #[tauri::command]
 pub async fn search_models(
     query: String,
+    sort: Option<String>,
 ) -> Result<Vec<crate::llm::embedded::RemoteModel>, String> {
-    crate::llm::embedded::search(&query).await
+    crate::llm::embedded::search(&query, sort.as_deref().unwrap_or("downloads")).await
 }
 
 /// The GGUF files inside one repository, with their sizes.
@@ -2466,6 +2531,257 @@ pub async fn stop_embedded(state: State<'_, AppState>) -> Result<(), String> {
 /// to extract from.
 pub async fn stop_embedded_now(state: &AppState) -> Result<(), String> {
     state.embedded.lock().await.stop()
+}
+
+// ------------------------------------------------ the book writer (beta)
+
+/// A folder's name, as its book calls it.
+fn folder_label(store: &Store, folder: Option<i64>) -> String {
+    match folder {
+        None => "Everything".to_string(),
+        Some(id) => store
+            .folders()
+            .ok()
+            .and_then(|fs| fs.into_iter().find(|f| f.id == id).map(|f| f.name))
+            .unwrap_or_else(|| "Ideas".to_string()),
+    }
+}
+
+async fn book_material(
+    state: &AppState,
+    folder: Option<i64>,
+) -> Result<(String, Vec<crate::writer::Material>), String> {
+    let store = state.store.lock().await;
+    let rows = store.book_rows(folder).map_err(|e| e.to_string())?;
+    Ok((folder_label(&store, folder), crate::writer::gather(rows)))
+}
+
+/// The extraction model: planning, summaries and the check are structured
+/// calls in a context of their own, which is what it is for.
+async fn book_planner(state: &AppState) -> Result<std::sync::Arc<dyn IdeaExtractor>, String> {
+    state
+        .extractor
+        .lock()
+        .await
+        .as_ref()
+        .map(|e| e.provider.clone())
+        .ok_or_else(|| "no model is loaded — pick one first".to_string())
+}
+
+/// The ideas closest in meaning to what a chapter is about, among the book's.
+/// None when nothing is embedded or the embedder will not load — the chapter
+/// still has the ideas its outline gave it.
+async fn book_recall(
+    state: &AppState,
+    query: &str,
+    material: &[crate::writer::Material],
+) -> Option<Vec<i64>> {
+    let ids: std::collections::HashSet<i64> = material.iter().map(|m| m.id).collect();
+    let pool: Vec<(i64, Vec<f32>)> = state
+        .store
+        .lock()
+        .await
+        .ideas_with_embeddings()
+        .ok()?
+        .into_iter()
+        .filter(|(id, _, _)| ids.contains(id))
+        .map(|(id, _, v)| (id, v))
+        .collect();
+    if pool.is_empty() {
+        return None;
+    }
+    let q = {
+        let mut guard = embedder_ready(state).await?;
+        guard.as_mut()?.embed_one(query).ok()?
+    };
+    Some(crate::embed::nearest(&q, &pool, 0.3, 8).into_iter().map(|(id, _)| id).collect())
+}
+
+#[derive(Clone, Serialize)]
+struct BookToken {
+    index: usize,
+    text: String,
+}
+
+/// The folder's book as it was left, or an empty one.
+#[tauri::command]
+pub async fn book_project(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+) -> Result<crate::writer::Project, String> {
+    Ok(crate::writer::load(&crate::writer::path_for(&state.data_dir, folder)))
+}
+
+/// Keep the person's own edits: titles, plans, rewritten text.
+#[tauri::command]
+pub async fn book_save(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+    project: crate::writer::Project,
+) -> Result<(), String> {
+    crate::writer::save(&crate::writer::path_for(&state.data_dir, folder), &project)
+}
+
+/// Plan the book: chapters, what each argues, and which ideas it draws on.
+#[tauri::command]
+pub async fn book_outline(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+    brief: String,
+    chapters: usize,
+) -> Result<crate::writer::Project, String> {
+    let (name, material) = book_material(&state, folder).await?;
+    if material.is_empty() {
+        return Err("nothing to write from — this folder has no recorded ideas yet".into());
+    }
+    let model = book_planner(&state).await?;
+    pin_language_for(&state).await;
+    let prompt = crate::writer::outline_prompt(&name, &brief, chapters.clamp(2, 24), &material);
+    let raw =
+        model.judge(&prompt, crate::writer::outline_schema()).await.map_err(|e| e.to_string())?;
+    let reply: crate::writer::OutlineReply = crate::writer::parse_json(&raw)
+        .map_err(|e| format!("the outline came back unreadable: {e}"))?;
+    let path = crate::writer::path_for(&state.data_dir, folder);
+    let mut project =
+        crate::writer::apply_outline(crate::writer::load(&path), &brief, reply, &material);
+    if project.chapters.is_empty() {
+        return Err("the model returned no chapters".into());
+    }
+    if project.title.is_empty() {
+        project.title = name;
+    }
+    crate::writer::save(&path, &project)?;
+    Ok(project)
+}
+
+/// Write one chapter, streamed as `book:token`, then summarise it for the
+/// chapters after it.
+///
+/// Written by the chat model — the same one Make uses, with the reasoning
+/// setting it follows — because this is long prose, not a structured call.
+#[tauri::command]
+pub async fn book_write_chapter(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+    index: usize,
+) -> Result<crate::writer::Project, String> {
+    let path = crate::writer::path_for(&state.data_dir, folder);
+    let project = crate::writer::load(&path);
+    let chapter = project.chapters.get(index).ok_or("no such chapter")?.clone();
+    let (_, material) = book_material(&state, folder).await?;
+    let recorded = state.store.lock().await.folder_turns(folder).map_err(|e| e.to_string())?;
+    let voice = crate::writer::voice_samples(&recorded, 6000);
+
+    // What the outline gave it, then what recall finds for it.
+    let mut picked = chapter.ideas.clone();
+    let query = format!("{}\n{}", chapter.title, chapter.plan);
+    for id in book_recall(&state, &query, &material).await.unwrap_or_default() {
+        if !picked.contains(&id) {
+            picked.push(id);
+        }
+    }
+    let find = |id: &i64| material.iter().find(|m| m.id == *id);
+    let for_chapter: Vec<&crate::writer::Material> = picked.iter().filter_map(find).collect();
+    let mut before: Vec<i64> = Vec::new();
+    for id in project.chapters[..index].iter().flat_map(|c| c.used.iter()) {
+        if !before.contains(id) && !picked.contains(id) {
+            before.push(*id);
+        }
+    }
+    let used_before: Vec<&crate::writer::Material> = before.iter().filter_map(find).collect();
+
+    pin_language_for(&state).await;
+    let (provider, model) = {
+        let active = state.active.lock().await;
+        let a = active.as_ref().ok_or("no model selected yet")?;
+        (a.provider.clone(), a.model.clone())
+    };
+    let request = crate::llm::ChatRequest {
+        model,
+        messages: vec![crate::llm::types::Message {
+            role: crate::llm::types::Role::User,
+            content: crate::writer::chapter_prompt(&project, index, &for_chapter, &used_before),
+        }],
+        system: Some(crate::writer::chapter_system(&voice)),
+        reasoning: state.settings.lock().await.reasoning,
+    };
+    let emitter = app.clone();
+    let text = provider
+        .chat_stream(&request, &move |kind, piece| {
+            if matches!(kind, ChunkKind::Content) {
+                let _ = emitter.emit("book:token", BookToken { index, text: piece.to_string() });
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("the model wrote nothing for this chapter".into());
+    }
+
+    // The summary is what the next chapter is given of this one. A failed
+    // summary is not a failed chapter: its opening stands in.
+    let (summary, used) = match book_planner(&state).await {
+        Ok(m) => match m
+            .judge(
+                &crate::writer::summary_prompt(&chapter.title, &text, &for_chapter),
+                crate::writer::summary_schema(),
+            )
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|raw| crate::writer::parse_json::<crate::writer::SummaryReply>(&raw))
+        {
+            Ok(r) if !r.summary.trim().is_empty() => {
+                (r.summary.trim().to_string(), crate::writer::used_ids(&r.used, &picked))
+            }
+            _ => (crate::writer::rough_summary(&text), picked.clone()),
+        },
+        Err(_) => (crate::writer::rough_summary(&text), picked.clone()),
+    };
+
+    // Re-read before writing back: the rest of the book is whatever is saved
+    // now, not what it was when this chapter started minutes ago.
+    let mut project = crate::writer::load(&path);
+    let c =
+        project.chapters.get_mut(index).ok_or("the chapter was removed while it was written")?;
+    c.text = text;
+    c.summary = summary;
+    c.used = used;
+    crate::writer::save(&path, &project)?;
+    Ok(project)
+}
+
+/// Read the book against its outline and say where it drifted.
+#[tauri::command]
+pub async fn book_check(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+) -> Result<Vec<crate::writer::Note>, String> {
+    let project = crate::writer::load(&crate::writer::path_for(&state.data_dir, folder));
+    if project.chapters.iter().all(|c| c.text.is_empty()) {
+        return Err("nothing written yet to check".into());
+    }
+    let model = book_planner(&state).await?;
+    pin_language_for(&state).await;
+    let raw = model
+        .judge(&crate::writer::check_prompt(&project), crate::writer::check_schema())
+        .await
+        .map_err(|e| e.to_string())?;
+    let reply: crate::writer::CheckReply = crate::writer::parse_json(&raw)
+        .map_err(|e| format!("the check came back unreadable: {e}"))?;
+    Ok(reply.notes)
+}
+
+/// The written chapters, as one markdown file.
+#[tauri::command]
+pub async fn book_export(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+    path: String,
+) -> Result<(), String> {
+    let project = crate::writer::load(&crate::writer::path_for(&state.data_dir, folder));
+    std::fs::write(&path, crate::writer::markdown(&project)).map_err(|e| format!("{path}: {e}"))
 }
 
 /// Set a folder's ideas as a book and write it to `path`.
@@ -2797,6 +3113,177 @@ pub async fn compose_send(
             Err(e.to_string())
         }
     }
+}
+
+// ------------------------------------------------------------ asking things
+
+fn folder_name(store: &Store, folder: Option<i64>) -> String {
+    match folder {
+        None => "Everything".to_string(),
+        Some(id) => store
+            .folders()
+            .ok()
+            .and_then(|fs| fs.into_iter().find(|f| f.id == id).map(|f| f.name))
+            .unwrap_or_else(|| "this folder".to_string()),
+    }
+}
+
+/// Load a folder's conversations for the Ask tab. Kept when it is already
+/// loaded for this folder with questions asked, like `compose_load`.
+#[tauri::command]
+pub async fn ask_load(
+    state: State<'_, AppState>,
+    folder: Option<i64>,
+) -> Result<crate::compose::Packed, String> {
+    if let Some(c) = state.ask.lock().await.as_ref() {
+        if c.folder == folder && !c.messages.is_empty() {
+            return Ok(c.packed.clone());
+        }
+    }
+    let (conversations, name) = {
+        let store = state.store.lock().await;
+        (store.folder_turns(folder).map_err(|e| e.to_string())?, folder_name(&store, folder))
+    };
+    pin_language_for(&state).await;
+    let packed = crate::compose::pack(&conversations);
+    let system = crate::compose::ask_system_prompt(&name, &packed);
+    let out = packed.clone();
+    *state.ask.lock().await = Some(Composing { folder, system, messages: Vec::new(), packed });
+    Ok(out)
+}
+
+/// Forget the Ask tab's questions, keeping the folder loaded.
+#[tauri::command]
+pub async fn ask_clear(state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(c) = state.ask.lock().await.as_mut() {
+        c.messages.clear();
+    }
+    Ok(())
+}
+
+/// Ask a question of the loaded folder. Streams on `ask:token`.
+#[tauri::command]
+pub async fn ask_send(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    question: String,
+) -> Result<String, String> {
+    let question = question.trim().to_string();
+    if question.is_empty() {
+        return Err("nothing asked".into());
+    }
+    let (provider, model) = {
+        let active = state.active.lock().await;
+        let a = active.as_ref().ok_or("no model selected yet")?;
+        (a.provider.clone(), a.model.clone())
+    };
+    let request = {
+        let mut held = state.ask.lock().await;
+        let c = held.as_mut().ok_or("no folder loaded yet")?;
+        c.messages.push(crate::llm::types::Message {
+            role: crate::llm::types::Role::User,
+            content: question,
+        });
+        crate::llm::ChatRequest {
+            model,
+            messages: c.messages.clone(),
+            system: Some(c.system.clone()),
+            reasoning: state.settings.lock().await.reasoning,
+        }
+    };
+
+    let emitter = app.clone();
+    let streamed = provider
+        .chat_stream(&request, &move |kind, text| {
+            let event = match kind {
+                ChunkKind::Content => "ask:token",
+                ChunkKind::Reasoning => "ask:reasoning",
+            };
+            let _ = emitter.emit(event, Token { text: text.to_string() });
+        })
+        .await;
+
+    let mut held = state.ask.lock().await;
+    match streamed {
+        Ok(reply) => {
+            if let Some(c) = held.as_mut() {
+                c.messages.push(crate::llm::types::Message {
+                    role: crate::llm::types::Role::Assistant,
+                    content: reply.clone(),
+                });
+            }
+            Ok(reply)
+        }
+        Err(e) => {
+            if let Some(c) = held.as_mut() {
+                c.messages.pop();
+            }
+            Err(e.to_string())
+        }
+    }
+}
+
+/// What the OpenRouter key has spent, in US dollars, and what it may spend.
+#[derive(Serialize, Default)]
+pub struct RouterCredits {
+    pub used: f64,
+    /// Credit bought, or the key's own limit. None where neither is set.
+    pub total: Option<f64>,
+    /// This key's spending today, this week and this month (UTC).
+    pub daily: Option<f64>,
+    pub weekly: Option<f64>,
+    pub monthly: Option<f64>,
+    /// The key's own limit and what is left of it, where it has one.
+    pub limit: Option<f64>,
+    pub limit_remaining: Option<f64>,
+    /// What this app spent per model since it started.
+    pub by_model: Vec<crate::llm::wire::ModelSpend>,
+}
+
+/// The account's credit, from OpenRouter. None when no key is saved.
+#[tauri::command]
+pub async fn openrouter_credits() -> Result<Option<RouterCredits>, String> {
+    let Some(key) = crate::secrets::get(crate::secrets::OPENROUTER) else {
+        return Ok(None);
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let get = |path: &'static str| {
+        client.get(format!("{}{path}", detect::OPENROUTER_HOST)).bearer_auth(&key).send()
+    };
+    let read = |path: &'static str| {
+        let req = get(path);
+        async move {
+            let v =
+                req.await.ok()?.error_for_status().ok()?.json::<serde_json::Value>().await.ok()?;
+            Some(v["data"].clone())
+        }
+    };
+    // Both at once. `/credits` is the account's balance, which some keys may
+    // not read; `/key` is this key's own spending, by period and against its
+    // own limit, which every key can.
+    let (account, key_info) = tokio::join!(read("/credits"), read("/key"));
+    if account.is_none() && key_info.is_none() {
+        return Err("OpenRouter would not say what was spent".into());
+    }
+    let k = key_info.unwrap_or_default();
+    let mut c = RouterCredits {
+        used: k["usage"].as_f64().unwrap_or(0.0),
+        total: k["limit"].as_f64(),
+        daily: k["usage_daily"].as_f64(),
+        weekly: k["usage_weekly"].as_f64(),
+        monthly: k["usage_monthly"].as_f64(),
+        limit: k["limit"].as_f64(),
+        limit_remaining: k["limit_remaining"].as_f64(),
+        by_model: crate::llm::wire::spending(),
+    };
+    if let Some(used) = account.as_ref().and_then(|a| a["total_usage"].as_f64()) {
+        c.used = used;
+        c.total = account.as_ref().and_then(|a| a["total_credits"].as_f64());
+    }
+    Ok(Some(c))
 }
 
 /// Write one answer out. Whatever it is, it is text.
@@ -3289,6 +3776,7 @@ pub async fn save_settings(
     let previous = state.settings.lock().await.clone();
     settings.save(&state.data_dir).map_err(|e| e.to_string())?;
     crate::settings::pin_language(settings.language);
+    crate::llm::openai_compat::pin_router_routes(settings.router_routes.clone());
     *state.settings.lock().await = settings.clone();
 
     // Only when *this* save changed the choice.
@@ -3605,6 +4093,11 @@ pub struct OpenRouterModel {
     pub modalities: Vec<String>,
     pub tools: bool,
     pub reasoning: bool,
+    /// Reasoning cannot be turned off, so every answer waits on the thinking.
+    pub reasoning_mandatory: bool,
+    /// Takes a JSON schema and holds its answer to it. Reads depend on this:
+    /// without it the ideas come back as prose the parser has to dig out of.
+    pub structured: bool,
 }
 
 const OPENROUTER_CATALOG_URL: &str = "https://openrouter.ai/api/v1/models";
@@ -3645,6 +4138,15 @@ pub async fn openrouter_catalog(
         architecture: Architecture,
         #[serde(default)]
         supported_parameters: Vec<String>,
+        /// `{"mandatory": true, "default_effort": "max", …}` where the model
+        /// cannot be asked not to think.
+        #[serde(default)]
+        reasoning: Option<ReasoningMeta>,
+    }
+    #[derive(Deserialize, Default)]
+    struct ReasoningMeta {
+        #[serde(default)]
+        mandatory: bool,
     }
     #[derive(Deserialize, Default)]
     struct Pricing {
@@ -3679,7 +4181,9 @@ pub async fn openrouter_catalog(
         .data
         .into_iter()
         .map(|m| OpenRouterModel {
+            reasoning_mandatory: m.reasoning.as_ref().is_some_and(|r| r.mandatory),
             tools: m.supported_parameters.iter().any(|p| p == "tools"),
+            structured: m.supported_parameters.iter().any(|p| p == "structured_outputs"),
             reasoning: m
                 .supported_parameters
                 .iter()
@@ -3698,8 +4202,196 @@ pub async fn openrouter_catalog(
         })
         .collect();
 
+    // Known up front, so a reasoning-only model is asked at low effort from
+    // its first request instead of being refused once to find out.
+    for m in models.iter().filter(|m| m.reasoning_mandatory) {
+        crate::llm::openai_compat::know_reasoning_mandatory(&m.id);
+    }
+
     *state.router_catalog.lock().await = Some((std::time::Instant::now(), models.clone()));
     Ok(models)
+}
+
+/// One provider serving a model through OpenRouter. Prices per million tokens.
+#[derive(Serialize)]
+pub struct RouterEndpoint {
+    /// What a request names to be sent here — "novita/bf16".
+    pub tag: String,
+    pub provider: String,
+    pub quantization: String,
+    pub context: i64,
+    pub max_output: Option<i64>,
+    pub prompt_price: f64,
+    pub completion_price: f64,
+    /// Share of requests answered over the last 30 minutes, 0–100.
+    pub uptime: Option<f64>,
+    /// OpenRouter's own figures, where it publishes them — mostly it does not,
+    /// which is what `openrouter_measure` is for.
+    pub latency_ms: Option<f64>,
+    pub throughput: Option<f64>,
+    pub tools: bool,
+    pub structured: bool,
+}
+
+/// Every provider OpenRouter can send this model to. Public; no key needed.
+#[tauri::command]
+pub async fn openrouter_endpoints(model: String) -> Result<Vec<RouterEndpoint>, String> {
+    #[derive(Deserialize)]
+    struct Listing {
+        data: Data,
+    }
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        endpoints: Vec<Entry>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        #[serde(default)]
+        tag: String,
+        #[serde(default)]
+        provider_name: String,
+        #[serde(default)]
+        quantization: Option<String>,
+        #[serde(default)]
+        context_length: i64,
+        #[serde(default)]
+        max_completion_tokens: Option<i64>,
+        #[serde(default)]
+        pricing: Pricing,
+        #[serde(default)]
+        uptime_last_30m: Option<f64>,
+        #[serde(default)]
+        latency_last_30m: serde_json::Value,
+        #[serde(default)]
+        throughput_last_30m: serde_json::Value,
+        #[serde(default)]
+        supported_parameters: Vec<String>,
+    }
+    #[derive(Deserialize, Default)]
+    struct Pricing {
+        #[serde(default)]
+        prompt: String,
+        #[serde(default)]
+        completion: String,
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let listing: Listing = client
+        .get(format!("{OPENROUTER_CATALOG_URL}/{model}/endpoints"))
+        .send()
+        .await
+        .map_err(|e| format!("OpenRouter did not answer: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("OpenRouter refused the provider list: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("OpenRouter's provider list did not parse: {e}"))?;
+
+    let per_million = |s: &str| s.parse::<f64>().unwrap_or(0.0) * 1_000_000.0;
+    // A bare number, or percentiles of which the median is the honest one.
+    let stat = |v: &serde_json::Value| v.as_f64().or_else(|| v.get("p50").and_then(|x| x.as_f64()));
+    let mut endpoints: Vec<RouterEndpoint> = listing
+        .data
+        .endpoints
+        .into_iter()
+        .map(|e| RouterEndpoint {
+            tools: e.supported_parameters.iter().any(|p| p == "tools"),
+            structured: e
+                .supported_parameters
+                .iter()
+                .any(|p| p == "structured_outputs" || p == "response_format"),
+            latency_ms: stat(&e.latency_last_30m),
+            throughput: stat(&e.throughput_last_30m),
+            uptime: e.uptime_last_30m,
+            prompt_price: per_million(&e.pricing.prompt),
+            completion_price: per_million(&e.pricing.completion),
+            max_output: e.max_completion_tokens,
+            context: e.context_length,
+            quantization: e.quantization.unwrap_or_default(),
+            provider: e.provider_name,
+            tag: e.tag,
+        })
+        .collect();
+    endpoints.sort_by(|a, b| a.prompt_price.total_cmp(&b.prompt_price));
+    Ok(endpoints)
+}
+
+/// How one provider did on a short request, timed from here.
+#[derive(Serialize)]
+pub struct RouteMeasure {
+    pub ok: bool,
+    /// From sending to the first token back.
+    pub first_token_ms: Option<u64>,
+    /// Roughly four characters a token, over the stream after the first token.
+    pub tokens_per_s: Option<f64>,
+    pub error: Option<String>,
+}
+
+/// Time one OpenRouter provider on one model: a short real request sent there
+/// and nowhere else. OpenRouter does not publish latency or throughput for
+/// most providers, and a figure measured from this machine is the one that
+/// matters to it anyway.
+#[tauri::command]
+pub async fn openrouter_measure(model: String, tag: String) -> Result<RouteMeasure, String> {
+    use std::time::{Duration, Instant};
+    let provider = crate::llm::openai_compat::OpenAiCompat::new(
+        detect::OPENROUTER_HOST,
+        model.clone(),
+        crate::secrets::get(crate::secrets::OPENROUTER),
+        "openrouter",
+    )
+    .only_through(tag);
+    let request = crate::llm::ChatRequest {
+        model,
+        messages: vec![crate::llm::types::Message {
+            role: crate::llm::types::Role::User,
+            // Long enough to time a stream, short enough to cost nothing.
+            content: "Count from one to sixty in words, separated by commas. Nothing else."
+                .to_string(),
+        }],
+        system: None,
+        reasoning: false,
+    };
+    // First chunk, last chunk, and characters after the first.
+    let seen: std::sync::Mutex<(Option<Instant>, Option<Instant>, usize)> =
+        std::sync::Mutex::new((None, None, 0));
+    let on_chunk = |_: ChunkKind, text: &str| {
+        let now = Instant::now();
+        let mut s = seen.lock().unwrap_or_else(|p| p.into_inner());
+        if s.0.is_none() {
+            s.0 = Some(now);
+        } else {
+            s.2 += text.len();
+        }
+        s.1 = Some(now);
+    };
+    let started = Instant::now();
+    let waited =
+        tokio::time::timeout(Duration::from_secs(60), provider.chat_stream(&request, &on_chunk))
+            .await;
+    let (first, last, chars) = *seen.lock().unwrap_or_else(|p| p.into_inner());
+    let first_token_ms = first.map(|f| (f - started).as_millis() as u64);
+    let tokens_per_s = match (first, last) {
+        (Some(f), Some(l)) if l > f && chars > 0 => {
+            Some(chars as f64 / 4.0 / (l - f).as_secs_f64())
+        }
+        _ => None,
+    };
+    let failed = |error: String| RouteMeasure {
+        ok: false,
+        first_token_ms: None,
+        tokens_per_s: None,
+        error: Some(error),
+    };
+    Ok(match waited {
+        Ok(Ok(_)) => RouteMeasure { ok: true, first_token_ms, tokens_per_s, error: None },
+        Ok(Err(e)) => failed(e.to_string()),
+        Err(_) => failed("no answer within 60s".to_string()),
+    })
 }
 
 // ------------------------------------------------- the Make tab's exports

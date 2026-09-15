@@ -120,7 +120,12 @@ pub async fn probe_local() -> Vec<Detected> {
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .map(|id| ModelInfo { id, loaded: Some(true), kind: ModelKind::Chat })
+                .map(|id| ModelInfo {
+                    id,
+                    loaded: Some(true),
+                    kind: ModelKind::Chat,
+                    details: Default::default(),
+                })
                 .collect(),
         };
         Some(Detected { kind: LocalKind::Embedded, host: EMBEDDED_HOST.to_string(), models })
@@ -136,13 +141,7 @@ pub async fn probe_local() -> Vec<Detected> {
         Some(Detected {
             kind: LocalKind::Ollama,
             host: OLLAMA_HOST.to_string(),
-            models: o
-                .list_models()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|id| ModelInfo { id, loaded: None, kind: ModelKind::Chat })
-                .collect(),
+            models: o.list_models_detailed().await.unwrap_or_default(),
         })
     };
 
@@ -159,7 +158,12 @@ pub async fn probe_local() -> Vec<Detected> {
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .map(|id| ModelInfo { id, loaded: None, kind: ModelKind::Chat })
+                .map(|id| ModelInfo {
+                    id,
+                    loaded: None,
+                    kind: ModelKind::Chat,
+                    details: Default::default(),
+                })
                 .collect(),
         };
         Some(Detected { kind: LocalKind::LmStudio, host: LM_STUDIO_HOST.to_string(), models })
@@ -182,7 +186,12 @@ pub async fn probe_local() -> Vec<Detected> {
             host: "https://api.anthropic.com".to_string(),
             models: models
                 .into_iter()
-                .map(|id| ModelInfo { id, loaded: None, kind: ModelKind::Chat })
+                .map(|id| ModelInfo {
+                    id,
+                    loaded: None,
+                    kind: ModelKind::Chat,
+                    details: Default::default(),
+                })
                 .collect(),
         })
     };
@@ -200,7 +209,12 @@ pub async fn probe_local() -> Vec<Detected> {
             host: OPENROUTER_HOST.to_string(),
             models: models
                 .into_iter()
-                .map(|id| ModelInfo { id, loaded: None, kind: ModelKind::Chat })
+                .map(|id| ModelInfo {
+                    id,
+                    loaded: None,
+                    kind: ModelKind::Chat,
+                    details: Default::default(),
+                })
                 .collect(),
         })
     };
@@ -214,7 +228,12 @@ pub async fn probe_local() -> Vec<Detected> {
             host: String::new(),
             models: ANTHROPIC_MODELS
                 .iter()
-                .map(|id| ModelInfo { id: id.to_string(), loaded: None, kind: ModelKind::Chat })
+                .map(|id| ModelInfo {
+                    id: id.to_string(),
+                    loaded: None,
+                    kind: ModelKind::Chat,
+                    details: Default::default(),
+                })
                 .collect(),
         })
     };

@@ -53,13 +53,41 @@ fn url_for(repo: &str, file: &str) -> String {
 }
 
 /// One model on Hugging Face, as the search returns it.
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RemoteModel {
     pub id: String,
-    #[serde(default)]
     pub downloads: u64,
-    #[serde(default)]
     pub likes: u64,
+    pub last_modified: Option<String>,
+    /// Parameter count, from the GGUF header.
+    pub params: Option<u64>,
+    /// Longest context the weights were trained for.
+    pub context: Option<u64>,
+    pub architecture: Option<String>,
+}
+
+/// The search's JSON, before it is flattened into a `RemoteModel`.
+#[derive(serde::Deserialize)]
+struct HubModel {
+    id: String,
+    #[serde(default)]
+    downloads: u64,
+    #[serde(default)]
+    likes: u64,
+    #[serde(default, rename = "lastModified")]
+    last_modified: Option<String>,
+    #[serde(default)]
+    gguf: Option<HubGguf>,
+}
+
+#[derive(serde::Deserialize)]
+struct HubGguf {
+    #[serde(default)]
+    total: Option<u64>,
+    #[serde(default)]
+    context_length: Option<u64>,
+    #[serde(default)]
+    architecture: Option<String>,
 }
 
 /// One GGUF inside a repository.
@@ -73,17 +101,46 @@ pub struct RemoteFile {
 ///
 /// Live rather than a list baked into the app: a hardcoded catalogue is out of
 /// date the week after it ships, and this is a field that moves monthly.
-pub async fn search(query: &str) -> Result<Vec<RemoteModel>, String> {
-    let url = format!(
-        "https://huggingface.co/api/models?filter=gguf&search={}&sort=downloads&direction=-1&limit=25",
-        urlencode(query)
+///
+/// `sort` is one of the picker's orders; anything else is most downloaded.
+/// The `gguf` expansion is what carries the parameter count and context
+/// window, so the list can show them without opening each repository.
+pub async fn search(query: &str, sort: &str) -> Result<Vec<RemoteModel>, String> {
+    let sort = match sort {
+        "trending" => "trendingScore",
+        "likes" => "likes",
+        "updated" => "lastModified",
+        _ => "downloads",
+    };
+    let mut url = format!(
+        "https://huggingface.co/api/models?filter=gguf&sort={sort}&direction=-1&limit=60\
+         &expand[]=downloads&expand[]=likes&expand[]=lastModified&expand[]=gguf"
     );
-    reqwest::get(&url)
+    if !query.trim().is_empty() {
+        url.push_str(&format!("&search={}", urlencode(query.trim())));
+    }
+    let found = reqwest::get(&url)
         .await
         .map_err(|e| e.to_string())?
-        .json::<Vec<RemoteModel>>()
+        .json::<Vec<HubModel>>()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(found
+        .into_iter()
+        .map(|m| {
+            let g =
+                m.gguf.unwrap_or(HubGguf { total: None, context_length: None, architecture: None });
+            RemoteModel {
+                id: m.id,
+                downloads: m.downloads,
+                likes: m.likes,
+                last_modified: m.last_modified,
+                params: g.total,
+                context: g.context_length,
+                architecture: g.architecture,
+            }
+        })
+        .collect())
 }
 
 /// The GGUF files in one repository, largest last.
@@ -148,6 +205,8 @@ pub struct EmbeddedStatus {
     pub running: bool,
     /// Every GGUF already on disk, so one of several can be chosen.
     pub downloaded: Vec<String>,
+    /// Bytes on disk for each of `downloaded`, in the same order.
+    pub downloaded_bytes: Vec<u64>,
     pub download_gb: f32,
     pub host: String,
 }
@@ -456,6 +515,11 @@ impl Embedded {
             vulkan_available: vulkan_available(),
             cuda_available: cuda_available(),
             running: self.is_running(),
+            downloaded_bytes: self
+                .downloaded()
+                .iter()
+                .map(|f| std::fs::metadata(self.root.join(f)).map(|m| m.len()).unwrap_or(0))
+                .collect(),
             downloaded: self.downloaded(),
             download_gb: APPROX_BYTES as f32 / 1e9,
             host: self.host(),

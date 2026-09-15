@@ -811,10 +811,14 @@ impl Store {
     /// Extraction runs after archiving and can be interrupted by a crash or a
     /// quit, so it is driven off this queue rather than fired once and hoped
     /// for. Nothing the user said should be lost to bad timing.
+    /// Oldest first — except that anything which already failed goes last, so
+    /// one conversation a model keeps choking on is not the first thing every
+    /// digest spends its time on while the rest wait behind it.
     pub fn pending_extraction(&self) -> Result<Vec<i64>> {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM sessions WHERE extract_state IN ('pending','extracting')
-               AND archived = 0 ORDER BY id",
+               AND archived = 0
+             ORDER BY COALESCE(extract_error, '') <> '', id",
         )?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
@@ -1930,8 +1934,6 @@ impl Store {
         // the link would be dropped, stranding the rest of the subject.
         let on_map_ideas: std::collections::HashSet<i64> =
             g.nodes.iter().filter_map(|n| n.idea_id).collect();
-        let category_of: std::collections::HashMap<i64, String> =
-            by_category.iter().cloned().collect();
         let mut prev: Option<(i64, String)> = None;
         for (id, category) in by_category {
             if !on_map_ideas.contains(&id) {
@@ -1950,68 +1952,6 @@ impl Store {
                 }
             }
             prev = Some((id, category));
-        }
-
-        // Correlations, found the way chat recall finds ideas: by how close
-        // two claims' stored vectors are, not by a model's verdict. The judged
-        // "related" links above need a model to agree, only ever happen at
-        // extraction, and in practice almost never get written — so a map
-        // relying on them had no correlations at all. Stored vectors only, so
-        // no embedder has to be loaded to draw a map.
-        let pair = |a: i64, b: i64| (a.min(b), a.max(b));
-        let idea_of = |node: &str| node.strip_prefix('i').and_then(|n| n.parse::<i64>().ok());
-        let mut drawn: std::collections::HashSet<(i64, i64)> = g
-            .edges
-            .iter()
-            .filter(|e| e.kind == "related" || e.kind == "contradicts")
-            .filter_map(|e| Some(pair(idea_of(&e.source)?, idea_of(&e.target)?)))
-            .collect();
-        let pool: Vec<(i64, Vec<f32>)> = self
-            .ideas_with_embeddings()?
-            .into_iter()
-            .filter(|(id, _, _)| on_map_ideas.contains(id))
-            .map(|(id, _, v)| (id, v))
-            .collect();
-        // The conversations each idea came from. An idea can be traced to
-        // more than one.
-        let mut sessions_of: std::collections::HashMap<i64, Vec<&str>> =
-            std::collections::HashMap::new();
-        for e in g.edges.iter().filter(|e| e.kind == "from") {
-            if let Some(id) = idea_of(&e.target) {
-                sessions_of.entry(id).or_default().push(e.source.as_str());
-            }
-        }
-        // A correlation is only worth a line when nothing else on the map
-        // already says the two belong together. Ideas from the same
-        // conversation share its hub, and ideas on the same subject share a
-        // colour; what is left is "you said something like this elsewhere".
-        let already_joined = |a: i64, b: i64| {
-            let same_subject = matches!(
-                (category_of.get(&a), category_of.get(&b)),
-                (Some(x), Some(y)) if x == y
-            );
-            let same_conversation = match (sessions_of.get(&a), sessions_of.get(&b)) {
-                (Some(x), Some(y)) => x.iter().any(|s| y.contains(s)),
-                _ => false,
-            };
-            same_subject || same_conversation
-        };
-        let mut found =
-            embed::correlations(&pool, embed::MAP_CORRELATION_MIN, embed::MAP_CORRELATION_PER_IDEA);
-        found.retain(|&(a, b, _)| !already_joined(a, b));
-        // Mutual and stand-out, not just nearest: see `embed::correlations`.
-        for (a, b, score) in found {
-            if !drawn.insert(pair(a, b)) {
-                continue;
-            }
-            g.edges.push(GraphEdge {
-                source: format!("i{a}"),
-                target: format!("i{b}"),
-                id: None,
-                kind: "recall".into(),
-                weight: score,
-                reasoning: None,
-            });
         }
 
         collapse_repeated_ideas(&mut g);
@@ -4064,6 +4004,21 @@ mod tests {
         assert!(store.pending_extraction().unwrap().is_empty());
     }
 
+    #[test]
+    fn a_conversation_that_failed_waits_behind_the_rest() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut ids = vec![];
+        for _ in 0..3 {
+            ids.push(
+                store
+                    .archive_session(&transcript::render(&convo()), "m", Utc::now(), None)
+                    .unwrap(),
+            );
+        }
+        store.set_extract_state(ids[0], "pending", Some("model returned nothing")).unwrap();
+        assert_eq!(store.pending_extraction().unwrap(), vec![ids[1], ids[2], ids[0]]);
+    }
+
     /// A re-read keeps what it can no longer support, and a later read that
     /// supports it again revives the same idea rather than making a second one.
     #[test]
@@ -4456,118 +4411,6 @@ mod tests {
         assert_eq!(store.trash_list().unwrap().len(), 1);
         store.trash_empty().unwrap();
         assert!(store.trash_list().unwrap().is_empty());
-    }
-
-    #[test]
-    fn ideas_close_in_meaning_are_joined_by_a_recall_correlation() {
-        let mut store = Store::open_in_memory().unwrap();
-        let mut idea = |said: &str, title: &str| {
-            let (s, t) = session_with(&mut store, said);
-            store
-                .apply_decision(
-                    s,
-                    &verified(title, said, &t),
-                    &Decision::New { related: vec![] },
-                    "t",
-                    "m",
-                )
-                .unwrap()
-        };
-        let a = idea("latency is the problem", "Latency");
-        let b = idea("throughput matters more", "Throughput");
-        let c = idea("gardening is calming", "Gardening");
-        let unit = |pairs: &[(usize, f32)]| {
-            let mut v = vec![0.0f32; 384];
-            for &(i, x) in pairs {
-                v[i] = x;
-            }
-            v
-        };
-        store.set_embedding(a, &unit(&[(0, 1.0)])).unwrap();
-        store.set_embedding(b, &unit(&[(0, 0.9), (1, 0.1)])).unwrap();
-        store.set_embedding(c, &unit(&[(2, 1.0)])).unwrap();
-        // Different subjects, or the colour already joins them.
-        for (id, cat) in [(a, "speed"), (b, "capacity"), (c, "garden")] {
-            store
-                .conn
-                .execute("UPDATE ideas SET category = ?1 WHERE id = ?2", params![cat, id])
-                .unwrap();
-        }
-
-        let g = store.graph(None).unwrap();
-        let recall: Vec<_> = g.edges.iter().filter(|e| e.kind == "recall").collect();
-        assert_eq!(
-            recall.len(),
-            1,
-            "one line for the close pair, drawn once, none to the far idea"
-        );
-        let ends = [recall[0].source.clone(), recall[0].target.clone()];
-        assert!(ends.contains(&format!("i{a}")) && ends.contains(&format!("i{b}")));
-    }
-
-    #[test]
-    fn no_correlation_between_ideas_the_map_already_joins() {
-        let unit = |pairs: &[(usize, f32)]| {
-            let mut v = vec![0.0f32; 384];
-            for &(i, x) in pairs {
-                v[i] = x;
-            }
-            v
-        };
-        let recalls = |store: &Store| {
-            store.graph(None).unwrap().edges.iter().filter(|e| e.kind == "recall").count()
-        };
-
-        // Same subject, different conversations.
-        let mut store = Store::open_in_memory().unwrap();
-        let mut idea = |said: &str, title: &str| {
-            let (s, t) = session_with(&mut store, said);
-            store
-                .apply_decision(
-                    s,
-                    &verified(title, said, &t),
-                    &Decision::New { related: vec![] },
-                    "t",
-                    "m",
-                )
-                .unwrap()
-        };
-        let a = idea("latency is the problem", "Latency");
-        let b = idea("throughput matters more", "Throughput");
-        store.set_embedding(a, &unit(&[(0, 1.0)])).unwrap();
-        store.set_embedding(b, &unit(&[(0, 0.9), (1, 0.1)])).unwrap();
-        assert_eq!(recalls(&store), 0, "both are \"testing\": the colour says it");
-
-        // Different subjects, same conversation.
-        let mut store = Store::open_in_memory().unwrap();
-        let (s, t) = session_with(&mut store, "latency is the problem, throughput matters more");
-        let a = store
-            .apply_decision(
-                s,
-                &verified("Latency", "latency is the problem", &t),
-                &Decision::New { related: vec![] },
-                "t",
-                "m",
-            )
-            .unwrap();
-        let b = store
-            .apply_decision(
-                s,
-                &verified("Throughput", "throughput matters more", &t),
-                &Decision::New { related: vec![] },
-                "t",
-                "m",
-            )
-            .unwrap();
-        for (id, cat) in [(a, "speed"), (b, "capacity")] {
-            store
-                .conn
-                .execute("UPDATE ideas SET category = ?1 WHERE id = ?2", params![cat, id])
-                .unwrap();
-        }
-        store.set_embedding(a, &unit(&[(0, 1.0)])).unwrap();
-        store.set_embedding(b, &unit(&[(0, 0.9), (1, 0.1)])).unwrap();
-        assert_eq!(recalls(&store), 0, "one conversation: its hub says it");
     }
 
     #[test]

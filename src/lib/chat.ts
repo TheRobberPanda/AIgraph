@@ -68,6 +68,23 @@ export interface ModelInfo {
   /** null when the server doesn't report load state (Ollama, remote APIs). */
   loaded: boolean | null;
   kind: "chat" | "embedding";
+  /** What the server says about the weights. Each server fills a different part. */
+  details?: ModelDetails;
+}
+
+export interface ModelDetails {
+  /** Bytes on disk. */
+  size: number | null;
+  /** "8B", "70.6B". */
+  params: string | null;
+  /** "Q4_K_M", "4bit". */
+  quant: string | null;
+  /** Longest context the weights support, in tokens. */
+  context: number | null;
+  family: string | null;
+  /** "gguf", "mlx". */
+  format: string | null;
+  vision: boolean;
 }
 
 export interface Detected {

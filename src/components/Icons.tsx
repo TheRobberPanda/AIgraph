@@ -32,6 +32,25 @@ export function IconThink(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** A question mark in a bubble — Ask. */
+export function IconAsk(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M4 5h16v11H8l-4 4V5z" />
+      <path d="M10 8.6a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6.9v.4M12 13.6v.1" />
+    </Base>
+  );
+}
+
+/** A pulse line — the debug log of what the model sends back. */
+export function IconPulse(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Base {...props}>
+      <path d="M3 12h4l2.5-6 4 12 2.5-6h5" />
+    </Base>
+  );
+}
+
 /** Three linked nodes — the Map. */
 export function IconMap(props: SVGProps<SVGSVGElement>) {
   return (

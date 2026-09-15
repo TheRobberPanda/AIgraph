@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import RuntimePanel from "./Runtime";
 import { modelName } from "../lib/format";
 import { IconCheck, IconDownload, IconPlay, IconStop } from "./Icons";
@@ -22,6 +22,7 @@ import {
   modelFiles,
   downloadModelFile,
   type EmbeddedStatus,
+  type ModelSort,
   type RemoteModel,
   type RemoteFile,
   testModel,
@@ -52,6 +53,133 @@ type Source = "local" | "lmstudio" | "ollama" | "cloud";
 const isRemote = (kind: string) =>
   kind === "anthropic" || kind === "claudecli" || kind === "openrouter";
 
+/** The hover on a model that cannot answer without reasoning first. */
+const REASONING_ONLY_TIP =
+  "Reasoning-only: this model always thinks before it answers and cannot be told not to. " +
+  "It is asked to think as little as it allows, but replies and reads are still slow — " +
+  "often minutes each. Pick one without this mark if speed matters.";
+
+/** Why the tick matters, said once where the tick is. */
+const STRUCTURED_TIP =
+  "Structured output: the model is handed the exact JSON shape a read needs and held to it. " +
+  "Without it the ideas come back as prose the app has to dig out, and more reads fail.";
+
+/**
+ * Whether a model can be held to a JSON schema. A tick where it can, a quiet
+ * dash where it cannot, nothing where nobody said.
+ */
+function StructuredMark({ on }: { on: boolean | undefined }) {
+  if (on === undefined) return <span className="model-json" />;
+  return (
+    <span
+      className={on ? "model-json yes" : "model-json no"}
+      data-tip={on ? STRUCTURED_TIP : "No structured output — reads rely on the model writing JSON unprompted."}
+    >
+      {on ? <IconCheck /> : "–"}
+    </span>
+  );
+}
+
+/** The hover on the second mark: no schema, so reads are more fragile. */
+const NO_JSON_TIP =
+  "No structured output: this model cannot be held to the JSON shape a read needs. " +
+  "It is asked for JSON and usually gives it, but more reads fail or come back thin.";
+
+/** Which cloud providers take a schema. OpenRouter says per model. */
+const PROVIDER_STRUCTURED: Record<string, boolean | undefined> = {
+  anthropic: true,
+  claudecli: false,
+};
+
+const gb = (bytes: number) =>
+  bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+
+/** 32768 is "32k" to everyone who has typed it; 200000 is "200k". */
+const windowLabel = (tokens: number) =>
+  tokens >= 1_000_000
+    ? `${Math.round(tokens / 10000) / 100}M`
+    : `${Math.round(tokens / (tokens % 1024 === 0 ? 1024 : 1000))}k`;
+
+/** 12834876 is "12.8M"; 1016 is "1k". */
+const countLabel = (n: number) =>
+  n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`;
+
+/** How long ago, in the one unit that matters at that distance. */
+function agoLabel(iso: string | null | undefined): string {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) return "";
+  const days = (Date.now() - t) / 864e5;
+  if (days < 1) return "today";
+  if (days < 30) return `${Math.round(days)}d`;
+  if (days < 365) return `${Math.round(days / 30)}mo`;
+  return `${(days / 365).toFixed(1)}y`;
+}
+
+/** A repository's size in billions: the GGUF header's count, else its name. */
+function billionsOf(m: RemoteModel): number | null {
+  if (m.params) return m.params / 1e9;
+  const named = fileFacts(m.id).params;
+  return named ? parseFloat(named) : null;
+}
+
+const billionsLabel = (b: number | null) =>
+  b === null ? "" : `${b >= 10 ? Math.round(b) : b.toFixed(1).replace(/\.0$/, "")}B`;
+
+/** What a GGUF file name gives away: its size class and quantisation. */
+function fileFacts(name: string): { params: string | null; quant: string | null } {
+  const params = name.match(/(?:^|[-_.])(\d+(?:\.\d+)?[bB])(?=[-_.]|$)/)?.[1]?.toUpperCase() ?? null;
+  const quant =
+    name.match(/(?:^|[-_.])(I?Q\d(?:_[A-Z0-9]+)*|BF16|F16|F32)(?=[-_.]|$)/i)?.[1]?.toUpperCase() ?? null;
+  return { params, quant };
+}
+
+/** The facts column shared by every local row. */
+function LocalFacts({
+  params,
+  quant,
+  size,
+  context,
+  extra,
+}: {
+  params?: string | null;
+  quant?: string | null;
+  size?: number | null;
+  context?: number | null;
+  extra?: string | null;
+}) {
+  return (
+    <span className="model-facts">
+      {extra && <span className="model-kind">{extra}</span>}
+      <span className="model-params" data-tip="Parameters">{params ?? ""}</span>
+      <span className="model-quant" data-tip="Quantisation — lower bits, smaller and rougher">
+        {quant ?? ""}
+      </span>
+      <span className="model-size" data-tip="On disk">{size ? gb(size) : ""}</span>
+      <span className="model-window" data-tip="Longest context it supports">
+        {context ? windowLabel(context) : ""}
+      </span>
+      {/* llama.cpp, LM Studio and Ollama all hold a reply to a schema. */}
+      <StructuredMark on={true} />
+    </span>
+  );
+}
+
+/** Column names over a facts column, so the numbers say what they are. */
+function FactsHead({ cols }: { cols: string[] }) {
+  return (
+    <div className="model-facts-head" aria-hidden="true">
+      <span className="model-name" />
+      <span className="model-facts">
+        {cols.map((c) => (
+          <span key={c} className={`model-${c}`}>
+            {c === "json" ? "JSON" : c === "window" ? "ctx" : c === "dl" ? "downloads" : c}
+          </span>
+        ))}
+      </span>
+    </div>
+  );
+}
+
 const SOURCES: { id: Source; label: string }[] = [
   { id: "local", label: "Local" },
   { id: "lmstudio", label: "LM Studio" },
@@ -69,7 +197,7 @@ const SOURCES: { id: Source; label: string }[] = [
  * asking the question twice on screen was asking almost nobody's question,
  * and answering it once is what people were doing anyway.
  */
-export default function Models() {
+export default function Models({ initialSource }: { initialSource?: Source } = {}) {
   const [servers, setServers] = useState<Detected[]>([]);
   const [active, setActive] = useState<ActiveModels | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +205,7 @@ export default function Models() {
   const [keys, setKeys] = useState<KeyStatus | null>(null);
   const [keyInput, setKeyInput] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
-  const [source, setSource] = useState<Source>("local");
+  const [source, setSource] = useState<Source>(initialSource ?? "local");
   /** Narrowing the cloud lists — OpenRouter alone exposes hundreds. */
   const [cloudQuery, setCloudQuery] = useState("");
   /** The connection test: which model is being asked, and what it said. */
@@ -92,6 +220,8 @@ export default function Models() {
   const [routerFree, setRouterFree] = useState(false);
   const [routerMaxPrice, setRouterMaxPrice] = useState<number | null>(null);
   const [routerMinContext, setRouterMinContext] = useState<number | null>(null);
+  /** Only models that can be held to a schema — what reads work best with. */
+  const [routerStructured, setRouterStructured] = useState(false);
   /** Which provider the pasted key belongs to, from its prefix. */
   const detectedProvider = (() => {
     const k = keyInput.trim();
@@ -121,6 +251,13 @@ export default function Models() {
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<RemoteModel[] | null>(null);
   const [searching, setSearching] = useState(false);
+  /** How the Hugging Face results are ordered, and how big a model may be. */
+  const [hfSort, setHfSort] = useState<ModelSort>("downloads");
+  const [hfMaxParams, setHfMaxParams] = useState<number | null>(null);
+  /** Only the newest search may land: typing fires one per pause. */
+  const searchSeq = useRef(0);
+  /** A key is saved, but another one is being pasted anyway. */
+  const [addingKey, setAddingKey] = useState(false);
   const [openRepo, setOpenRepo] = useState<string | null>(null);
   const [repoFiles, setRepoFiles] = useState<RemoteFile[] | null>(null);
   const [chosenFile, setChosenFile] = useState<string | null>(null);
@@ -166,19 +303,35 @@ export default function Models() {
     }
   }
 
-  async function runSearch() {
+  async function runSearch(q: string, sort: ModelSort) {
+    const seq = ++searchSeq.current;
     setSearching(true);
     setError(null);
-    setOpenRepo(null);
-    setRepoFiles(null);
     try {
-      setFound(await searchModels(query));
+      const got = await searchModels(q.trim(), sort);
+      if (seq !== searchSeq.current) return;
+      setFound(got);
     } catch (e) {
-      setError(String(e));
+      if (seq === searchSeq.current) setError(String(e));
     } finally {
-      setSearching(false);
+      if (seq === searchSeq.current) setSearching(false);
     }
   }
+
+  // Searched as it is typed, the way the cloud list filters — and with
+  // nothing typed, the most wanted GGUFs, so the browser never opens on an
+  // empty box waiting for a word someone may not know yet.
+  useEffect(() => {
+    if (!browse) return;
+    const id = window.setTimeout(() => void runSearch(query, hfSort), query.trim() ? 350 : 0);
+    return () => window.clearTimeout(id);
+  }, [browse, query, hfSort]);
+
+  const hfRows = (found ?? []).filter((m) => {
+    if (hfMaxParams === null) return true;
+    const b = billionsOf(m);
+    return b !== null && b <= hfMaxParams;
+  });
 
   async function openFiles(repo: string) {
     if (openRepo === repo) {
@@ -291,6 +444,7 @@ export default function Models() {
     try {
       await detectedProvider.save();
       setKeyInput("");
+      setAddingKey(false);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -398,6 +552,9 @@ export default function Models() {
     if (routerMinContext !== null) {
       rows = rows.filter((m) => "context" in m && m.context >= routerMinContext!);
     }
+    if (routerStructured) {
+      rows = rows.filter((m) => "structured" in m && m.structured);
+    }
     const bySort = (
       a: (OpenRouterModel | { id: string; name?: string }),
       b: (OpenRouterModel | { id: string; name?: string }),
@@ -421,7 +578,7 @@ export default function Models() {
     };
     rows = [...rows].sort(bySort);
     return { rows, chosen, all: all.length };
-  }, [remote, catalog, active, cloudQuery, routerProvider, routerSort, routerFree, routerMaxPrice, routerMinContext]);
+  }, [remote, catalog, active, cloudQuery, routerProvider, routerSort, routerFree, routerMaxPrice, routerMinContext, routerStructured]);
 
   const routerPrefixes = useMemo(() => {
     if (!catalog) return [];
@@ -441,7 +598,9 @@ export default function Models() {
         {SOURCES.map((t) => (
           <button
             key={t.id}
-            className={source === t.id ? "btn on" : "btn"}
+            // Set apart from the three that run here: it is the one whose
+            // transcripts leave the machine.
+            className={`${source === t.id ? "btn on" : "btn"}${t.id === "cloud" ? " source-cloud" : ""}`}
             onClick={() => setSource(t.id)}
           >
             {t.label}
@@ -453,6 +612,9 @@ export default function Models() {
         <>
           <section className="model-role cloud-keys">
             <p className="blurb">Transcripts leave this machine.</p>
+            {/* Once a key is in, the paste box is only in the way; it comes
+                back on request, for a second provider. */}
+            {(!(keys?.anthropic || keys?.openrouter) || addingKey) && (
             <div className="row key-row">
               <input
                 type="password"
@@ -473,7 +635,19 @@ export default function Models() {
                     ? `Save — ${detectedProvider.label}`
                     : "Save"}
               </button>
+              {addingKey && (
+                <button
+                  className="btn subtle"
+                  onClick={() => {
+                    setAddingKey(false);
+                    setKeyInput("");
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
             </div>
+            )}
             <div className="row key-status">
               {keys?.anthropic && (
                 <>
@@ -492,6 +666,11 @@ export default function Models() {
                 </>
               )}
               {keys?.claude_cli && <span className="tag ready">claude CLI found</span>}
+              {(keys?.anthropic || keys?.openrouter) && !addingKey && (
+                <button className="btn subtle" onClick={() => setAddingKey(true)}>
+                  Add another key
+                </button>
+              )}
             </div>
             {keyInput.trim() && !detectedProvider && (
               <p className="blurb warn">
@@ -597,7 +776,15 @@ export default function Models() {
                           <option value="131072">≥ 128k</option>
                           <option value="1000000">≥ 1M</option>
                         </select>
+                        <button
+                          className={routerStructured ? "btn on" : "btn"}
+                          data-tip={STRUCTURED_TIP}
+                          onClick={() => setRouterStructured((v) => !v)}
+                        >
+                          <IconCheck /> Structured
+                        </button>
                       </div>
+                      {catalog && catalog.length > 0 && <FactsHead cols={["price", "window", "json"]} />}
                       <ul className="model-list compact">
                         {shown.map((m) => {
                           const id = m.id;
@@ -613,6 +800,16 @@ export default function Models() {
                               >
                                 <span className="model-name">{m.id}</span>
                                 <span className="model-facts">
+                                  {"reasoning_mandatory" in m && m.reasoning_mandatory && (
+                                    <span className="model-slow" data-tip={REASONING_ONLY_TIP}>
+                                      !
+                                    </span>
+                                  )}
+                                  {"created" in m && !m.structured && (
+                                    <span className="model-nojson" data-tip={NO_JSON_TIP}>
+                                      !
+                                    </span>
+                                  )}
                                   {"prompt_price" in m && (
                                     <span
                                       className="model-price"
@@ -621,13 +818,12 @@ export default function Models() {
                                       {priceLabel(m.prompt_price)}
                                     </span>
                                   )}
-                                  {"context" in m && m.context > 0 && (
+                                  {"context" in m && (
                                     <span className="model-window">
-                                      {m.context >= 1_000_000
-                                        ? `${Math.round(m.context / 10000) / 100}M`
-                                        : `${Math.round(m.context / 1000)}k`}
+                                      {m.context > 0 ? windowLabel(m.context) : ""}
                                     </span>
                                   )}
+                                  {"created" in m && <StructuredMark on={!!m.structured} />}
                                   {isChosen && <span className="tag ready">in use</span>}
                                 </span>
                               </button>
@@ -685,7 +881,15 @@ export default function Models() {
                               onClick={() => void pick(s, m)}
                             >
                               <span className="model-name">{m.id}</span>
-                              {isChosen && <span className="tag ready">in use</span>}
+                              <span className="model-facts">
+                                {PROVIDER_STRUCTURED[s.kind] === false && (
+                                  <span className="model-nojson" data-tip={NO_JSON_TIP}>
+                                    !
+                                  </span>
+                                )}
+                                <StructuredMark on={PROVIDER_STRUCTURED[s.kind]} />
+                                {isChosen && <span className="tag ready">in use</span>}
+                              </span>
                             </button>
                           </li>
                         );
@@ -769,7 +973,8 @@ export default function Models() {
                     {serverName(s.kind)}
                     {isRemote(s.kind) && <span className="tag remote">leaves this machine</span>}
                   </h3>
-                  <ul className="model-list">
+                  <FactsHead cols={["params", "quant", "size", "window", "json"]} />
+                  <ul className="model-list compact">
                     {/* What is loaded comes first, and when only one thing is
                         loaded anywhere it has already been adopted — there is
                         nothing to choose. The rest stay listed, marked, since
@@ -795,7 +1000,15 @@ export default function Models() {
                               {m.loaded === false && (
                                 <span className="tag">needs loading</span>
                               )}
+                              {m.details?.vision && <span className="tag">sees images</span>}
                               {isChosen && <span className="tag ready">in use</span>}
+                              <LocalFacts
+                                params={m.details?.params ?? fileFacts(m.id).params}
+                                quant={m.details?.quant ?? fileFacts(m.id).quant}
+                                size={m.details?.size}
+                                context={m.details?.context}
+                                extra={m.details?.family ?? m.details?.format}
+                              />
                             </button>
                           </li>
                         );
@@ -849,37 +1062,67 @@ export default function Models() {
             {browse && (
               <div className="hf">
                 {/* Searched live rather than a list baked into the app: a
-                    hardcoded catalogue is stale the week after it ships. */}
-                <form
-                  className="row"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void runSearch();
-                  }}
-                >
+                    hardcoded catalogue is stale the week after it ships. The
+                    same shape as the cloud picker — filter as you type, sort,
+                    narrow, and the facts that decide a pick in columns. */}
+                <div className="router-filters">
                   <input
-                    className="field"
+                    className="field filter-input"
                     placeholder="Search GGUF models — qwen, gemma, phi…"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                   />
-                  <button className="btn" type="submit" disabled={searching || !query.trim()}>
-                    {searching ? "Searching…" : "Search"}
-                  </button>
-                </form>
+                  <select
+                    className="field"
+                    value={hfSort}
+                    onChange={(e) => setHfSort(e.target.value as ModelSort)}
+                    aria-label="Sort"
+                  >
+                    <option value="downloads">Most downloaded</option>
+                    <option value="trending">Trending</option>
+                    <option value="likes">Most liked</option>
+                    <option value="updated">Recently updated</option>
+                  </select>
+                  <select
+                    className="field"
+                    value={hfMaxParams ?? ""}
+                    onChange={(e) =>
+                      setHfMaxParams(e.target.value === "" ? null : Number(e.target.value))
+                    }
+                    aria-label="Largest model"
+                    data-tip="Keep only models up to this many parameters — roughly what the machine can hold"
+                  >
+                    <option value="">Any size</option>
+                    <option value="4">≤ 4B</option>
+                    <option value="9">≤ 9B</option>
+                    <option value="14">≤ 14B</option>
+                    <option value="32">≤ 32B</option>
+                  </select>
+                  {searching && <span className="spinner" aria-hidden="true" />}
+                </div>
 
-                {found && found.length === 0 && <p className="blurb">Nothing matched that.</p>}
+                {found && hfRows.length === 0 && !searching && (
+                  <p className="blurb">Nothing matched that.</p>
+                )}
 
-                <ul className="hf-list">
-                  {found?.map((m) => (
+                {hfRows.length > 0 && <FactsHead cols={["params", "window", "dl", "likes", "updated"]} />}
+                <ul className="model-list compact hf-list">
+                  {hfRows.map((m) => (
                     <li key={m.id}>
-                      <button className="hf-repo" onClick={() => void openFiles(m.id)}>
-                        <span className="hf-id">{m.id}</span>
-                        <span className="row-meta">
-                          {m.downloads > 1e6
-                            ? `${(m.downloads / 1e6).toFixed(1)}M`
-                            : `${Math.round(m.downloads / 1000)}k`}{" "}
-                          downloads
+                      <button
+                        className={openRepo === m.id ? "model chosen" : "model"}
+                        data-tip={openRepo === m.id ? "Fold the files away" : "Show its files — one per quantisation"}
+                        onClick={() => void openFiles(m.id)}
+                      >
+                        <span className="model-name">{m.id}</span>
+                        <span className="model-facts">
+                          <span className="model-params">{billionsLabel(billionsOf(m))}</span>
+                          <span className="model-window">
+                            {m.context ? windowLabel(m.context) : ""}
+                          </span>
+                          <span className="model-dl">{countLabel(m.downloads)}</span>
+                          <span className="model-likes">{countLabel(m.likes)}</span>
+                          <span className="model-updated">{agoLabel(m.last_modified)}</span>
                         </span>
                       </button>
 
@@ -890,18 +1133,29 @@ export default function Models() {
                           ) : repoFiles.length === 0 ? (
                             <p className="blurb">No GGUF files in that one.</p>
                           ) : (
-                            repoFiles.map((f) => (
-                              <button
-                                key={f.path}
-                                className="hf-file"
-                                onClick={() => void pullFile(m.id, f)}
-                              >
-                                <span className="hf-quant">{f.path}</span>
-                                <span className="row-meta">
-                                  {f.size > 0 ? `${(f.size / 1e9).toFixed(2)} GB` : "—"}
-                                </span>
-                              </button>
-                            ))
+                            repoFiles.map((f) => {
+                              const quant = fileFacts(f.path).quant;
+                              return (
+                                <button
+                                  key={f.path}
+                                  className="hf-file"
+                                  onClick={() => void pullFile(m.id, f)}
+                                >
+                                  <span className="hf-quant">{f.path}</span>
+                                  {quant === "Q4_K_M" && (
+                                    <span
+                                      className="tag ready"
+                                      data-tip="The usual pick: a quarter the size, and hard to tell from the full model"
+                                    >
+                                      good default
+                                    </span>
+                                  )}
+                                  <span className="row-meta">
+                                    {f.size > 0 ? `${(f.size / 1e9).toFixed(2)} GB` : "—"}
+                                  </span>
+                                </button>
+                              );
+                            })
                           )}
                         </div>
                       )}
@@ -918,8 +1172,9 @@ export default function Models() {
             {embedded && embedded.downloaded.length > 0 && (
               <div className="downloaded">
 
+                <FactsHead cols={["params", "quant", "size", "json"]} />
                 <ul className="list model-list">
-                  {embedded.downloaded.map((f) => {
+                  {embedded.downloaded.map((f, fi) => {
                     const isRunning = embedded.running && (chosenFile === null || chosenFile === f);
                     return (
                       <li key={f}>
@@ -954,6 +1209,14 @@ export default function Models() {
                               : isRunning
                                 ? "running"
                                 : "stopped"}
+                          </span>
+                          <span className="model-facts">
+                            <span className="model-params">{fileFacts(f).params ?? ""}</span>
+                            <span className="model-quant">{fileFacts(f).quant ?? ""}</span>
+                            <span className="model-size">
+                              {embedded.downloaded_bytes?.[fi] ? gb(embedded.downloaded_bytes[fi]) : ""}
+                            </span>
+                            <StructuredMark on={true} />
                           </span>
                         </button>
                       </li>

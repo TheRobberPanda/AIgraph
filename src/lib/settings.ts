@@ -66,8 +66,6 @@ export interface Settings {
   map_spread: MapSpread;
   /** Whether the map's nodes can be dragged out of place. */
   map_lock_nodes: boolean;
-  /** Whether the map draws correlations (ideas close in meaning). Off by default. */
-  map_correlations: boolean;
   /** Advanced layout order: conversations left, Make right. */
   advanced_swap: boolean;
   /** Show how long each reply took, and where the time went. */
@@ -80,6 +78,11 @@ export interface Settings {
   accent: string;
   /** The one-click instructions on the Make tab, yours to edit. */
   presets: Preset[];
+  /** Which OpenRouter provider each model goes through, by model id: an
+   *  endpoint tag, or "sort:price" / "sort:throughput" / "sort:latency". */
+  router_routes: Record<string, string>;
+  /** The one-click questions on the Ask tab. `format` is ignored there. */
+  ask_presets: Preset[];
 }
 
 /** A named instruction, one button on the Make tab. */
@@ -346,6 +349,20 @@ const REFERENCE_FONT = 15;
 
 let topbarResizeInstalled = false;
 
+/**
+ * Whether the tabs run under the model chip.
+ *
+ * Edges, not scroll widths: the left group is sized to its content
+ * (`justify-self: start`), so it never scrolls — it just grows past its grid
+ * column and under the chip, which is exactly what has to be caught.
+ */
+function topbarOverflows(): boolean {
+  const left = document.querySelector<HTMLElement>(".topbar-left");
+  const center = document.querySelector<HTMLElement>(".topbar-center");
+  if (!left || !center) return false;
+  return left.getBoundingClientRect().right > center.getBoundingClientRect().left - 6;
+}
+
 function applyTopbarClasses(): void {
   const root = document.documentElement;
   const scale = parseFloat(root.style.fontSize) / REFERENCE_FONT || 1;
@@ -353,6 +370,21 @@ function applyTopbarClasses(): void {
   const icons = effective < TOPBAR_ICONS;
   root.classList.toggle("topbar-icons", icons);
   root.classList.toggle("topbar-tight", !icons && effective < TOPBAR_ROOMY);
+  // The breakpoints are a first guess; what is on screen decides. They were
+  // tuned for five tabs, and a sixth and seventh (and a longer language's
+  // labels) ran the row under the model chip — so step down until it fits.
+  if (!icons && topbarOverflows()) {
+    root.classList.add("topbar-tight");
+    if (topbarOverflows()) {
+      root.classList.remove("topbar-tight");
+      root.classList.add("topbar-icons");
+    }
+  }
+}
+
+/** Re-fit the top bar after its contents change: layout, tabs, language. */
+export function fitTopbar(): void {
+  requestAnimationFrame(applyTopbarClasses);
 }
 
 export function applyUiScale(percent: number): void {
@@ -427,6 +459,10 @@ export interface OpenRouterModel {
   modalities: string[];
   tools: boolean;
   reasoning: boolean;
+  /** Reasoning cannot be switched off: every answer waits on the thinking. */
+  reasoning_mandatory?: boolean;
+  /** Takes a JSON schema and holds its answer to it. */
+  structured?: boolean;
 }
 
 /**
@@ -438,6 +474,64 @@ export interface OpenRouterModel {
  */
 export function openrouterCatalog(): Promise<OpenRouterModel[]> {
   return invoke<OpenRouterModel[]>("openrouter_catalog");
+}
+
+/** One provider serving a model through OpenRouter. Prices per million tokens. */
+export interface RouterEndpoint {
+  /** What a request names to be sent here — "novita/bf16". */
+  tag: string;
+  provider: string;
+  quantization: string;
+  context: number;
+  max_output: number | null;
+  prompt_price: number;
+  completion_price: number;
+  /** Share of requests answered over the last 30 minutes, 0–100. */
+  uptime: number | null;
+  /** OpenRouter's own figures, where it publishes them — mostly it does not. */
+  latency_ms: number | null;
+  throughput: number | null;
+  tools: boolean;
+  structured: boolean;
+}
+
+/** Every provider OpenRouter can send this model to. */
+export function openrouterEndpoints(model: string): Promise<RouterEndpoint[]> {
+  return invoke<RouterEndpoint[]>("openrouter_endpoints", { model });
+}
+
+/** How one provider did on a short request, timed from here. */
+export interface RouteMeasure {
+  ok: boolean;
+  first_token_ms: number | null;
+  tokens_per_s: number | null;
+  error: string | null;
+}
+
+/** One short real request, sent to that provider and no other. */
+export function measureRoute(model: string, tag: string): Promise<RouteMeasure> {
+  return invoke<RouteMeasure>("openrouter_measure", { model, tag });
+}
+
+/** What the OpenRouter key has spent, in US dollars. */
+export interface RouterCredits {
+  used: number;
+  /** Credit bought, or the key's own limit. Null where neither is set. */
+  total: number | null;
+  /** What this key spent today, this week and this month (UTC), where OpenRouter says. */
+  daily: number | null;
+  weekly: number | null;
+  monthly: number | null;
+  /** The key's own spending limit and what is left of it. Null without one. */
+  limit: number | null;
+  limit_remaining: number | null;
+  /** What the app itself spent per model since it started, from each call's reported cost. */
+  by_model: { model: string; usd: number; calls: number }[];
+}
+
+/** The account's credit. Null when no OpenRouter key is saved. */
+export function openrouterCredits(): Promise<RouterCredits | null> {
+  return invoke<RouterCredits | null>("openrouter_credits");
 }
 
 /** The model the app runs itself. */
@@ -455,6 +549,8 @@ export interface EmbeddedStatus {
   running: boolean;
   /** Every GGUF already on disk. */
   downloaded: string[];
+  /** Bytes on disk for each of `downloaded`, in the same order. */
+  downloaded_bytes?: number[];
   download_gb: number;
   host: string;
 }
@@ -494,7 +590,17 @@ export interface RemoteModel {
   id: string;
   downloads: number;
   likes: number;
+  /** ISO time of the repository's last change. */
+  last_modified?: string | null;
+  /** Parameter count, as the GGUF header gives it. */
+  params?: number | null;
+  /** Longest context the weights were trained for. */
+  context?: number | null;
+  architecture?: string | null;
 }
+
+/** How Hugging Face orders a search. */
+export type ModelSort = "downloads" | "trending" | "likes" | "updated";
 
 export interface RemoteFile {
   path: string;
@@ -502,8 +608,8 @@ export interface RemoteFile {
 }
 
 /** Search Hugging Face for GGUF models. Live, so it never goes stale. */
-export function searchModels(query: string): Promise<RemoteModel[]> {
-  return invoke<RemoteModel[]>("search_models", { query });
+export function searchModels(query: string, sort: ModelSort = "downloads"): Promise<RemoteModel[]> {
+  return invoke<RemoteModel[]>("search_models", { query, sort });
 }
 
 export function modelFiles(repo: string): Promise<RemoteFile[]> {

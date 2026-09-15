@@ -17,6 +17,7 @@ pub mod ollama;
 pub mod openai_compat;
 pub mod pulse;
 pub mod types;
+pub mod wire;
 
 use async_trait::async_trait;
 pub use types::*;

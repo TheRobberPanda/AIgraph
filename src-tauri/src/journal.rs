@@ -112,6 +112,59 @@ pub fn retire_live(data_dir: &Path, session_id: i64) -> std::io::Result<()> {
     std::fs::rename(from, filed.join(format!("{}-session-{session_id}.json", stamp())))
 }
 
+/// Where every conversation is kept as a plain file a person can open without
+/// the app — the place to look after a crash.
+pub fn conversations_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("conversations")
+}
+
+/// Write the live conversation as markdown into `conversations/`, one file per
+/// conversation, rewritten as it grows. Never deleted by the app.
+pub fn save_readable(data_dir: &Path, live: &Live) -> std::io::Result<()> {
+    if live.messages.is_empty() && live.pending.is_none() {
+        return Ok(());
+    }
+    let started = live.started_at.unwrap_or_else(chrono::Utc::now);
+    let local = started.with_timezone(&chrono::Local);
+    // No colons: Windows will not have them in a file name.
+    let name = format!("{}.md", local.format("%Y-%m-%d %H.%M.%S"));
+    let mut text = format!("# Conversation, {}\n\n", local.format("%Y-%m-%d %H:%M"));
+    if !live.model.is_empty() {
+        text.push_str(&format!("Model: {}\n\n", live.model));
+    }
+    for m in &live.messages {
+        let who = match m.role {
+            crate::llm::types::Role::User => "You",
+            crate::llm::types::Role::Assistant => "AIgraph",
+        };
+        text.push_str(&format!("## {who}\n\n{}\n\n", m.content.trim_end()));
+    }
+    if let Some(p) = &live.pending {
+        text.push_str(&format!("## You (sent, not yet answered)\n\n{}\n\n", p.trim_end()));
+    }
+    write_durably(&conversations_dir(data_dir).join(name), text.as_bytes())
+}
+
+fn running_path(data_dir: &Path) -> PathBuf {
+    dir(data_dir).join("running")
+}
+
+/// Mark the app as running. Returns true when the last run never reached
+/// [`mark_stopped`] — it crashed, was killed, or lost power.
+pub fn mark_running(data_dir: &Path) -> bool {
+    let path = running_path(data_dir);
+    let crashed = path.exists();
+    if let Err(e) = write_durably(&path, stamp().as_bytes()) {
+        tracing::warn!(error = %e, "could not write the running marker");
+    }
+    crashed
+}
+
+/// The app is closing the way it was asked to.
+pub fn mark_stopped(data_dir: &Path) {
+    let _ = std::fs::remove_file(running_path(data_dir));
+}
+
 pub fn save_draft(data_dir: &Path, text: &str) -> std::io::Result<()> {
     write_durably(&draft_path(data_dir), text.as_bytes())
 }
@@ -170,6 +223,38 @@ mod tests {
         save_draft(&d, "half a thought, finished").unwrap();
         assert_eq!(load_draft(&d), "half a thought, finished");
         assert!(!dir(&d).join("draft.tmp").exists(), "no temporary file left behind");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_conversation_is_written_where_a_person_can_read_it() {
+        let d = scratch("readable");
+        let mut live = Live {
+            started_at: Some(chrono::Utc::now()),
+            messages: vec![Message { role: Role::User, content: "first".into() }],
+            ..Default::default()
+        };
+        save_readable(&d, &live).unwrap();
+        live.messages.push(Message { role: Role::Assistant, content: "second".into() });
+        save_readable(&d, &live).unwrap();
+        let files: Vec<_> = std::fs::read_dir(conversations_dir(&d))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+            .collect();
+        assert_eq!(files.len(), 1, "one file per conversation, rewritten as it grows");
+        let text = std::fs::read_to_string(files[0].path()).unwrap();
+        assert!(text.contains("first") && text.contains("second"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_run_that_never_stopped_is_noticed() {
+        let d = scratch("running");
+        assert!(!mark_running(&d), "a first launch is not a crash");
+        assert!(mark_running(&d), "launched again without stopping");
+        mark_stopped(&d);
+        assert!(!mark_running(&d), "a clean stop is not a crash");
         let _ = std::fs::remove_dir_all(&d);
     }
 

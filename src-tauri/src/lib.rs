@@ -27,6 +27,7 @@ pub mod settings;
 pub mod store;
 pub mod stt;
 pub mod tts;
+pub mod writer;
 
 /// Move a previous installation's data across, once.
 ///
@@ -108,6 +109,7 @@ pub fn run() {
             commands::extraction_progress,
             commands::stop_digest,
             commands::extraction_trouble,
+            commands::wire_log,
             commands::pending_sessions,
             commands::archived_sessions,
             commands::archived_ideas,
@@ -144,11 +146,21 @@ pub fn run() {
             commands::download_model_file,
             commands::folders,
             commands::export_book,
+            commands::book_project,
+            commands::book_save,
+            commands::book_outline,
+            commands::book_write_chapter,
+            commands::book_check,
+            commands::book_export,
             commands::compose_load,
             commands::compose_selectable,
             commands::compose_select,
             commands::compose_clear,
             commands::compose_send,
+            commands::ask_load,
+            commands::ask_clear,
+            commands::ask_send,
+            commands::openrouter_credits,
             commands::stop_generation,
             commands::save_text,
             commands::save_document,
@@ -190,6 +202,8 @@ pub fn run() {
             commands::clear_openrouter_key,
             commands::test_model,
             commands::openrouter_catalog,
+            commands::openrouter_endpoints,
+            commands::openrouter_measure,
             commands::export_composed,
             commands::idea_deep_dive,
             commands::answer_dispute,
@@ -224,12 +238,49 @@ pub fn run() {
                 data_dir.join("transcripts"),
             )?;
 
+            // Did the last run get to close properly? If not, say so and show
+            // where every conversation is kept, so nobody has to wonder
+            // whether theirs survived.
+            let crashed = journal::mark_running(&data_dir);
+
             // Anything said before the app last stopped without filing it — a
             // crash, a kill, a power cut, a rebuild — is filed now, before
             // anything else can touch it.
             tauri::async_runtime::block_on(commands::recover_live(&state));
 
             app.manage(state);
+
+            if crashed {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                let folder = journal::conversations_dir(&data_dir);
+                let _ = std::fs::create_dir_all(&folder);
+                let handle = app.handle().clone();
+                app.dialog()
+                    .message(format!(
+                        "AIgraph closed unexpectedly last time.\n\n\
+                         Every conversation is saved as it happens, in:\n{}\n\n\
+                         Anything still open has also been filed with your \
+                         conversations.",
+                        folder.display()
+                    ))
+                    .kind(MessageDialogKind::Warning)
+                    .title("AIgraph closed unexpectedly")
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Open folder".into(),
+                        "Close".into(),
+                    ))
+                    .show(move |open| {
+                        if !open {
+                            return;
+                        }
+                        use tauri_plugin_opener::OpenerExt;
+                        if let Err(e) =
+                            handle.opener().open_path(folder.to_string_lossy(), None::<&str>)
+                        {
+                            tracing::error!(error = %e, "could not open the conversations folder");
+                        }
+                    });
+            }
 
             // A session that ends because the user wandered off still has to be
             // archived. Without this, walking away from a good ramble loses it.
@@ -275,6 +326,15 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building AIgraph")
         .run(|app, event| {
+            // Only a real, finished exit clears the marker; a crash never
+            // gets here, which is how the next launch knows.
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                if let Ok(dir) = app.path().app_data_dir() {
+                    journal::mark_stopped(&dir);
+                }
+                return;
+            }
             // Closing the app must not discard an unfinished session either.
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 use tauri::Manager;

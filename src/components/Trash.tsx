@@ -11,6 +11,7 @@ import { onIdeasChanged } from "../lib/ideas";
 import { longDate } from "../lib/format";
 import { ConfirmThrice } from "./Confirm";
 import Sheet from "./Sheet";
+import { BinSection } from "./BinSection";
 import { IconRewind, IconTrash } from "./Icons";
 
 /** The bin's sections, in the order they are shown. */
@@ -101,6 +102,7 @@ export default function Trash({ onClose, onChanged }: { onClose: () => void; onC
     refresh();
   }
 
+  const pickedKeys = useMemo(() => new Set([...picked].map(String)), [picked]);
   const count = (n: number) => `${n} ${n === 1 ? "item" : "items"}`;
 
   return (
@@ -115,7 +117,7 @@ export default function Trash({ onClose, onChanged }: { onClose: () => void; onC
           {items !== null && items.length > 0 &&
             (shown ? (
               <button
-                className="btn danger head-end"
+                className="btn quiet-danger head-end"
                 onClick={() =>
                   setPurging({
                     ids: shown.rows.map((r) => r.id),
@@ -123,13 +125,15 @@ export default function Trash({ onClose, onChanged }: { onClose: () => void; onC
                   })
                 }
               >
+                <IconTrash />
                 Empty {shown.heading.toLowerCase()}
               </button>
             ) : (
               <button
-                className="btn danger head-end"
+                className="btn quiet-danger head-end"
                 onClick={() => setPurging({ ids: "all", what: `everything in the trash (${count(items.length)})` })}
               >
+                <IconTrash />
                 Empty the trash
               </button>
             ))}
@@ -163,17 +167,17 @@ export default function Trash({ onClose, onChanged }: { onClose: () => void; onC
 
         {picked.size > 0 && (
           <div className="row bin-bar">
-            <span>{picked.size} selected</span>
-            <button className="btn grow" onClick={() => void restore([...picked])}>
+            <span className="bin-count">{picked.size} selected</span>
+            <button className="btn" onClick={() => void restore([...picked])}>
               <IconRewind />
-              <span className="btn-label">Restore</span>
+              Restore
             </button>
             <button
-              className="btn danger grow"
+              className="btn quiet-danger"
               onClick={() => setPurging({ ids: [...picked], what: count(picked.size) })}
             >
               <IconTrash />
-              <span className="btn-label">Delete for good</span>
+              Delete for good
             </button>
             <button className="btn" onClick={() => setPicked(new Set())}>
               Clear
@@ -190,57 +194,44 @@ export default function Trash({ onClose, onChanged }: { onClose: () => void; onC
             from here.
           </p>
         ) : (
-          shownSections.map((s) => {
-            const ids = s.rows.map((r) => r.id);
-            const all = ids.every((id) => picked.has(id));
-            return (
-              <section key={s.kind} className="bin-section">
-                <label className="bin-heading">
-                  <input type="checkbox" checked={all} onChange={(e) => toggle(ids, e.target.checked)} />
-                  <h3 className="section">{s.heading}</h3>
-                  <span className="muted">{s.rows.length}</span>
-                </label>
-                <ul className="list">
-                  {s.rows.map((item) => (
-                    <li key={item.id} className={picked.has(item.id) ? "chat-line picked" : "chat-line"}>
-                      <label className="row-btn bin-row">
-                        <input
-                          type="checkbox"
-                          checked={picked.has(item.id)}
-                          onChange={(e) => toggle([item.id], e.target.checked)}
-                        />
-                        <span className="row-main">{item.label || `Untitled ${s.one}`}</span>
-                        <span className="row-meta">
-                          {item.detail ? `${item.detail} · ` : ""}deleted{" "}
-                          {item.deleted_at ? longDate(item.deleted_at) : ""}
-                        </span>
-                      </label>
-                      <span className="chat-actions">
-                        {item.kind !== "message" && (
-                          <button
-                            className="icon-btn"
-                            data-tip="Put it back where it was"
-                            onClick={() => void restore([item.id])}
-                          >
-                            <IconRewind />
-                          </button>
-                        )}
-                        <button
-                          className="icon-btn"
-                          data-tip="Delete for good"
-                          onClick={() =>
-                            setPurging({ ids: [item.id], what: `the ${s.one} “${item.label || item.id}”` })
-                          }
-                        >
-                          <IconTrash />
-                        </button>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            );
-          })
+          shownSections.map((s) => (
+            <BinSection
+              key={s.kind}
+              heading={s.heading}
+              rows={s.rows.map((item) => ({
+                key: String(item.id),
+                title: item.label || `Untitled ${s.one}`,
+                meta: `${item.detail ? `${item.detail} · ` : ""}deleted ${item.deleted_at ? longDate(item.deleted_at) : ""}`,
+              }))}
+              picked={pickedKeys}
+              onToggle={(keys, on) => toggle(keys.map(Number), on)}
+              actions={(r) => {
+                const item = s.rows.find((x) => String(x.id) === r.key)!;
+                return (
+                  <>
+                    {item.kind !== "message" && (
+                      <button
+                        className="icon-btn"
+                        data-tip="Put it back where it was"
+                        onClick={() => void restore([item.id])}
+                      >
+                        <IconRewind />
+                      </button>
+                    )}
+                    <button
+                      className="icon-btn"
+                      data-tip="Delete for good"
+                      onClick={() =>
+                        setPurging({ ids: [item.id], what: `the ${s.one} “${item.label || item.id}”` })
+                      }
+                    >
+                      <IconTrash />
+                    </button>
+                  </>
+                );
+              }}
+            />
+          ))
         )}
 
         {purging !== null && (

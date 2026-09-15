@@ -2110,10 +2110,6 @@ export default function Graph({
    *  the state is for the toggle that shows what is set. */
   const [locked, setLocked] = useState(false);
   const lockRef = useRef(false);
-  /** Whether correlations are on the map. A rebuild, not paint: they are
-   *  springs in the force layout as well as lines. */
-  const [correlations, setCorrelations] = useState(false);
-  const correlationsRef = useRef(false);
   /** Each meadow stream's sag this frame. Working it out scans every node,
    *  and drawing, routing, bees and the hit test all ask for it — per link,
    *  per candidate route, every frame. Cleared at the top of `draw`. */
@@ -2152,13 +2148,6 @@ export default function Graph({
       secretTreesRef.current = !!on;
       if (styleRef.current === "forest") buildRef.current();
     };
-    const applyCorrelations = (on: boolean | undefined) => {
-      if (!alive) return;
-      setCorrelations(!!on);
-      if (correlationsRef.current === !!on) return;
-      correlationsRef.current = !!on;
-      buildRef.current();
-    };
     // The first read is not a change, so it sets the ref and rebuilds once —
     // the initial build may already have run under the default.
     void getSettings().then((st) => {
@@ -2167,14 +2156,12 @@ export default function Graph({
       applyLock(st.map_lock_nodes);
       applySecret(st.secret_galaxy);
       applyTrees(st.secret_trees);
-      applyCorrelations(st.map_correlations);
     });
     const un = onSettingsChanged((st) => {
       apply(st.map_style, st.map_spread ?? "balanced");
       applyLock(st.map_lock_nodes);
       applySecret(st.secret_galaxy);
       applyTrees(st.secret_trees);
-      applyCorrelations(st.map_correlations);
     });
     return () => {
       alive = false;
@@ -3299,7 +3286,8 @@ export default function Graph({
     let byId = new Map(nodes.map((n) => [n.data.id, n]));
     let links: Link[] = data.edges
       .filter((e) => byId.has(e.source) && byId.has(e.target))
-      .filter((e) => e.kind !== "recall" || correlationsRef.current)
+      // Correlations are off the map for now; an older backend may still send them.
+      .filter((e) => e.kind !== "recall")
       .map((e) => ({
         source: byId.get(e.source)!,
         target: byId.get(e.target)!,
@@ -4758,29 +4746,6 @@ function chordClearance(
                   Locked
                 </button>
               </div>
-              <p className="graph-arrange-head">Correlations</p>
-              <div className="graph-arrange-row">
-                <button
-                  type="button"
-                  className={!correlations ? "on" : undefined}
-                  title="Only judged relations and contradictions are drawn"
-                  onClick={() => {
-                    void getSettings().then((st) => saveSettings({ ...st, map_correlations: false }));
-                  }}
-                >
-                  Hidden
-                </button>
-                <button
-                  type="button"
-                  className={correlations ? "on" : undefined}
-                  title="Also join ideas whose claims are close in meaning"
-                  onClick={() => {
-                    void getSettings().then((st) => saveSettings({ ...st, map_correlations: true }));
-                  }}
-                >
-                  Shown
-                </button>
-              </div>
             </div>
           )}
         </div>
@@ -4808,7 +4773,9 @@ function chordClearance(
         <span className="conv-key">
           <i style={{ background: "var(--accent)" }} /> conversation
         </span>
-        {legend.slice(0, 6).map(([name, color]) => (
+        {/* Every subject, not the first six alphabetically — the rest had no
+            way to be pinned, and their colours no name. */}
+        {legend.map(([name, color]) => (
           <button
             type="button"
             key={name}
@@ -4893,7 +4860,7 @@ function chordClearance(
           }}
         >
           <div className={`relation-kind ${edgeHover.kind}`}>
-            {edgeHover.kind === "contradicts" ? "Contradiction" : "Correlation"}
+            {edgeHover.kind === "contradicts" ? "Contradiction" : "Related"}
           </div>
           <div className="relation-side">{edgeHover.a.label}</div>
           <div className="relation-side">{edgeHover.b.label}</div>
@@ -4901,9 +4868,6 @@ function chordClearance(
               only moment anything knew. Absent on the older links, and on the
               ones drawn from a similarity score alone. */}
           {edgeHover.reasoning && <div className="relation-why">{edgeHover.reasoning}</div>}
-          {edgeHover.kind === "recall" && (
-            <div className="relation-why">Close in meaning, by the same measure recall uses in the chat.</div>
-          )}
           {/* Otherwise the line is only ever a complaint. Said here because
               this is the moment somebody is looking at it. */}
           {edgeHover.kind === "contradicts" && (

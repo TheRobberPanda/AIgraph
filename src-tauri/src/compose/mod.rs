@@ -153,6 +153,34 @@ pub fn pack_ideas(ideas: &[(String, String, Vec<String>)]) -> String {
 ///
 /// Deliberately short. The material is the point, the preset or the typed
 /// instruction is the task, and a long preamble here would compete with both.
+/// The Ask tab's instructions: questions about the material, answered from it.
+///
+/// Its own prompt rather than the Make one, which tells the model it is making
+/// something and teaches it the export line. A question wants an answer, and
+/// an answer that invents what the transcripts never said is worse than none.
+pub fn ask_system_prompt(folder: &str, packed: &Packed) -> String {
+    format!(
+        r#"Below are {n} conversation{s} from one person's notebook, filed under "{folder}".
+They are the raw record: THEM is the person thinking out loud, MODEL is whatever
+was answering at the time.
+
+That person is now asking you questions about this material.
+
+- Answer from what is actually in the transcripts. Where they do not say, say
+  that they do not say, rather than filling the gap from general knowledge.
+- Quote the person's own words where it helps, in quotation marks, and say which
+  conversation a quote comes from.
+- MODEL lines are context, not source. Never present them as the person's view.
+- Be direct, and as short as the question allows.
+
+{text}"#,
+        n = packed.conversations,
+        s = if packed.conversations == 1 { "" } else { "s" },
+        folder = folder,
+        text = packed.text,
+    )
+}
+
 pub fn system_prompt(folder: &str, packed: &Packed) -> String {
     format!(
         r#"Below are {n} conversation{s} from one person's notebook, filed under "{folder}".

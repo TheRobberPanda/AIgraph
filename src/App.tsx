@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
-import { open as pickDocument } from "@tauri-apps/plugin-dialog";
 import {
   IconThink,
   IconMap,
   IconIdeas,
   IconDefinitions,
+  IconAsk,
+  IconPulse,
   IconChats,
   IconBook,
   IconModels,
@@ -51,18 +52,22 @@ import FolderPicker from "./components/FolderPicker";
 import Graph from "./components/Graph";
 import ConversationsRail from "./components/ConversationsRail";
 import Make from "./components/Make";
+import Ask from "./components/Ask";
 import Ideas from "./components/Ideas";
 import Models from "./components/Models";
+import RoutePicker from "./components/RoutePicker";
+import WireLog from "./components/WireLog";
 import Boundary from "./components/Boundary";
 import SettingsPanel from "./components/Settings";
 import {
   applyAccent,
   applyTheme,
   applyUiScale,
+  fitTopbar,
   getSettings,
   saveSettings,
 } from "./lib/settings";
-import { learnDocument } from "./lib/import";
+import Onboarding, { onboarded } from "./components/Onboarding";
 import Markdown from "./components/Markdown";
 import { thinkingMessage } from "./lib/waiting";
 import {
@@ -76,6 +81,8 @@ import {
   type LastExtraction,
 } from "./lib/ideas";
 import Mic from "./components/Mic";
+import BookWriter from "./components/BookWriter";
+import { IconPencil as IconBookTab } from "./components/Icons";
 import {
   currentFolder,
   folderColor,
@@ -125,8 +132,8 @@ import {
  * the same list twice — once with the ideas hidden and once with the
  * conversations reduced to headings.
  */
-type Tab = "chat" | "map" | "ideas" | "definitions" | "make" | "settings";
-const TABS: Tab[] = ["chat", "map", "ideas", "definitions", "make", "settings"];
+type Tab = "chat" | "map" | "ideas" | "definitions" | "ask" | "make" | "book" | "settings";
+const TABS: Tab[] = ["chat", "map", "ideas", "definitions", "ask", "make", "book", "settings"];
 
 /** What each place is called, in the app's own language. */
 function tabName(tab: Tab): string {
@@ -141,11 +148,13 @@ const TAB_ICONS: Record<Tab, React.ComponentType<React.SVGProps<SVGSVGElement>>>
   map: IconMap,
   ideas: IconIdeas,
   definitions: IconDefinitions,
+  ask: IconAsk,
   make: IconBook,
+  book: IconBookTab,
   settings: IconSettings,
 };
 
-const MAIN: Tab[] = ["chat", "map", "ideas", "definitions", "make"];
+const MAIN: Tab[] = ["chat", "map", "ideas", "definitions", "ask", "make", "book"];
 /**
  * Settings only.
  *
@@ -289,8 +298,7 @@ export default function App() {
   // reply. Counting the scratchpad gives the UI something honest to show, so a
   // slow model reads as working rather than frozen.
   const [thoughtChars, setThoughtChars] = useState(0);
-  const [provider, setProvider] = useState<Selected | null>(null);
-  /** The first look for a model has finished, found one or not. */
+  const [provider, setProvider] = useState<Selected | null>(null);  /** The first look for a model has finished, found one or not. */
   const [modelChecked, setModelChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The message that just failed, so an error that can be fixed on the spot
@@ -395,12 +403,16 @@ export default function App() {
    */
   const neuralVoice = voiceKind === "neural" || (callMode && neuralReady);
   const [micTimeout, setMicTimeout] = useState(0);
-  /** A document being read back into ideas from the Think tab. */
-  const [importingDoc, setImportingDoc] = useState(false);
+  /** First open, with no model yet: the welcome that asks for one. */
+  const [onboarding, setOnboarding] = useState(false);
+  /** Which tab the model picker opens on, when the welcome chose one. */
+  const [modelsSource, setModelsSource] = useState<"local" | "cloud" | undefined>(undefined);
   /** Which workspace panel is filling the pane, if any. */
   const [expanded, setExpanded] = useState<"make" | "conversations" | null>(null);
   /** Map and Ideas in advanced mode: popups over the workspace, not panels. */
-  const [popup, setPopup] = useState<"map" | "ideas" | "definitions" | null>(null);
+  const [popup, setPopup] = useState<"map" | "ideas" | "definitions" | "ask" | "book" | null>(null);
+  /** The debug log: what the model is sending back, live. */
+  const [showWire, setShowWire] = useState(false);
   /** Whether the conversations rail sits beside the stream (simple layout). */
   const [railOpen, setRailOpen] = useState(true);
   /** Simple visits one place at a time; advanced puts them all on screen. */
@@ -492,6 +504,12 @@ export default function App() {
     });
   }, []);
 
+  // The tabs change with the layout, and a window resize is not the only
+  // thing that can crowd them under the model chip.
+  useEffect(() => {
+    fitTopbar();
+  }, [layout, view]);
+
   // Apply the saved theme before anything is looked at.
   useEffect(() => {
     void getSettings().then((s) => {
@@ -561,6 +579,7 @@ export default function App() {
     startup()
       .then((s) => {
         setProvider(s.selected);
+        if (!s.selected && !onboarded()) setOnboarding(true);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setModelChecked(true));
@@ -1109,40 +1128,6 @@ export default function App() {
     else setView("chat");
   }
 
-  /**
-   * Add a finished document to this folder and read the ideas back out.
-   *
-   * The reading path is the one Learning mode used, kept here as a plain
-   * import rather than a mode: a document is archived as a conversation whose
-   * one speaker is the document, then extracted like any other. Only formats
-   * the chosen model can actually read are offered — a text model is not
-   * handed a PDF it will fail on.
-   */
-  async function importDocument() {
-    setError(null);
-    const picked = await pickDocument({
-      multiple: false,
-      title: "Choose a document to read",
-      // PDFs included: the backend reads them through a model that accepts
-      // documents, and says so plainly when the chosen model cannot.
-      filters: [
-        {
-          name: "Documents",
-          extensions: ["md", "markdown", "txt", "text", "rst", "org", "pdf"],
-        },
-      ],
-    });
-    if (typeof picked !== "string") return;
-    setImportingDoc(true);
-    try {
-      await learnDocument(picked);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setImportingDoc(false);
-    }
-  }
-
   /** Flip one setting from the composer, without leaving the conversation. */
   async function patchSetting(patch: Record<string, unknown>) {
     try {
@@ -1295,6 +1280,56 @@ export default function App() {
     return Math.round((Math.max(0, r.index - 1) / r.total) * 100);
   })();
 
+  /**
+   * Read, in the conversations rail's head, where the folder's name is.
+   *
+   * It reads the conversations listed right under it, so it sits with them
+   * rather than in the top bar a screen away. Running, it becomes the way to
+   * stop — the same button, because "digesting" and "stop digesting" are the
+   * same thing seen from either side of the decision.
+   */
+  const readButton = (
+    <button
+      className={digesting?.running ? "digest-btn running" : "digest-btn"}
+      // A stop that was asked for only holds the button while a read is
+      // actually in flight. The snapshot that carries `stopping` can outlive
+      // the run it belongs to, and a disabled button over "Read (5)" is the
+      // button not working — which is exactly how a stopped digest used to end.
+      disabled={digestBusy || (digesting?.stopping && !!digesting?.running)}
+      data-tip={digesting?.running ? "Stop reading" : "Read the conversations waiting here for ideas"}
+      onClick={() => {
+        if (digesting?.running) {
+          void stopDigest();
+          return;
+        }
+        // Reading is confirmed on the waiting page before a model spends
+        // minutes on it, so this opens that page rather than starting it.
+        setShowQueue(true);
+      }}
+    >
+      {digesting?.running ? (
+        <>
+          <span className="digest-label">
+            {digesting.running.total > 1 &&
+              `${digesting.running.index} of ${digesting.running.total} · `}
+            {digesting.stopping
+              ? "stopping…"
+              : (pace(digesting.running) ??
+                PHASE_WORD[digesting.running.phase] ??
+                digesting.running.phase)}
+          </span>
+          {/* Nothing to press once a stop is already coming. */}
+          {!digesting.stopping && <span className="digest-hover">Stop</span>}
+          {digestPct !== null && (
+            <span className="digest-fill" style={{ width: `${digestPct}%` }} />
+          )}
+        </>
+      ) : (
+        <span className="digest-label">{pending > 0 ? `Read (${pending})` : "Read"}</span>
+      )}
+    </button>
+  );
+
   return (
     <main className="app">
       <nav className="topbar" data-tauri-drag-region>
@@ -1328,6 +1363,7 @@ export default function App() {
                   >
                     <Icon className="nav-icon" />
                     <span className="nav-label">{label}</span>
+                    {t === "book" && <span className="nav-beta">beta</span>}
                   </button>
                 );
               })}
@@ -1378,6 +1414,12 @@ export default function App() {
               >
                 <IconDefinitions />
               </button>
+              <button className="icon-btn" data-tip="Ask a folder" onClick={() => setPopup("ask")}>
+                <IconAsk />
+              </button>
+              <button className="icon-btn" data-tip="Book (beta)" onClick={() => setPopup("book")}>
+                <IconBookTab />
+              </button>
             </>
           )}
           {making && (
@@ -1422,6 +1464,13 @@ export default function App() {
                   attention next to the one button that does. */}
               <button
                 className="icon-btn topbar-quiet"
+                data-tip="Debug log — what the model is sending back"
+                onClick={() => setShowWire(true)}
+              >
+                <IconPulse />
+              </button>
+              <button
+                className="icon-btn topbar-quiet"
                 data-tip="Archived"
                 onClick={() => setShowArchive(true)}
               >
@@ -1433,54 +1482,6 @@ export default function App() {
                 onClick={() => setShowTrash(true)}
               >
                 <IconTrash />
-              </button>
-              {/* Running, it becomes the way to stop — the same button, because
-                  "digesting" and "stop digesting" are the same thing seen from
-                  either side of the decision, and a second button beside it
-                  would be dead most of the time. */}
-              <button
-                className={digesting?.running ? "digest-btn running" : "digest-btn"}
-                // A stop that was asked for only holds the button while a read
-                // is actually in flight. The snapshot that carries `stopping`
-                // can outlive the run it belongs to, and a disabled button over
-                // "Read (5)" is the button not working — which is exactly how
-                // a stopped digest used to end.
-                disabled={digestBusy || (digesting?.stopping && !!digesting?.running)}
-                onClick={() => {
-                  if (digesting?.running) {
-                    void stopDigest();
-                    return;
-                  }
-                  // Reading is confirmed on the waiting page before a model
-                  // spends minutes on it, so this opens that page rather than
-                  // starting the digest.
-                  setShowQueue(true);
-                }}
-              >
-                {digesting?.running ? (
-                  <>
-                    <span className="digest-label">
-                      {digesting.running.total > 1 &&
-                        `${digesting.running.index} of ${digesting.running.total} · `}
-                      {digesting.stopping
-                        ? "stopping after this one"
-                        : (pace(digesting.running) ??
-                          PHASE_WORD[digesting.running.phase] ??
-                          digesting.running.phase)}
-                    </span>
-                    {/* Nothing to press once a stop is already coming, and a
-                        button still offering "Stop" after you pressed Stop is
-                        how it came to look broken. */}
-                    {!digesting.stopping && <span className="digest-hover">Stop</span>}
-                    {digestPct !== null && (
-                      <span className="digest-fill" style={{ width: `${digestPct}%` }} />
-                    )}
-                  </>
-                ) : pending > 0 ? (
-                  `Read (${pending})`
-                ) : (
-                  "Read"
-                )}
               </button>
             </span>
           )}
@@ -1518,7 +1519,7 @@ export default function App() {
           had no row of its own, so it was auto-placed into the last one and
           spent its life at the bottom of the window, under the status bar,
           saying "is what you are looking at" about something a screen away. */}
-      {(view === "map" || view === "ideas" || view === "definitions" || view === "make") &&
+      {(view === "map" || view === "ideas" || view === "definitions" || view === "make" || view === "book") &&
         layout === "simple" && (
         <div className="row scope-bar">
           <button
@@ -1541,6 +1542,17 @@ export default function App() {
             folder={folderId}
             onOpenConversation={(id, quote) => setDeep({ kind: "conversation", id, quote })}
           />
+        </Boundary>
+      ) : layout === "simple" && view === "ask" ? (
+        // Its own folder picker, on the page: a question is often about
+        // somewhere other than the folder being worked in.
+        <Boundary what="Ask">
+          <Ask initialFolder={folderId} />
+        </Boundary>
+      ) : layout === "simple" && view === "book" ? (
+        // Beta: a folder's ideas written up as a book, a chapter at a time.
+        <Boundary what="The book writer">
+          <BookWriter folder={folderId} />
         </Boundary>
       ) : layout === "simple" && view === "make" ? (
         // The other direction: not what was taken out of the folder, but what
@@ -1594,18 +1606,6 @@ export default function App() {
         <div className="ws-center">
       <div className={turns.length === 0 ? "think opening" : "think"}>
       <div className="think-main">
-      {/* Import a finished document, at the top left where it is out of the
-          way of the thinking but always in reach. */}
-      <button
-        type="button"
-        className={importingDoc ? "icon-btn think-import on" : "icon-btn think-import"}
-        data-tip={importingDoc ? "Reading the document…" : "Import a document"}
-        disabled={importingDoc}
-        onClick={() => void importDocument()}
-      >
-        {importingDoc ? <span className="spinner" aria-hidden="true" /> : <IconBook />}
-        <span className="think-import-label">Import</span>
-      </button>
       <div className="stream">
         {turns.length === 0 && (
           <div className="empty">
@@ -1918,7 +1918,11 @@ export default function App() {
         </button>
       )}
       {layout === "simple" && railOpen && (
-        <ConversationsRail folder={folderId} onContinue={(id) => void resume(id)} />
+        <ConversationsRail
+                  folder={folderId}
+                  action={readButton}
+                  onContinue={(id) => void resume(id)}
+                />
       )}
       </div>
 
@@ -1935,7 +1939,11 @@ export default function App() {
                 </span>
               </button>
               <div className="ws-body">
-                <ConversationsRail folder={folderId} onContinue={(id) => void resume(id)} />
+                <ConversationsRail
+                  folder={folderId}
+                  action={readButton}
+                  onContinue={(id) => void resume(id)}
+                />
               </div>
             </>
           ) : (
@@ -2025,7 +2033,15 @@ export default function App() {
         <Sheet onClose={() => setPopup(null)}>
           <div className="sheet-head">
             <h2 className="sheet-title">
-              {popup === "map" ? "The map" : popup === "ideas" ? "Ideas" : "Definitions"}
+              {popup === "map"
+                ? "The map"
+                : popup === "ideas"
+                  ? "Ideas"
+                  : popup === "ask"
+                    ? "Ask"
+                    : popup === "book"
+                      ? "Book (beta)"
+                      : "Definitions"}
             </h2>
             <button className="icon-btn" data-tip="Close" onClick={() => setPopup(null)}>
               <IconClose />
@@ -2034,6 +2050,12 @@ export default function App() {
           <div className="sheet-body">
             {popup === "map" ? (
               <Graph folder={folderId} onOpenFile={(kind, id) => setDeep({ kind, id })} />
+            ) : popup === "ask" ? (
+              <Ask initialFolder={folderId} />
+            ) : popup === "book" ? (
+              <Boundary what="The book writer">
+                <BookWriter folder={folderId} />
+              </Boundary>
             ) : popup === "definitions" ? (
               <Definitions
                 folder={folderId}
@@ -2042,6 +2064,21 @@ export default function App() {
             ) : (
               <Ideas folder={folderId} onContinue={(id) => void resume(id)} />
             )}
+          </div>
+        </Sheet>
+      )}
+
+      {showWire && (
+        <Sheet onClose={() => setShowWire(false)}>
+          <div className="sheet-head">
+            <h2 className="sheet-title">Debug log</h2>
+            <span className="row-meta">live model throughput · characters, not tokens</span>
+            <button className="icon-btn" data-tip="Close" onClick={() => setShowWire(false)}>
+              <IconClose />
+            </button>
+          </div>
+          <div className="sheet-body wire-sheet">
+            <WireLog />
           </div>
         </Sheet>
       )}
@@ -2094,10 +2131,21 @@ export default function App() {
           </div>
           <div className="sheet-body">
             <Boundary what="The model picker">
-              <Models />
+              <Models initialSource={modelsSource} />
             </Boundary>
           </div>
         </Sheet>
+      )}
+
+      {onboarding && (
+        <Onboarding
+          onChoose={(source) => {
+            setOnboarding(false);
+            setModelsSource(source);
+            setShowModels(true);
+          }}
+          onClose={() => setOnboarding(false)}
+        />
       )}
 
       <Tooltip />
@@ -2116,11 +2164,7 @@ export default function App() {
         >
           {layout === "simple" ? "Simplified" : "Advanced"}
         </button>
-        {digesting?.running && (
-          <span className="busy-item">
-            reading back session {digesting.running.session_id}
-          </span>
-        )}
+        {provider?.kind === "openrouter" && <RoutePicker model={provider.model} />}
         {!digesting?.running && digesting?.last && readCost(digesting.last) && (
           <span className="read-cost" data-tip="What the last read cost, as the provider reported it">
             last read {readCost(digesting.last)}

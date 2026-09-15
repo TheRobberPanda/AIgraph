@@ -4,7 +4,7 @@
 //! two things in the plan depend on being able to change this file and re-measure:
 //! the drop rate, and whether nudges are insightful or generic filler.
 
-use crate::llm::types::{ConversationNotes, RawIdea};
+use crate::llm::types::{ConversationNotes, Note, RawIdea};
 use crate::llm::LlmError;
 
 /// Structured-output schema. Providers that support it get the shape enforced;
@@ -369,8 +369,9 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
     // is real work the model already did, and throwing away eight good ideas
     // because a ninth was truncated loses a whole session over the last
     // sentence of it.
-    if let Some(repaired) = repair(text) {
-        if let Ok(env) = serde_json::from_str::<Envelope>(&repaired) {
+    let repaired = repair(text);
+    if let Some(repaired) = &repaired {
+        if let Ok(env) = serde_json::from_str::<Envelope>(repaired) {
             tracing::warn!("extraction output was truncated; salvaged what completed");
             return Ok(Extracted {
                 title: env.title,
@@ -381,7 +382,104 @@ pub fn parse(raw: &str) -> Result<Extracted, LlmError> {
         }
     }
 
-    Err(LlmError::BadOutput(truncate(text, 300)))
+    // Valid JSON in a shape of its own. A model whose provider takes no
+    // schema — ling-3.0-flash-vl:free on OpenRouter — writes the JSON from the
+    // prompt's description alone, and a note as a bare string instead of
+    // `{"text": …}`, or a null where a string belongs, failed the whole
+    // session over one field. Read field by field instead, keeping every idea
+    // that has a claim and a quote; the verifier still checks each quote.
+    let outer = match (start, end) {
+        (Some(s), Some(e)) if e > s => Some(&text[s..=e]),
+        _ => None,
+    };
+    for candidate in [Some(text), outer, repaired.as_deref()].into_iter().flatten() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) {
+            if let Some(out) = lenient(&v) {
+                tracing::warn!("extraction output did not fit the schema; read it field by field");
+                return Ok(out);
+            }
+        }
+    }
+
+    // Say what serde objected to, not just the start of the reply: the start
+    // of a reply that looks like perfectly good JSON is no help to anyone.
+    let why = outer
+        .map(|o| serde_json::from_str::<Envelope>(o).err())
+        .unwrap_or_else(|| serde_json::from_str::<Envelope>(text).err())
+        .map(|e| format!("{e} — "))
+        .unwrap_or_default();
+    Err(LlmError::BadOutput(format!("{why}{}", truncate(text, 300))))
+}
+
+/// The extraction read one field at a time, tolerating the shapes models
+/// actually write. `None` when this is not an object with ideas in it at all.
+fn lenient(v: &serde_json::Value) -> Option<Extracted> {
+    let obj = v.as_object()?;
+    let ideas = obj.get("ideas")?.as_array()?;
+    let text = |x: Option<&serde_json::Value>| -> String {
+        x.and_then(|s| s.as_str()).unwrap_or("").trim().to_string()
+    };
+    let ideas = ideas
+        .iter()
+        .filter_map(|i| {
+            let o = i.as_object()?;
+            let claim = text(o.get("claim"));
+            let quote = text(o.get("quote"));
+            if claim.is_empty() || quote.is_empty() {
+                return None;
+            }
+            Some(RawIdea {
+                claim,
+                quote,
+                title: text(o.get("title")),
+                reasoning: text(o.get("reasoning")),
+                category: text(o.get("category")),
+                notes: notes_from(o.get("notes")),
+            })
+        })
+        .collect();
+    let definitions = obj
+        .get("definitions")
+        .and_then(|d| d.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| serde_json::from_value::<RawDefinition>(d.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Extracted {
+        title: text(obj.get("title")),
+        ideas,
+        conversation: ConversationNotes { notes: notes_from(obj.get("conversation")) },
+        definitions,
+    })
+}
+
+/// Notes however they came: a list of objects or of strings, a `{"notes": …}`
+/// wrapper, or one bare string. A kind the app does not know is a question.
+fn notes_from(v: Option<&serde_json::Value>) -> Vec<Note> {
+    use serde_json::Value;
+    let one = |n: &Value| -> Option<Note> {
+        let (text, kind) = match n {
+            Value::String(s) => (s.trim().to_string(), None),
+            Value::Object(o) => (
+                o.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string(),
+                o.get("kind").cloned(),
+            ),
+            _ => return None,
+        };
+        if text.is_empty() {
+            return None;
+        }
+        let kind = kind.and_then(|k| serde_json::from_value(k).ok()).unwrap_or_default();
+        Some(Note { text, kind })
+    };
+    match v {
+        Some(Value::Array(a)) => a.iter().filter_map(one).collect(),
+        Some(Value::Object(o)) => notes_from(o.get("notes")),
+        Some(s @ Value::String(_)) => one(s).into_iter().collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Close a JSON object that was cut off part-way through.
@@ -528,5 +626,34 @@ mod tests {
     #[test]
     fn unparseable_output_errors_with_a_sample() {
         assert!(matches!(parse("I'm sorry, I can't."), Err(LlmError::BadOutput(_))));
+    }
+
+    /// JSON written without a schema: notes as strings, nulls where strings
+    /// belong, an unknown note kind, conversation as a bare list. Every one of
+    /// these failed the whole session before.
+    #[test]
+    fn schemaless_shapes_are_read_field_by_field() {
+        let raw = r#"{"language":"English","title":"Political Compass","ideas":[
+            {"title":"Table of necessities","claim":"c","quote":"q","category":null,
+             "reasoning":"r","notes":["a bare note",{"text":"t","kind":"strong"}]},
+            {"title":"No quote","claim":"d"}],
+            "conversation":["whole-conversation note"],
+            "definitions":[{"term":"x","definition":"y","quote":"z"}]}"#;
+        let out = parse(raw).unwrap();
+        assert_eq!(out.title, "Political Compass");
+        assert_eq!(out.ideas.len(), 1, "an idea without a quote is dropped");
+        assert_eq!(out.ideas[0].category, "");
+        assert_eq!(out.ideas[0].notes.len(), 2);
+        assert_eq!(out.conversation.notes.len(), 1);
+        assert_eq!(out.definitions.len(), 1);
+    }
+
+    /// When nothing works, the error says what serde objected to.
+    #[test]
+    fn unparseable_json_says_why() {
+        let Err(LlmError::BadOutput(m)) = parse(r#"{"ideas": "none"}"#) else {
+            panic!("expected BadOutput");
+        };
+        assert!(m.contains("invalid type"), "{m}");
     }
 }

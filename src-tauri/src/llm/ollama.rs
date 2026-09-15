@@ -218,6 +218,67 @@ impl Ollama {
         Ok(once.message.content)
     }
 
+    /// Models pulled locally, with what `/api/tags` says about each: size on
+    /// disk, parameter count, quantisation and family.
+    pub async fn list_models_detailed(
+        &self,
+    ) -> Result<Vec<super::openai_compat::ModelInfo>, LlmError> {
+        use super::openai_compat::{ModelDetails, ModelInfo, ModelKind};
+        #[derive(Deserialize)]
+        struct Tags {
+            models: Vec<Tag>,
+        }
+        #[derive(Deserialize)]
+        struct Tag {
+            name: String,
+            #[serde(default)]
+            size: Option<u64>,
+            #[serde(default)]
+            details: Option<TagDetails>,
+        }
+        #[derive(Deserialize)]
+        struct TagDetails {
+            #[serde(default)]
+            format: Option<String>,
+            #[serde(default)]
+            family: Option<String>,
+            #[serde(default)]
+            parameter_size: Option<String>,
+            #[serde(default)]
+            quantization_level: Option<String>,
+        }
+
+        let tags: Tags = self
+            .http
+            .get(format!("{}/api/tags", self.host))
+            .send()
+            .await
+            .map_err(|e| LlmError::Transport(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        Ok(tags
+            .models
+            .into_iter()
+            .map(|m| {
+                let d = m.details;
+                ModelInfo {
+                    id: m.name,
+                    loaded: None,
+                    kind: ModelKind::Chat,
+                    details: ModelDetails {
+                        size: m.size,
+                        params: d.as_ref().and_then(|d| d.parameter_size.clone()),
+                        quant: d.as_ref().and_then(|d| d.quantization_level.clone()),
+                        family: d.as_ref().and_then(|d| d.family.clone()),
+                        format: d.and_then(|d| d.format),
+                        ..Default::default()
+                    },
+                }
+            })
+            .collect())
+    }
+
     /// Models pulled locally. Parity with the OpenAI-compatible provider so the
     /// UI can offer one model picker regardless of which server is behind it.
     pub async fn list_models(&self) -> Result<Vec<String>, LlmError> {

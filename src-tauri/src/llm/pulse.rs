@@ -41,6 +41,12 @@ pub fn bump(chars: usize) {
     LAST_AT.store(now_ms(), Ordering::Relaxed);
 }
 
+/// Record that the model said something that is not answer — reasoning. It
+/// is alive, and not quiet, even though nothing has been added to the reply.
+pub fn touch() {
+    LAST_AT.store(now_ms(), Ordering::Relaxed);
+}
+
 /// How much has come back, and how long it has been quiet.
 ///
 /// The silence is `None` before the first frame — at that point nothing has

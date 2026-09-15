@@ -145,11 +145,6 @@ pub struct Settings {
     /// tree dragged sideways stays sideways; anyone who wants the picture kept
     /// exactly as drawn asks for it to be locked.
     pub map_lock_nodes: bool,
-    /// Whether the map draws correlations: ideas joined only because their
-    /// claims sit close in meaning. Off by default — even filtered hard they
-    /// outnumber every other line, and the judged relations and contradictions
-    /// are what the map is read for.
-    pub map_correlations: bool,
     /// Advanced layout order: conversations on the left and Make on the
     /// right, instead of the default Make left / conversations right.
     pub advanced_swap: bool,
@@ -177,6 +172,13 @@ pub struct Settings {
     /// the wording is yours to argue with: what makes a script sound like you
     /// and not like a content farm is exactly the part a default cannot know.
     pub presets: Vec<Preset>,
+    /// Which OpenRouter provider each model goes through, by model id: an
+    /// endpoint tag, or "sort:price" / "sort:throughput" / "sort:latency".
+    /// See `llm::openai_compat::pin_router_routes`.
+    pub router_routes: std::collections::BTreeMap<String, String>,
+    /// The one-click questions on the Ask tab. The same shape as a Make
+    /// preset; the format is ignored, since an answer is read, not filed.
+    pub ask_presets: Vec<Preset>,
 }
 
 /// A named instruction, one button on the Make tab.
@@ -309,6 +311,41 @@ pub fn restore_default_presets(current: &[Preset]) -> Vec<Preset> {
     let shipped = default_presets();
     let own = current.iter().filter(|p| !shipped.iter().any(|d| d.id == p.id)).cloned();
     shipped.iter().cloned().chain(own).collect()
+}
+
+/// The questions the Ask tab offers before anything has been typed. Short,
+/// and about the material rather than about making anything out of it.
+pub fn default_ask_presets() -> Vec<Preset> {
+    vec![
+        Preset::new(
+            "ask-summary",
+            "What is this about?",
+            "In a few paragraphs, what is the thinking in these conversations about, and \
+             where has it got to?",
+            OutputFormat::Markdown,
+        ),
+        Preset::new(
+            "ask-open",
+            "What is unresolved?",
+            "List the questions these conversations raise and never settle, each with a \
+             line on why it is still open.",
+            OutputFormat::Markdown,
+        ),
+        Preset::new(
+            "ask-contradictions",
+            "Where do I contradict myself?",
+            "Find the places where I say one thing in one conversation and something \
+             incompatible in another. Quote both sides.",
+            OutputFormat::Markdown,
+        ),
+        Preset::new(
+            "ask-changed",
+            "How has my view changed?",
+            "Trace how my position on the main subjects here has moved over time, oldest \
+             first, quoting what I said at each point.",
+            OutputFormat::Markdown,
+        ),
+    ]
 }
 
 /// Where a fresh settings file, or one from before folders were remembered,
@@ -636,13 +673,14 @@ impl Default for Settings {
             learning_mode: false,
             map_spread: MapSpread::default(),
             map_lock_nodes: false,
-            map_correlations: false,
             advanced_swap: false,
             show_timing: false,
             quick_tune: true,
             current_folder: crate::store::ROOT_FOLDER,
             accent: String::new(),
             presets: default_presets(),
+            router_routes: Default::default(),
+            ask_presets: default_ask_presets(),
         }
     }
 }
@@ -664,6 +702,7 @@ impl Settings {
         // Pin here rather than at the call site: every way into the app reads
         // settings, and only one of them would remember to do this.
         pin_language(loaded.language);
+        crate::llm::openai_compat::pin_router_routes(loaded.router_routes.clone());
         loaded
     }
 

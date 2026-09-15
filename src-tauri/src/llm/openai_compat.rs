@@ -32,6 +32,28 @@ pub struct ModelInfo {
     /// `None` when the server doesn't report load state (remote APIs).
     pub loaded: Option<bool>,
     pub kind: ModelKind,
+    /// What the server says about the weights, where it says anything.
+    pub details: ModelDetails,
+}
+
+/// The facts that decide a local pick: how big, how squeezed, how much it
+/// can hold. Every field is optional — each server reports a different subset.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ModelDetails {
+    /// Bytes on disk.
+    pub size: Option<u64>,
+    /// "8B", "70.6B" — as the server spells it.
+    pub params: Option<String>,
+    /// "Q4_K_M", "4bit".
+    pub quant: Option<String>,
+    /// The longest context the weights support, in tokens.
+    pub context: Option<u64>,
+    /// "llama", "qwen2", "gemma3".
+    pub family: Option<String>,
+    /// "gguf", "mlx".
+    pub format: Option<String>,
+    /// Takes images as well as text.
+    pub vision: bool,
 }
 
 pub struct OpenAiCompat {
@@ -42,6 +64,27 @@ pub struct OpenAiCompat {
     /// be traced to the thing that produced it.
     label: String,
     http: reqwest::Client,
+    /// An OpenRouter endpoint this client may use and no other — set only to
+    /// time one provider, never for conversation.
+    only: Option<String>,
+}
+
+/// Which of OpenRouter's providers each model is sent to, as chosen in the
+/// route panel: an endpoint tag ("novita/bf16") to prefer, or "sort:price",
+/// "sort:throughput" or "sort:latency" to have the router rank them. A model
+/// not named here goes wherever OpenRouter sends it.
+///
+/// Held here rather than threaded through, for the same reason as the pinned
+/// language: clients are built in a dozen places that know nothing of settings.
+static ROUTES: std::sync::RwLock<std::collections::BTreeMap<String, String>> =
+    std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// Point OpenRouter models at their chosen providers. Called when settings
+/// are loaded or saved.
+pub fn pin_router_routes(routes: std::collections::BTreeMap<String, String>) {
+    if let Ok(mut r) = ROUTES.write() {
+        *r = routes;
+    }
 }
 
 impl OpenAiCompat {
@@ -57,6 +100,41 @@ impl OpenAiCompat {
             api_key,
             label: label.into(),
             http: long_read_client(),
+            only: None,
+        }
+    }
+
+    /// Send every request to one OpenRouter endpoint, with no fallback — so a
+    /// measurement is of that provider and not whichever one stood in for it.
+    pub fn only_through(mut self, tag: impl Into<String>) -> Self {
+        self.only = Some(tag.into());
+        self
+    }
+
+    /// Add the provider preference to an OpenRouter request, merged into any
+    /// the request already carries.
+    fn route(&self, body: &mut serde_json::Value) {
+        if self.label != "openrouter" {
+            return;
+        }
+        let mut prefs = body.get("provider").cloned().unwrap_or_else(|| serde_json::json!({}));
+        if let Some(tag) = &self.only {
+            prefs["only"] = serde_json::json!([tag]);
+            prefs["allow_fallbacks"] = serde_json::json!(false);
+        } else {
+            let chosen = ROUTES.read().ok().and_then(|r| r.get(&self.model).cloned());
+            match chosen.as_deref() {
+                None | Some("") => {}
+                Some(sort) if sort.starts_with("sort:") => {
+                    prefs["sort"] = serde_json::json!(&sort["sort:".len()..]);
+                }
+                // Preferred, not required: if it is down, the router falls back
+                // rather than the conversation failing.
+                Some(tag) => prefs["order"] = serde_json::json!([tag]),
+            }
+        }
+        if prefs.as_object().is_some_and(|o| !o.is_empty()) {
+            body["provider"] = prefs;
         }
     }
 
@@ -104,6 +182,14 @@ impl OpenAiCompat {
             state: Option<String>,
             #[serde(default)]
             r#type: Option<String>,
+            #[serde(default)]
+            arch: Option<String>,
+            #[serde(default)]
+            quantization: Option<String>,
+            #[serde(default)]
+            max_context_length: Option<u64>,
+            #[serde(default)]
+            compatibility_type: Option<String>,
         }
 
         // This endpoint sits at the host root, not under /v1.
@@ -123,6 +209,14 @@ impl OpenAiCompat {
                     kind: match m.r#type.as_deref() {
                         Some("embeddings") => ModelKind::Embedding,
                         _ => ModelKind::Chat,
+                    },
+                    details: ModelDetails {
+                        quant: m.quantization,
+                        context: m.max_context_length,
+                        family: m.arch,
+                        format: m.compatibility_type,
+                        vision: m.r#type.as_deref() == Some("vlm"),
+                        ..Default::default()
                     },
                     id: m.id,
                 })
@@ -220,9 +314,17 @@ struct Streamed {
 /// extraction wants to know it is still alive — but the framing is identical,
 /// and two copies of a hand-rolled SSE parser is one more than anybody should
 /// have to keep correct.
+///
+/// `quiet_limit` gives up when the model has said nothing — no answer and no
+/// reasoning — for that long. Bytes alone do not count: OpenRouter sends a
+/// keep-alive comment every few seconds while its provider is stuck, so a
+/// socket-level timeout never fires and the read waits forever on a request
+/// nobody is working on. Chat passes None — a local model can take minutes to
+/// read a long context before its first word, and a person is watching it.
 async fn drain_sse(
     resp: reqwest::Response,
     on_chunk: &(dyn for<'a> Fn(ChunkKind, &'a str) + Send + Sync),
+    quiet_limit: Option<std::time::Duration>,
 ) -> Result<Streamed, LlmError> {
     // Buffer across chunks — an event can split anywhere, including inside a
     // multibyte character, so decode only whole lines.
@@ -233,8 +335,33 @@ async fn drain_sse(
     let mut buf = Vec::<u8>::new();
     let mut stream = resp.bytes_stream();
     let ticket = crate::llm::cancel::start();
+    // Since the request was answered, not since it was sent: the wait for the
+    // status line is the connect timeout's business.
+    let mut last_said = std::time::Instant::now();
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let next = match quiet_limit {
+            None => stream.next().await,
+            Some(limit) => {
+                let left = limit.saturating_sub(last_said.elapsed());
+                match tokio::time::timeout(left, stream.next()).await {
+                    Ok(next) => next,
+                    Err(_) => {
+                        let secs = limit.as_secs();
+                        crate::llm::wire::note(format!(
+                            "gave up: nothing from the model for {secs}s"
+                        ));
+                        // "timed out" is what `looks_transient` matches: a
+                        // router may well send the next try to a provider
+                        // that is actually working.
+                        return Err(LlmError::Transport(format!(
+                            "timed out: the model sent nothing for {secs}s"
+                        )));
+                    }
+                }
+            }
+        };
+        let Some(chunk) = next else { break };
         // Stopped. Returning drops the body, which closes the connection,
         // which is what actually makes the server stop working — a flag that
         // only stopped this end reading would leave it filling a slot nobody
@@ -249,15 +376,23 @@ async fn drain_sse(
                 usage: usage.clone(),
             });
         }
-        buf.extend_from_slice(&chunk.map_err(|e| LlmError::Transport(e.to_string()))?);
+        let chunk = chunk.map_err(|e| LlmError::Transport(e.to_string()))?;
+        crate::llm::wire::bytes(chunk.len());
+        buf.extend_from_slice(&chunk);
 
         while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
             let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
             let line = String::from_utf8_lossy(&line_bytes);
             let line = line.trim();
 
+            // ": OPENROUTER PROCESSING" and the like — the server keeping the
+            // connection open while nothing is being written.
+            if line.starts_with(':') {
+                crate::llm::wire::ping();
+                continue;
+            }
             let Some(payload) = line.strip_prefix("data:") else {
-                continue; // comments, blank separators, other SSE fields
+                continue; // blank separators, other SSE fields
             };
             let payload = payload.trim();
 
@@ -304,11 +439,15 @@ async fn drain_sse(
                 // Shown, but deliberately not accumulated into `full`.
                 if let Some(text) = choice.delta.reasoning_content.or(choice.delta.reasoning) {
                     if !text.is_empty() {
+                        last_said = std::time::Instant::now();
+                        crate::llm::wire::token(true, &text);
                         on_chunk(ChunkKind::Reasoning, &text);
                     }
                 }
                 if let Some(text) = choice.delta.content {
                     if !text.is_empty() {
+                        last_said = std::time::Instant::now();
+                        crate::llm::wire::token(false, &text);
                         on_chunk(ChunkKind::Content, &text);
                         full.push_str(&text);
                     }
@@ -355,13 +494,73 @@ pub fn reasoning_mandatory(model: &str) -> bool {
     REASONING_MANDATORY.lock().unwrap_or_else(|p| p.into_inner()).contains(model)
 }
 
+/// Note that this model will not answer with reasoning off.
+fn remember_reasoning_mandatory(model: &str) {
+    tracing::info!(model = %model, "reasoning is mandatory here; asking with it on");
+    crate::llm::wire::note(format!(
+        "{model} refused to answer with reasoning off — asking with it on, kept low, from now on"
+    ));
+    REASONING_MANDATORY.lock().unwrap_or_else(|p| p.into_inner()).insert(model.to_string());
+}
+
+/// Note, from OpenRouter's catalogue, that this model cannot reason less than
+/// it does — so its first request is not spent being refused. Quiet, unlike
+/// `remember_reasoning_mandatory`: this is a listing, not an event.
+pub fn know_reasoning_mandatory(model: &str) {
+    REASONING_MANDATORY.lock().unwrap_or_else(|p| p.into_inner()).insert(model.to_string());
+}
+
+/// Models whose providers cannot take every parameter a read sends, so the
+/// read stops insisting on them. This run only.
+static PARAMETERS_OPTIONAL: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+fn parameters_optional(model: &str) -> bool {
+    PARAMETERS_OPTIONAL.lock().unwrap_or_else(|p| p.into_inner()).contains(model)
+}
+
+/// OpenRouter found no provider that takes everything asked for:
+/// "No endpoints found that can handle the requested parameters."
+///
+/// That is `require_parameters` at work. Useful when a model has several
+/// providers and some would quietly ignore the schema — but a model with one
+/// provider, which happens not to take one of the parameters, then has none
+/// at all, and every read of it fails before a word is written.
+fn unroutable(msg: &str) -> bool {
+    msg.to_ascii_lowercase().contains("can handle the requested parameters")
+}
+
+/// Models whose provider refused a response schema, this run. Asked without
+/// one from then on: the prompt spells the JSON out in words, and the parser
+/// digs it out of whatever surrounds it.
+static SCHEMA_REFUSED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+fn schema_refused(model: &str) -> bool {
+    SCHEMA_REFUSED.lock().unwrap_or_else(|p| p.into_inner()).contains(model)
+}
+
+/// "model features structured outputs not support" — Novita, behind Ling
+/// 3.0 Flash. Found by the ladder only after three refused requests, and
+/// again on every read, because nothing remembered it.
+fn refuses_structured_output(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    (m.contains("structured output") || m.contains("response_format") || m.contains("json_schema"))
+        && (m.contains("not support") || m.contains("unsupported") || m.contains("not allowed"))
+}
+
 /// "Reasoning is mandatory for this endpoint and cannot be disabled."
+///
+/// Worded the same as `wantsReasoning` in the frontend. When they differed, a
+/// refusal the frontend recognised never reached the retry here.
 fn refuses_without_reasoning(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
     m.contains("reasoning")
         && (m.contains("mandatory")
             || m.contains("cannot be disabled")
-            || m.contains("must be enabled"))
+            || m.contains("must be enabled")
+            || m.contains("is required")
+            || m.contains("required for this"))
 }
 
 #[async_trait]
@@ -396,7 +595,15 @@ impl ChatProvider for OpenAiCompat {
             // is an object and it rejects the string llama.cpp wants, so
             // sending both spellings at once fails against it outright.
             if self.label == "openrouter" {
-                body["reasoning"] = serde_json::json!({ "enabled": reasoning });
+                // On means low effort, whether asked for or insisted on. Left
+                // at `enabled: true` the model picks its own effort, and some
+                // default to max — z-ai/glm-5.3-flash thought for minutes
+                // before every reply. The thinking is most of the wait.
+                body["reasoning"] = if reasoning {
+                    serde_json::json!({ "effort": "low" })
+                } else {
+                    serde_json::json!({ "enabled": false })
+                };
             } else {
                 // The embedded server is started with thinking off, so a
                 // request that wants it has to ask.
@@ -405,10 +612,17 @@ impl ChatProvider for OpenAiCompat {
                     body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
                 }
             }
+            self.route(&mut body);
             body
         };
 
         let reasoning = req.reasoning || reasoning_mandatory(&req.model);
+        if reasoning && !req.reasoning {
+            crate::llm::wire::note(format!(
+                "reasoning turned on for {}: it will not answer with it off",
+                req.model
+            ));
+        }
         let mut resp = self
             .post("/chat/completions")
             .json(&body(reasoning))
@@ -426,8 +640,7 @@ impl ChatProvider for OpenAiCompat {
             if reasoning || !refuses_without_reasoning(&detail) {
                 return Err(http_error(status, detail));
             }
-            tracing::info!(model = %req.model, "reasoning is mandatory here; asking again with it on");
-            REASONING_MANDATORY.lock().unwrap_or_else(|p| p.into_inner()).insert(req.model.clone());
+            remember_reasoning_mandatory(&req.model);
             resp = self
                 .post("/chat/completions")
                 .json(&body(true))
@@ -452,8 +665,30 @@ impl ChatProvider for OpenAiCompat {
             }
             on_chunk(kind, text);
         };
-        match drain_sse(resp, &counted).await {
+        match drain_sse(resp, &counted, None).await {
             Ok(s) => Ok(s.content),
+            // The same refusal, sent the way OpenRouter often sends one: a 200
+            // and then an error frame. Missed here, it went straight to the
+            // person as a failed message.
+            Err(e)
+                if !reasoning
+                    && !answered.load(std::sync::atomic::Ordering::Relaxed)
+                    && refuses_without_reasoning(&e.to_string()) =>
+            {
+                remember_reasoning_mandatory(&req.model);
+                let resp = self
+                    .post("/chat/completions")
+                    .json(&body(true))
+                    .send()
+                    .await
+                    .map_err(|e| self.connect_error(&e))?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let detail = resp.text().await.unwrap_or_default();
+                    return Err(http_error(status, detail));
+                }
+                Ok(drain_sse(resp, on_chunk, None).await?.content)
+            }
             Err(e)
                 if !answered.load(std::sync::atomic::Ordering::Relaxed)
                     && looks_transient(&e.to_string()) =>
@@ -471,7 +706,7 @@ impl ChatProvider for OpenAiCompat {
                     let detail = resp.text().await.unwrap_or_default();
                     return Err(http_error(status, detail));
                 }
-                Ok(drain_sse(resp, on_chunk).await?.content)
+                Ok(drain_sse(resp, on_chunk, None).await?.content)
             }
             Err(e) => Err(e),
         }
@@ -549,6 +784,11 @@ fn looks_transient(msg: &str) -> bool {
 /// transport failure tied to this request.
 fn http_error(status: reqwest::StatusCode, detail: String) -> LlmError {
     let text = format!("{status}: {detail}");
+    // A 404, but about the request's parameters rather than the model: asked
+    // with fewer requirements, the same model answers. See `unroutable`.
+    if unroutable(&detail) {
+        return LlmError::Transport(text);
+    }
     if matches!(
         status,
         reqwest::StatusCode::UNAUTHORIZED
@@ -572,15 +812,19 @@ fn http_error(status: reqwest::StatusCode, detail: String) -> LlmError {
 /// request was tried, and extraction failed for good.
 fn looks_like_a_rejected_parameter(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
+    // The status line only, not the body after it: a router's error body
+    // carries ids and raw provider output, and a "404" somewhere in a user id
+    // was enough to end the ladder before the rung that would have worked.
+    let head = m.split('{').next().unwrap_or(&m);
     // Not every 4xx is an objection to the request's shape. A key that is
     // missing, wrong or out of credit, and a model id that does not exist,
     // all answer in the 400s — and asking the same question more simply
     // cannot help with any of them. Walking the whole ladder there spends
     // three more requests to arrive at the same refusal, and reports it as
     // the last rung's failure rather than the real one.
-    if m.contains("401")
-        || m.contains("403")
-        || m.contains("404")
+    if head.contains("401")
+        || head.contains("403")
+        || head.contains("404")
         || m.contains("unauthorized")
         || m.contains("forbidden")
         || m.contains("authentication")
@@ -636,6 +880,24 @@ impl OpenAiCompat {
         if how == Reasoning::LeftAlone {
             return;
         }
+        if how == Reasoning::Low {
+            if self.label == "openrouter" {
+                body["reasoning"] = serde_json::json!({ "effort": "low" });
+            } else {
+                body["reasoning_effort"] = serde_json::json!("low");
+            }
+            return;
+        }
+        if how == Reasoning::Capped {
+            // OpenRouter turns a token cap into an effort level for models
+            // that only take one. Elsewhere effort is the only common word.
+            if self.label == "openrouter" {
+                body["reasoning"] = serde_json::json!({ "max_tokens": REASONING_CAP_CLOUD });
+            } else {
+                body["reasoning_effort"] = serde_json::json!("low");
+            }
+            return;
+        }
         if self.label == "openrouter" {
             body["reasoning"] = serde_json::json!({ "enabled": false });
             return;
@@ -672,7 +934,7 @@ impl OpenAiCompat {
 
         for (attempt, wait) in WAITS.iter().enumerate() {
             let result =
-                self.structured(prompt, schema.clone(), reasoning, structured_output, stream).await;
+                self.logged(prompt, schema.clone(), reasoning, structured_output, stream).await;
             let msg = match &result {
                 Err(LlmError::Transport(m)) | Err(LlmError::Unavailable(m)) => m.clone(),
                 // Anything else is the model's answer, good or bad. Sending
@@ -693,7 +955,62 @@ impl OpenAiCompat {
             tokio::time::sleep(std::time::Duration::from_secs(*wait)).await;
         }
 
-        self.structured(prompt, schema, reasoning, structured_output, stream).await
+        self.logged(prompt, schema, reasoning, structured_output, stream).await
+    }
+
+    /// `structured`, with its start and end written to the debug log.
+    async fn logged(
+        &self,
+        prompt: &str,
+        schema: serde_json::Value,
+        reasoning: Reasoning,
+        structured_output: bool,
+        stream: bool,
+    ) -> Result<String, LlmError> {
+        crate::llm::wire::begin(&self.model, prompt.chars().count(), stream);
+        if reasoning != Reasoning::Off && reasoning_mandatory(&self.model) {
+            crate::llm::wire::forced(&self.model);
+        }
+        let mut result =
+            self.structured(prompt, schema.clone(), reasoning, structured_output, stream).await;
+        // No provider takes everything asked for. Asked again at once without
+        // insisting, where the provider there is free to ignore what it does
+        // not know — and remembered, so the next read starts that way.
+        if let Err(LlmError::Transport(m)) = &result {
+            if unroutable(m) && !parameters_optional(&self.model) {
+                PARAMETERS_OPTIONAL
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(self.model.clone());
+                crate::llm::wire::note(format!(
+                    "no provider of {} takes every parameter — asking without requiring them",
+                    self.model
+                ));
+                tracing::warn!(model = %self.model, "unroutable with required parameters; relaxing");
+                result = self
+                    .structured(prompt, schema.clone(), reasoning, structured_output, stream)
+                    .await;
+            }
+        }
+        // The provider will not take a schema at all. Asked again at once
+        // without one, and never with one again this run — whichever rung of
+        // the ladder this is.
+        if let Err(LlmError::Transport(m)) = &result {
+            if structured_output && refuses_structured_output(m) && !schema_refused(&self.model) {
+                SCHEMA_REFUSED.lock().unwrap_or_else(|p| p.into_inner()).insert(self.model.clone());
+                crate::llm::wire::note(format!(
+                    "{}'s provider does not do structured output — asking for JSON in words instead",
+                    self.model
+                ));
+                tracing::warn!(model = %self.model, "response schema refused; asking without one");
+                result = self.structured(prompt, schema, reasoning, false, stream).await;
+            }
+        }
+        crate::llm::wire::end(&match &result {
+            Ok(_) => "finished".to_string(),
+            Err(e) => format!("failed ({e})"),
+        });
+        result
     }
 
     /// One structured call, giving up a parameter at a time.
@@ -705,16 +1022,48 @@ impl OpenAiCompat {
     /// difference between "this provider does not work" and "this provider
     /// needs asking more simply".
     async fn attempt(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError> {
+        let first = self.ladder(prompt, schema.clone()).await;
+        if !first.as_ref().is_err_and(spent_on_reasoning) {
+            return first;
+        }
+        // Thought until the budget was gone and never answered: either the
+        // switch-off was ignored or the model cannot be switched off. Asking
+        // the same way again spends the same budget the same way, so the
+        // thinking is given a budget of its own instead.
+        tracing::warn!(model = %self.model, "reasoning used the whole budget; asking with it capped");
+        let stream = self.streams_extraction();
+        let capped =
+            self.through_the_network(prompt, schema.clone(), Reasoning::Capped, true, stream).await;
+        match &capped {
+            Err(LlmError::Transport(m)) if looks_like_a_rejected_parameter(m) => {
+                self.through_the_network(prompt, schema, Reasoning::Capped, false, false).await
+            }
+            _ => capped,
+        }
+    }
+
+    /// The ladder itself: asking more simply each time a server objects.
+    async fn ladder(&self, prompt: &str, schema: serde_json::Value) -> Result<String, LlmError> {
         // Streamed only where the wait is long enough to be worth reporting on
         // and the server is known to stream structured output. A local model
         // answers from the same machine and already reports its own timings,
         // so it stays on the path that has been working.
         let stream = self.streams_extraction();
 
+        // A model that will not answer with reasoning off is not asked to, and
+        // does not spend two refused requests every read finding that out.
+        if reasoning_mandatory(&self.model) {
+            return self.left_alone(prompt, schema, stream).await;
+        }
+
         let first =
             self.through_the_network(prompt, schema.clone(), Reasoning::Off, true, stream).await;
 
         let Err(LlmError::Transport(msg)) = &first else { return first };
+        if refuses_without_reasoning(msg) {
+            remember_reasoning_mandatory(&self.model);
+            return self.left_alone(prompt, schema, stream).await;
+        }
         if !looks_like_a_rejected_parameter(msg) {
             return first;
         }
@@ -747,6 +1096,42 @@ impl OpenAiCompat {
 
         tracing::debug!(error = %msg, "retrying without a response schema");
         self.through_the_network(prompt, schema, Reasoning::LeftAlone, false, false).await
+    }
+
+    /// The ladder's lower rungs, for a model that must reason: asked to think
+    /// as little as it allows, then nothing said about reasoning, then without
+    /// streaming, then without the schema.
+    ///
+    /// Low effort first because left alone, such a model thinks as long as it
+    /// likes — minutes of reasoning before the first word of a mechanical
+    /// extraction, which was most of the wait on every read.
+    async fn left_alone(
+        &self,
+        prompt: &str,
+        schema: serde_json::Value,
+        stream: bool,
+    ) -> Result<String, LlmError> {
+        let mut rungs = vec![
+            (Reasoning::Low, true, stream),
+            (Reasoning::LeftAlone, true, false),
+            (Reasoning::LeftAlone, false, false),
+        ];
+        if stream {
+            rungs.insert(1, (Reasoning::LeftAlone, true, true));
+        }
+        let mut last = None;
+        for (how, structured_output, stream) in rungs {
+            let result = self
+                .through_the_network(prompt, schema.clone(), how, structured_output, stream)
+                .await;
+            let Err(LlmError::Transport(msg)) = &result else { return result };
+            if !looks_like_a_rejected_parameter(msg) {
+                return result;
+            }
+            tracing::debug!(error = %msg, "reasoning left on; asking more simply");
+            last = Some(result);
+        }
+        last.expect("at least one rung ran")
     }
 
     /// Whether this endpoint is a router in front of many providers, rather
@@ -794,7 +1179,7 @@ impl OpenAiCompat {
             "data:{media_type};base64,{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)
         );
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": [{
                 "role": "user",
@@ -809,6 +1194,7 @@ impl OpenAiCompat {
             "max_tokens": CLOUD_EXTRACT_MAX_TOKENS,
             "stream": false,
         });
+        self.route(&mut body);
 
         let resp = self
             .post("/chat/completions")
@@ -835,6 +1221,7 @@ impl OpenAiCompat {
             serde_json::from_str(&raw).map_err(|e| LlmError::BadOutput(e.to_string()))?;
         crate::llm::meter::record(completion.timings.as_ref());
         crate::llm::meter::record_usage(completion.usage.as_ref());
+        crate::llm::wire::spent(&self.model, completion.usage.as_ref());
         let Some(choice) = completion.choices.first() else {
             return Err(LlmError::BadOutput("no choices in response".into()));
         };
@@ -875,7 +1262,10 @@ impl OpenAiCompat {
         stream: bool,
     ) -> Result<String, LlmError> {
         let messages = vec![Message { role: Role::User, content: prompt.to_string() }];
-        let budget = self.extract_budget();
+        let mut budget = self.extract_budget();
+        if reasoning == Reasoning::Capped && self.label != "openrouter" {
+            budget += REASONING_CAP_LOCAL;
+        }
 
         let mut body = serde_json::json!({
             "model": self.model,
@@ -901,16 +1291,17 @@ impl OpenAiCompat {
         // than preferences, so a provider that cannot honour them is not
         // offered the request. Without it, asking for JSON is a coin toss and
         // no amount of getting the dialect right can help.
-        if self.routes_to_many_providers() {
+        if self.routes_to_many_providers() && !parameters_optional(&self.model) {
             body["provider"] = serde_json::json!({ "require_parameters": true });
         }
+        self.route(&mut body);
         // Ask for the price with the answer: OpenRouter only says what a call
         // cost when asked, and the last read's cost is shown beside the queue.
         if self.label == "openrouter" {
             body["usage"] = serde_json::json!({ "include": true });
         }
         // Dropped on the way back up when a server rejects it — see `attempt`.
-        if !structured_output {
+        if !structured_output || schema_refused(&self.model) {
             body.as_object_mut().expect("object").remove("response_format");
         }
 
@@ -934,13 +1325,20 @@ impl OpenAiCompat {
         // identical. Every frame here says both how much has arrived and that
         // it arrived just now.
         if stream {
-            let streamed = drain_sse(resp, &|kind, text| {
-                if kind == ChunkKind::Content {
-                    crate::llm::pulse::bump(text.chars().count());
-                }
-            })
+            let streamed = drain_sse(
+                resp,
+                &|kind, text| {
+                    if kind == ChunkKind::Content {
+                        crate::llm::pulse::bump(text.chars().count());
+                    } else {
+                        crate::llm::pulse::touch();
+                    }
+                },
+                Some(EXTRACT_QUIET_LIMIT),
+            )
             .await?;
             crate::llm::meter::record_usage(streamed.usage.as_ref());
+            crate::llm::wire::spent(&self.model, streamed.usage.as_ref());
 
             if streamed.cancelled {
                 return Err(LlmError::Transport("the read was stopped".into()));
@@ -991,6 +1389,7 @@ impl OpenAiCompat {
         // accounts for the time it spent.
         crate::llm::meter::record(completion.timings.as_ref());
         crate::llm::meter::record_usage(completion.usage.as_ref());
+        crate::llm::wire::spent(&self.model, completion.usage.as_ref());
         if let Some(served_by) = &completion.provider {
             // Which of the router's providers answered. Worth a line: when the
             // same model works and then does not, this is usually the only
@@ -1089,6 +1488,13 @@ const EXTRACT_MAX_TOKENS: u32 = 5_000;
 /// bound that actually stops the model is the idea count in `json_schema`.
 const CLOUD_EXTRACT_MAX_TOKENS: u32 = 32_000;
 
+/// How long a streamed read may go without a single token — answer or
+/// reasoning — before it is abandoned. Keep-alive pings do not count; see
+/// `drain_sse`. Generous for a cloud model, whose first token normally lands
+/// within seconds, and far short of the hour a stuck request would otherwise
+/// hold the whole queue.
+const EXTRACT_QUIET_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// How much thinking to ask a model for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reasoning {
@@ -1096,6 +1502,25 @@ enum Reasoning {
     Off,
     /// Say nothing about it, for a server that refused to be told.
     LeftAlone,
+    /// Allowed, but held to a budget of its own — for a model that ignored
+    /// being asked not to think, or cannot be, and thought until the whole
+    /// reply's budget was gone.
+    Capped,
+    /// On, because the model will not answer without it, but asked to keep
+    /// it short. Most of such a model's wait is the thinking, so the least
+    /// effort it accepts is the fastest answer it will give.
+    Low,
+}
+
+/// How many tokens a capped model may think for, leaving the rest of the
+/// budget for the answer. The cloud budget is 32,000; the local one gets this
+/// much added on top, since 5,000 is all the answer has there.
+const REASONING_CAP_CLOUD: u32 = 8_000;
+const REASONING_CAP_LOCAL: u32 = 3_000;
+
+/// A reply that never started because the model thought until it ran out.
+fn spent_on_reasoning(e: &LlmError) -> bool {
+    matches!(e, LlmError::BadOutput(m) if m.contains("budget") && m.contains("reasoning"))
 }
 
 #[async_trait]
@@ -1162,6 +1587,51 @@ mod tests {
         assert_eq!(b["reasoning"], serde_json::json!("off"));
         assert_eq!(b["reasoning_effort"], serde_json::json!("none"));
         assert_eq!(b["chat_template_kwargs"]["enable_thinking"], serde_json::json!(false));
+    }
+
+    /// Capped is a budget, not a switch: OpenRouter gets a token cap, a local
+    /// server the one effort word they share, and neither is told "off".
+    #[test]
+    fn a_capped_read_limits_the_thinking_rather_than_switching_it_off() {
+        let mut b = body();
+        OpenAiCompat::new("https://openrouter.ai/api/v1", "m", None, "openrouter")
+            .quieten_reasoning(&mut b, Reasoning::Capped);
+        assert_eq!(b["reasoning"], serde_json::json!({ "max_tokens": REASONING_CAP_CLOUD }));
+
+        let mut b = body();
+        OpenAiCompat::new("http://127.0.0.1:8127", "m", None, "embedded")
+            .quieten_reasoning(&mut b, Reasoning::Capped);
+        assert_eq!(b["reasoning_effort"], serde_json::json!("low"));
+        assert!(b.get("chat_template_kwargs").is_none());
+    }
+
+    /// Only the budget-spent-thinking failure earns the capped retry.
+    #[test]
+    fn a_budget_spent_on_reasoning_is_recognised() {
+        let spent = LlmError::BadOutput(
+            "the model spent its entire 32000-token budget reasoning and never produced an answer"
+                .into(),
+        );
+        assert!(spent_on_reasoning(&spent));
+        assert!(!spent_on_reasoning(&LlmError::BadOutput(
+            "the model returned an empty reply".into()
+        )));
+        assert!(!spent_on_reasoning(&LlmError::Transport("budget reasoning".into())));
+    }
+
+    /// Every wording the frontend's `wantsReasoning` accepts. When the two
+    /// differed, a refusal the frontend recognised was never retried here.
+    #[test]
+    fn a_refusal_to_answer_without_reasoning_is_recognised() {
+        for said in [
+            "400: Reasoning is mandatory for this endpoint and cannot be disabled.",
+            "400: reasoning must be enabled for this model",
+            "400: Reasoning is required for this model",
+        ] {
+            assert!(refuses_without_reasoning(said), "{said}");
+        }
+        assert!(!refuses_without_reasoning("400: reasoning: Expected object, received string"));
+        assert!(!refuses_without_reasoning("400: max_tokens is required"));
     }
 
     /// It used to match the words "reasoning_effort" and nothing else, so a
@@ -1242,6 +1712,39 @@ mod tests {
         let text = error_text(&err);
         assert_eq!(text, "400: model does not support response_format");
         assert!(looks_like_a_rejected_parameter(&text), "must reach the simpler retry");
+    }
+
+    /// Ling 3.0 Flash's one provider could not take every parameter, and with
+    /// them required OpenRouter answered 404 — which read as "model missing",
+    /// stopped the digest, and never reached the retry that asks without.
+    #[test]
+    fn a_model_no_provider_fully_serves_is_retried_not_given_up() {
+        let body = r#"{"error":{"message":"No endpoints found that can handle the requested parameters.","code":404}}"#;
+        let e = http_error(reqwest::StatusCode::NOT_FOUND, body.to_string());
+        let LlmError::Transport(m) = &e else { panic!("must not stop the digest: {e:?}") };
+        assert!(unroutable(m));
+        // A model that really is missing still stops it.
+        let gone = http_error(reqwest::StatusCode::NOT_FOUND, "no such model".into());
+        assert!(matches!(gone, LlmError::Unavailable(_)));
+    }
+
+    /// Novita's refusal, word for word as it arrived, wrapped by OpenRouter
+    /// around a user id. It must be read as a refused schema and keep the
+    /// ladder going, not end it.
+    #[test]
+    fn a_provider_without_structured_output_is_asked_without_a_schema() {
+        let msg = r#"400 Bad Request: {"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"{\"code\":400, \"reason\":\"INVALID_REQUEST_BODY\", \"message\":\"model features structured outputs not support\", \"metadata\": {}}","provider_name":"Novita","is_byok":false}},"user_id":"user_3Iuau404XRUjBjevj8twN3H"}"#;
+        assert!(refuses_structured_output(msg));
+        assert!(looks_like_a_rejected_parameter(msg), "a 404 inside the body is not the status");
+        assert!(!refuses_structured_output("400: max_tokens is too large"));
+    }
+
+    #[test]
+    fn a_model_that_must_think_is_asked_to_think_little() {
+        let mut b = serde_json::json!({});
+        OpenAiCompat::new("https://openrouter.ai/api/v1", "m", None, "openrouter")
+            .quieten_reasoning(&mut b, Reasoning::Low);
+        assert_eq!(b["reasoning"], serde_json::json!({ "effort": "low" }));
     }
 
     /// An error object with nothing readable in it still has to say something.

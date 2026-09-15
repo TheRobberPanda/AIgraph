@@ -237,6 +237,49 @@ export function exportBook(
   return invoke<BookWritten>("export_book", { folder, path, format });
 }
 
+/** One second of what came back over the wire. Characters, not tokens. */
+export interface WireSecond {
+  at: number;
+  bytes: number;
+  content: number;
+  reasoning: number;
+  pings: number;
+}
+
+/** The model request in flight, or the last one. Times are epoch ms. */
+export interface WireRequest {
+  model: string;
+  streamed: boolean;
+  prompt_chars: number;
+  started_ms: number;
+  first_byte_ms: number | null;
+  first_token_ms: number | null;
+  last_token_ms: number | null;
+  bytes: number;
+  content: number;
+  reasoning: number;
+  pings: number;
+  outcome: string | null;
+  ended_ms: number | null;
+  /** The end of what it has written so far — answer and reasoning, kept apart. */
+  output: string;
+  thinking: string;
+  /** Reasoning is on because this model refuses to answer with it off. */
+  reasoning_forced: boolean;
+}
+
+export interface WireLog {
+  now_ms: number;
+  seconds: WireSecond[];
+  events: { at_ms: number; text: string }[];
+  request: WireRequest | null;
+}
+
+/** What has come back from the model lately, for the debug log. */
+export function wireLog(): Promise<WireLog> {
+  return invoke<WireLog>("wire_log");
+}
+
 /** A conversation that could not be read, and why. */
 export interface Stalled {
   session_id: number;

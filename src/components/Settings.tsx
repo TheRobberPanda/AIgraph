@@ -28,6 +28,7 @@ import {
 } from "../lib/settings";
 import Confirm from "./Confirm";
 import { IconTrash } from "./Icons";
+import { learnDocument } from "../lib/import";
 import Hint, { Section } from "./Hint";
 
 import {
@@ -47,7 +48,14 @@ const THEMES: { value: Theme; label: string }[] = [
   { value: "paper", label: "Paper" },
 ];
 
-type Category = "appearance" | "conversation" | "voice" | "engine" | "prompts" | "about";
+type Category =
+  | "appearance"
+  | "conversation"
+  | "voice"
+  | "engine"
+  | "prompts"
+  | "import"
+  | "about";
 
 /**
  * Settings, sorted by the question you arrive with.
@@ -66,6 +74,9 @@ export default function Settings() {
   const [redigestNote, setRedigestNote] = useState<string | null>(null);
   const [dirError, setDirError] = useState("");
   const [category, setCategory] = useState<Category>("appearance");
+  /** A document being read in from the Import page, and how it went. */
+  const [importing, setImporting] = useState(false);
+  const [importNote, setImportNote] = useState<string | null>(null);
 
   /** Ask the OS for a folder, and only keep it if it can actually be used. */
   async function chooseDir() {
@@ -134,6 +145,34 @@ export default function Settings() {
     }
   }
 
+  /**
+   * Add a finished document to the current folder and read the ideas back out.
+   *
+   * A document is archived as a conversation whose one speaker is the
+   * document, then extracted like any other. PDFs go through a model that
+   * accepts documents, and the backend says so plainly when this one cannot.
+   */
+  async function importDocument() {
+    setImportNote(null);
+    const picked = await pickFolder({
+      multiple: false,
+      title: "Choose a document to read",
+      filters: [
+        { name: "Documents", extensions: ["md", "markdown", "txt", "text", "rst", "org", "pdf"] },
+      ],
+    });
+    if (typeof picked !== "string") return;
+    setImporting(true);
+    try {
+      await learnDocument(picked);
+      setImportNote("Imported. It is with the conversations in this folder, waiting to be read.");
+    } catch (e) {
+      setImportNote(String(e));
+    } finally {
+      setImporting(false);
+    }
+  }
+
   if (!s) return <div className="pane-inner" />;
 
   const themeLabel = THEMES.find((t) => t.value === s.theme)!.label;
@@ -164,6 +203,7 @@ export default function Settings() {
       summary: server?.server_ready ? server.server_build ?? "ready" : "none installed",
     },
     { id: "prompts", title: "Prompts", summary: `${s.presets.length} instructions` },
+    { id: "import", title: "Import", summary: importing ? "reading…" : "documents" },
     { id: "about", title: "How this app uses AI", summary: null },
   ];
 
@@ -315,26 +355,6 @@ export default function Settings() {
                 onClick={() => void update({ map_lock_nodes: true })}
               >
                 Locked
-              </button>
-            </div>
-
-            <Section
-              hint="Correlations join ideas whose claims are close in meaning, without a model judging them related. Contradictions and judged relations always show."
-            >
-              Correlations
-            </Section>
-            <div className="row">
-              <button
-                className={!s.map_correlations ? "btn on" : "btn"}
-                onClick={() => void update({ map_correlations: false })}
-              >
-                Hidden
-              </button>
-              <button
-                className={s.map_correlations ? "btn on" : "btn"}
-                onClick={() => void update({ map_correlations: true })}
-              >
-                Shown
               </button>
             </div>
 
@@ -498,7 +518,9 @@ export default function Settings() {
                 <>
                   Reasoning models can deliberate at length first. None of it is
                   shown or recorded here — on a local model it is most of the
-                  wait.
+                  wait. On, it is kept short. Some models reason whatever this
+                  says — they carry a yellow ! in the model list and are slow
+                  every time.
                 </>
               }
             >
@@ -853,6 +875,29 @@ export default function Settings() {
               </button>
             </div>
 
+          </>
+        )}
+
+        {category === "import" && (
+          <>
+            <Section
+              hint={
+                <>
+                  A finished piece of writing — notes, an essay, a PDF — filed in
+                  the current folder as if it were a conversation, then read for
+                  ideas like any other.
+                </>
+              }
+            >
+              Import a document
+            </Section>
+            <div className="row">
+              <button className="btn" disabled={importing} onClick={() => void importDocument()}>
+                {importing && <span className="spinner" aria-hidden="true" />}
+                {importing ? "Reading the document…" : "Choose a file…"}
+              </button>
+            </div>
+            {importNote && <p className="blurb">{importNote}</p>}
           </>
         )}
 

@@ -35,9 +35,12 @@ function isUnread(s: SessionSummary): boolean {
  */
 export default function ConversationsRail({
   folder,
+  action,
   onContinue,
 }: {
   folder: number | null;
+  /** Sits in the head beside the folder's name — the Read button. */
+  action?: React.ReactNode;
   /** Pick an archived conversation back up as the live one. */
   onContinue: (sessionId: number) => void;
 }) {
@@ -147,6 +150,7 @@ export default function ConversationsRail({
     <aside className="rail">
       <div className="rail-head">
         <span className="rail-title">{here}</span>
+        {action}
         {emptyOnes.length > 0 && (
           <button
             className="rail-toggle rail-clear"

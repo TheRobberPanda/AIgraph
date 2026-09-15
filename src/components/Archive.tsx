@@ -16,6 +16,7 @@ import {
 import { longDate } from "../lib/format";
 import Confirm from "./Confirm";
 import Sheet from "./Sheet";
+import { BinSection } from "./BinSection";
 import { IconRewind, IconTrash } from "./Icons";
 
 type Kind = "session" | "idea" | "output";
@@ -160,13 +161,11 @@ export default function Archive({ onClose, onChanged }: { onClose: () => void; o
           <h1>Archived</h1>
           <span className="muted">{loading ? "Loading…" : `${rows.length} set aside`}</span>
           {shownRows.length > 0 && (
-            <button className="btn grow head-end" onClick={() => setBinning(shownRows)}>
+            <button className="btn quiet-danger head-end" onClick={() => setBinning(shownRows)}>
               <IconTrash />
-              <span className="btn-label">
-                {current === "all"
-                  ? "Move all to the trash bin"
-                  : `Move all ${KINDS.find((k) => k.kind === current)!.heading.toLowerCase()} to the trash bin`}
-              </span>
+              {current === "all"
+                ? "Move all to the trash bin"
+                : `Move all ${KINDS.find((k) => k.kind === current)!.heading.toLowerCase()} to the trash bin`}
             </button>
           )}
         </header>
@@ -199,16 +198,16 @@ export default function Archive({ onClose, onChanged }: { onClose: () => void; o
 
         {selected.length > 0 && (
           <div className="row bin-bar">
-            <span>{selected.length} selected</span>
+            <span className="bin-count">{selected.length} selected</span>
             {restorable.length > 0 && (
-              <button className="btn grow" onClick={() => void run(restorable, "restore")}>
+              <button className="btn" onClick={() => void run(restorable, "restore")}>
                 <IconRewind />
-                <span className="btn-label">Put back</span>
+                Put back
               </button>
             )}
-            <button className="btn grow" onClick={() => setBinning(selected)}>
+            <button className="btn quiet-danger" onClick={() => setBinning(selected)}>
               <IconTrash />
-              <span className="btn-label">Move to the trash bin</span>
+              Move to the trash bin
             </button>
             <button className="btn" onClick={() => setPicked(new Set())}>
               Clear
@@ -223,58 +222,30 @@ export default function Archive({ onClose, onChanged }: { onClose: () => void; o
             archive in Make wait here.
           </p>
         ) : (
-          shownSections.map((s) => {
-            const keys = s.rows.map((r) => r.key);
-            return (
-              <section key={s.kind} className="bin-section">
-                <label className="bin-heading">
-                  <input
-                    type="checkbox"
-                    checked={keys.every((k) => picked.has(k))}
-                    onChange={(e) => toggle(keys, e.target.checked)}
-                  />
-                  <h3 className="section">{s.heading}</h3>
-                  <span className="muted">{s.rows.length}</span>
-                </label>
-                <ul className="list">
-                  {s.rows.map((r) => (
-                    <li key={r.key} className={picked.has(r.key) ? "chat-line picked" : "chat-line"}>
-                      <label className="row-btn bin-row">
-                        <input
-                          type="checkbox"
-                          checked={picked.has(r.key)}
-                          onChange={(e) => toggle([r.key], e.target.checked)}
-                        />
-                        <span className="row-main">
-                          <span className="queue-title">{r.title}</span>
-                          {r.sub && <span className="queue-opening">{r.sub}</span>}
-                        </span>
-                        <span className="row-meta">{r.meta}</span>
-                      </label>
-                      <span className="chat-actions">
-                        {s.restore && (
-                          <button
-                            className="icon-btn"
-                            data-tip={s.restore}
-                            onClick={() => void run([r], "restore")}
-                          >
-                            <IconRewind />
-                          </button>
-                        )}
-                        <button
-                          className="icon-btn"
-                          data-tip="Move to the trash bin"
-                          onClick={() => void run([r], "bin")}
-                        >
-                          <IconTrash />
-                        </button>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            );
-          })
+          shownSections.map((s) => (
+            <BinSection
+              key={s.kind}
+              heading={s.heading}
+              rows={s.rows}
+              picked={picked}
+              onToggle={toggle}
+              actions={(b) => {
+                const r = s.rows.find((x) => x.key === b.key)!;
+                return (
+                  <>
+                    {s.restore && (
+                      <button className="icon-btn" data-tip={s.restore} onClick={() => void run([r], "restore")}>
+                        <IconRewind />
+                      </button>
+                    )}
+                    <button className="icon-btn" data-tip="Move to the trash bin" onClick={() => void run([r], "bin")}>
+                      <IconTrash />
+                    </button>
+                  </>
+                );
+              }}
+            />
+          ))
         )}
 
         {binning && (
