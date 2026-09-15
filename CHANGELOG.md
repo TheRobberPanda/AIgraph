@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.6
+
+- **Ask a folder anything.** A new Ask tab answers questions from what a
+  folder's conversations said, or from every folder at once.
+- **Write a book (beta).** The Book tab turns a folder's ideas into a book in
+  your own voice: an outline you edit first, then a chapter at a time, saved
+  as you go so it can be written over days.
+- **A welcome on first open** asks for a model before anything else and says
+  which to pick.
+- **Pick an OpenRouter route**, or let the router rank providers, and see
+  what has been spent per model.
+- **Watch a read as it runs.** The wire log shows what is coming back from
+  the model, as it arrives.
+- **The queue, models and settings screens are reworked**, and the bin is
+  sorted into sections.
+
 ## 0.6.5
 
 - **Edit a definition.** Each definition has a pencil beside its bin button
